@@ -237,6 +237,22 @@
     transition: all 0.2s;
   }
   nav.topnav .cta:hover { background: var(--gold); color: var(--navy-900); }
+  nav.topnav .cta-download {
+    background: var(--gold);
+    color: var(--navy-900);
+    font-weight: 600;
+    display: inline-flex;
+    align-items: center;
+  }
+  nav.topnav .cta-download:hover { background: var(--gold-soft); color: var(--navy-900); }
+  [data-theme="dark"] nav.topnav .cta-download {
+    background: var(--gold);
+    color: #0a0a0a;
+  }
+  [data-theme="dark"] nav.topnav .cta-download:hover {
+    background: #ffffff;
+    color: #0a0a0a;
+  }
   @media (max-width: 900px) { nav.topnav .links a:not(.cta) { display: none; } }
 
   /* Theme toggle */
@@ -1060,6 +1076,10 @@
         <svg class="icon-moon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 12.79A9 9 0 1 1 11.21 3 7 7 0 0 0 21 12.79z"/></svg>
         <svg class="icon-sun" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="4"/><path d="M12 2v2M12 20v2M4.93 4.93l1.41 1.41M17.66 17.66l1.41 1.41M2 12h2M20 12h2M4.93 19.07l1.41-1.41M17.66 6.34l1.41-1.41"/></svg>
       </button>
+      <a href="/resume.pdf" class="cta cta-download" download="Ethan-Rosehart-Resume.pdf" title="Download ATS-friendly PDF resume">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="width:14px;height:14px;vertical-align:-2px;margin-right:4px;"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg>
+        Download PDF
+      </a>
       <a href="https://www.linkedin.com/in/ethanrosehart/" target="_blank" rel="noopener" class="cta">LinkedIn ↗</a>
     </div>
   </div>

@@ -1,0 +1,186 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>404 — Page not found · Ethan Rosehart</title>
+<meta name="description" content="Page not found — let's get you back on track." />
+<meta name="robots" content="noindex" />
+<meta name="theme-color" content="#ff3ea5" />
+<link rel="icon" type="image/svg+xml" href="/favicon.svg" />
+<link rel="shortcut icon" href="/favicon.ico" />
+<style>
+  *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+  html, body {
+    font-family: 'Inter', 'Segoe UI', system-ui, -apple-system, sans-serif;
+    background:
+      radial-gradient(circle at 85% 25%, rgba(255, 62, 165, 0.22) 0%, transparent 55%),
+      radial-gradient(circle at 15% 85%, rgba(255, 62, 165, 0.10) 0%, transparent 50%),
+      linear-gradient(180deg, #0d0d0d 0%, #050505 100%);
+    color: #f5f5f5;
+    min-height: 100vh;
+    min-height: 100dvh;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    padding: 32px;
+    line-height: 1.5;
+    -webkit-font-smoothing: antialiased;
+    position: relative;
+    overflow-x: hidden;
+  }
+
+  body::before {
+    content: '';
+    position: fixed;
+    inset: 0;
+    background-image:
+      linear-gradient(rgba(255,255,255,0.025) 1px, transparent 1px),
+      linear-gradient(90deg, rgba(255,255,255,0.025) 1px, transparent 1px);
+    background-size: 72px 72px;
+    pointer-events: none;
+    z-index: 0;
+  }
+
+  .content {
+    position: relative;
+    z-index: 1;
+    max-width: 640px;
+    width: 100%;
+    text-align: center;
+  }
+
+  .code {
+    display: inline-block;
+    font-size: 14px;
+    letter-spacing: 0.3em;
+    text-transform: uppercase;
+    color: #ff3ea5;
+    font-weight: 700;
+    margin-bottom: 20px;
+    padding: 8px 16px;
+    border: 1px solid rgba(255, 62, 165, 0.4);
+    border-radius: 999px;
+    background: rgba(255, 62, 165, 0.08);
+  }
+
+  h1 {
+    font-size: clamp(64px, 12vw, 140px);
+    line-height: 1;
+    font-weight: 800;
+    letter-spacing: -0.04em;
+    margin-bottom: 12px;
+    color: #ffffff;
+  }
+  h1 .accent { color: #ff3ea5; }
+
+  h2 {
+    font-size: clamp(22px, 4vw, 32px);
+    font-weight: 700;
+    letter-spacing: -0.01em;
+    margin-bottom: 14px;
+    color: #ffffff;
+  }
+
+  p.lede {
+    font-size: clamp(15px, 2.5vw, 18px);
+    color: #b8b8b8;
+    margin-bottom: 36px;
+    max-width: 520px;
+    margin-left: auto;
+    margin-right: auto;
+  }
+
+  .buttons {
+    display: flex;
+    gap: 12px;
+    flex-wrap: wrap;
+    justify-content: center;
+  }
+
+  .btn {
+    display: inline-flex;
+    align-items: center;
+    gap: 8px;
+    padding: 12px 22px;
+    border-radius: 999px;
+    font-size: 14px;
+    font-weight: 600;
+    text-decoration: none;
+    transition: all 0.2s ease;
+    border: 1px solid transparent;
+    cursor: pointer;
+  }
+  .btn-primary {
+    background: #ff3ea5;
+    color: #0a0a0a;
+  }
+  .btn-primary:hover {
+    background: #ffffff;
+    transform: translateY(-1px);
+  }
+  .btn-secondary {
+    background: transparent;
+    color: #f5f5f5;
+    border-color: rgba(255, 255, 255, 0.25);
+  }
+  .btn-secondary:hover {
+    border-color: #ffffff;
+    background: rgba(255, 255, 255, 0.05);
+  }
+  .btn svg {
+    width: 14px;
+    height: 14px;
+  }
+
+  footer {
+    position: absolute;
+    bottom: 24px;
+    font-size: 12px;
+    color: #666;
+    letter-spacing: 0.1em;
+    z-index: 1;
+  }
+  footer a {
+    color: #888;
+    text-decoration: none;
+    transition: color 0.2s;
+  }
+  footer a:hover { color: #ff3ea5; }
+
+  @media (max-width: 480px) {
+    .buttons { flex-direction: column; align-items: stretch; }
+    .btn { justify-content: center; }
+  }
+</style>
+</head>
+<body>
+
+<main class="content">
+  <div class="code">Page not found</div>
+  <h1>4<span class="accent">0</span>4</h1>
+  <h2>This flight plan didn't make it to the gate.</h2>
+  <p class="lede">
+    The page you're looking for has either moved, been renamed, or never existed.
+    Let's get you back on track.
+  </p>
+
+  <div class="buttons">
+    <a href="/" class="btn btn-primary">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 12l9-9 9 9"/><path d="M5 10v10h14V10"/></svg>
+      Back to ethanrosehart.com
+    </a>
+    <a href="https://www.linkedin.com/in/ethanrosehart/" class="btn btn-secondary">
+      <svg viewBox="0 0 24 24" fill="currentColor"><path d="M20.447 20.452h-3.554v-5.569c0-1.328-.027-3.037-1.852-3.037-1.853 0-2.136 1.445-2.136 2.939v5.667H9.351V9h3.414v1.561h.046c.477-.9 1.637-1.85 3.37-1.85 3.601 0 4.267 2.37 4.267 5.455v6.286zM5.337 7.433a2.062 2.062 0 01-2.063-2.065 2.063 2.063 0 112.063 2.065zm1.782 13.019H3.555V9h3.564v11.452z"/></svg>
+      Find me on LinkedIn
+    </a>
+  </div>
+</main>
+
+<footer>
+  <a href="/">ETHANROSEHART.COM</a>
+</footer>
+
+</body>
+</html>
