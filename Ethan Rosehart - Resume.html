@@ -1,0 +1,1660 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>Ethan Rosehart — Strategic Insights &amp; AI Solutions</title>
+<meta name="description" content="Ethan Rosehart — Data &amp; Strategy at Greater Toronto Airports Authority. Strategic insights, AI solutions, executive analytics." />
+<link rel="preconnect" href="https://fonts.googleapis.com" />
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800&family=Space+Grotesk:wght@500;600;700&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet" />
+<script>
+  /* Default theme is dark — apply before paint to prevent flash-of-wrong-theme.
+     Only switch to light if the user has explicitly chosen it. */
+  (function(){
+    try {
+      var t = localStorage.getItem('er-resume-theme');
+      if (t !== 'light') document.documentElement.setAttribute('data-theme', 'dark');
+    } catch(e) {
+      document.documentElement.setAttribute('data-theme', 'dark');
+    }
+  })();
+</script>
+<script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.1/dist/chart.umd.min.js"></script>
+<style>
+  :root {
+    --navy-900: #0a1628;
+    --navy-800: #0f2340;
+    --navy-700: #152e4d;
+    --gold: #c9a24b;
+    --gold-soft: #e0be72;
+    --ivory: #f6f3ec;
+    --paper: #faf8f3;
+    --charcoal: #1c1e26;
+    --gray-900: #2a2d36;
+    --gray-700: #4b5563;
+    --gray-500: #6b7280;
+    --gray-300: #d1d5db;
+    --gray-200: #e5e7eb;
+    --gray-100: #f3f4f6;
+    --accent-aviation: #2d6a9f;
+    --accent-trades: #c66a3c;
+    --accent-ops: #5a8a4a;
+    --accent-finance: #7a5cb8;
+    --accent-enterprise: #c9a24b;
+    --shadow-sm: 0 1px 2px rgba(10,22,40,0.06);
+    --shadow-md: 0 4px 14px rgba(10,22,40,0.08);
+    --shadow-lg: 0 20px 40px rgba(10,22,40,0.12);
+    --radius: 14px;
+    --radius-sm: 8px;
+
+    /* Tokenized surfaces & accents */
+    --card-bg: #ffffff;
+    --card-bg-hover: #ffffff;
+    --section-alt: #f0ece2;
+    --nav-bg: rgba(250, 248, 243, 0.78);
+    --nav-border: rgba(10,22,40,0.08);
+    --pill-ai-bg: #fef7ea;
+    --pill-ai-fg: #8b6914;
+    --pill-ai-border: #f2e4c0;
+    --pill-data-bg: #eef4fb;
+    --pill-data-fg: #2a5a87;
+    --pill-data-border: #d4e2f0;
+    --enterprise-chip-fg: #8a6d2f;
+    --hero-glow-a: rgba(201,162,75,0.15);
+    --hero-glow-b: rgba(45,106,159,0.18);
+    --hero-flightpath: rgba(201,162,75,0.4);
+    --gantt-vline-color: rgba(10,22,40,0.04);
+    --footer-link-border: rgba(246,243,236,0.2);
+    --footer-fine: rgba(246,243,236,0.4);
+    --edu-card-bg: rgba(255,255,255,0.04);
+    --edu-card-bg-hover: rgba(255,255,255,0.07);
+    --edu-card-border: rgba(201,162,75,0.2);
+    --metric-card-bg: rgba(255,255,255,0.04);
+    --metric-card-bg-hover: rgba(255,255,255,0.07);
+    --metric-card-border: rgba(201,162,75,0.15);
+    --metric-card-border-hover: rgba(201,162,75,0.35);
+    --gold-underline: rgba(201,162,75,0.3);
+    --gold-tint-soft: rgba(201,162,75,0.15);
+    --gold-tint-med: rgba(201,162,75,0.25);
+    --industry-enterprise-bg: rgba(201,162,75,0.18);
+
+    /* Semantic text tokens — flip bright in dark mode while surface tokens stay dark */
+    --text-body: var(--charcoal);
+    --text-heading: var(--navy-900);
+    --text-strong: var(--navy-900);
+    --text-brand: var(--navy-900);
+    --text-link-hover: var(--navy-900);
+  }
+
+  /* DARK THEME — pink / black / grey-white (echoes LinkedIn banner) */
+  [data-theme="dark"] {
+    --navy-900: #000000;
+    --navy-800: #050505;
+    --navy-700: #141414;
+    --gold: #FF3EA5;
+    --gold-soft: #FF7EC4;
+    --ivory: #f0f0f0;          /* used as TEXT on dark surfaces — stays light */
+    --paper: #0a0a0a;
+    --charcoal: #000000;       /* used as footer BG — must stay dark */
+    --gray-900: #d8d8d8;
+    --gray-700: #b0b0b0;
+    --gray-500: #8a8a8a;
+    --gray-300: #3a3a3a;
+    --gray-200: #2a2a2a;
+    --gray-100: #1a1a1a;
+
+    /* Semantic text overrides — bright on dark surfaces */
+    --text-body: #e8e8e8;
+    --text-heading: #f5f5f5;
+    --text-strong: #ffffff;
+    --text-brand: #f5f5f5;
+    --text-link-hover: #FF3EA5;
+    /* Industry accents stay stable — they encode meaning, not theme */
+    --shadow-sm: 0 1px 2px rgba(0,0,0,0.5);
+    --shadow-md: 0 4px 14px rgba(0,0,0,0.6);
+    --shadow-lg: 0 20px 40px rgba(0,0,0,0.7);
+
+    --card-bg: #141414;
+    --card-bg-hover: #1a1a1a;
+    --section-alt: #141414;
+    --nav-bg: rgba(10, 10, 10, 0.82);
+    --nav-border: rgba(255,62,165,0.18);
+    --pill-ai-bg: rgba(255,62,165,0.12);
+    --pill-ai-fg: #FF7EC4;
+    --pill-ai-border: rgba(255,62,165,0.35);
+    --pill-data-bg: rgba(255,255,255,0.06);
+    --pill-data-fg: #e8e8e8;
+    --pill-data-border: rgba(255,255,255,0.15);
+    --enterprise-chip-fg: #FF7EC4;
+    --hero-glow-a: rgba(255,62,165,0.22);
+    --hero-glow-b: rgba(255,62,165,0.10);
+    --hero-flightpath: rgba(255,62,165,0.5);
+    --gantt-vline-color: rgba(255,255,255,0.06);
+    --footer-link-border: rgba(240,240,240,0.18);
+    --footer-fine: rgba(240,240,240,0.4);
+    --edu-card-bg: rgba(255,255,255,0.03);
+    --edu-card-bg-hover: rgba(255,62,165,0.08);
+    --edu-card-border: rgba(255,62,165,0.22);
+    --metric-card-bg: rgba(255,255,255,0.03);
+    --metric-card-bg-hover: rgba(255,62,165,0.07);
+    --metric-card-border: rgba(255,62,165,0.18);
+    --metric-card-border-hover: rgba(255,62,165,0.4);
+    --gold-underline: rgba(255,62,165,0.4);
+    --gold-tint-soft: rgba(255,62,165,0.15);
+    --gold-tint-med: rgba(255,62,165,0.3);
+    --industry-enterprise-bg: rgba(255,62,165,0.18);
+  }
+
+  [data-theme="dark"] body {
+    background: #000000;
+  }
+
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  html { scroll-behavior: smooth; scroll-padding-top: 72px; }
+  body {
+    font-family: 'Inter', -apple-system, BlinkMacSystemFont, sans-serif;
+    background: var(--paper);
+    color: var(--text-body);
+    line-height: 1.55;
+    font-size: 16px;
+    -webkit-font-smoothing: antialiased;
+    font-feature-settings: "ss01", "cv11";
+  }
+
+  ::selection { background: var(--gold); color: var(--navy-900); }
+
+  .container { max-width: 1180px; margin: 0 auto; padding: 0 32px; }
+  @media (max-width: 640px) { .container { padding: 0 20px; } }
+
+  /* ================= NAV ================= */
+  nav.topnav {
+    position: fixed; top: 0; left: 0; right: 0;
+    backdrop-filter: saturate(180%) blur(14px);
+    -webkit-backdrop-filter: saturate(180%) blur(14px);
+    background: var(--nav-bg);
+    border-bottom: 1px solid var(--nav-border);
+    z-index: 100;
+    transition: background 0.3s ease, border-color 0.3s ease;
+  }
+  nav.topnav .inner {
+    max-width: 1180px; margin: 0 auto;
+    padding: 16px 32px;
+    display: flex; align-items: center; justify-content: space-between;
+  }
+  nav.topnav .brand {
+    font-family: 'Space Grotesk', sans-serif;
+    font-weight: 700; letter-spacing: -0.01em;
+    color: var(--text-brand); text-decoration: none;
+    font-size: 15px;
+  }
+  nav.topnav .brand span { color: var(--gold); }
+  nav.topnav .links { display: flex; gap: 28px; align-items: center; }
+  nav.topnav .links a {
+    color: var(--gray-700); text-decoration: none; font-size: 13.5px;
+    font-weight: 500; letter-spacing: 0.01em;
+    transition: color 0.2s;
+  }
+  nav.topnav .links a:hover { color: var(--text-link-hover); }
+  nav.topnav .cta {
+    background: var(--navy-900); color: var(--ivory);
+    padding: 8px 16px; border-radius: 999px;
+    font-size: 13px; font-weight: 500;
+    border: none; cursor: pointer; text-decoration: none;
+    transition: all 0.2s;
+  }
+  nav.topnav .cta:hover { background: var(--gold); color: var(--navy-900); }
+  @media (max-width: 900px) { nav.topnav .links a:not(.cta) { display: none; } }
+
+  /* Theme toggle */
+  .theme-toggle {
+    background: transparent;
+    border: 1px solid var(--nav-border);
+    color: var(--gray-700);
+    width: 34px; height: 34px;
+    border-radius: 999px;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    cursor: pointer;
+    transition: all 0.2s;
+    padding: 0;
+  }
+  .theme-toggle:hover {
+    color: var(--gold);
+    border-color: var(--gold);
+    transform: rotate(-10deg);
+  }
+  .theme-toggle svg { width: 16px; height: 16px; display: block; }
+  .theme-toggle .icon-moon { display: inline; }
+  .theme-toggle .icon-sun { display: none; }
+  [data-theme="dark"] .theme-toggle .icon-moon { display: none; }
+  [data-theme="dark"] .theme-toggle .icon-sun { display: inline; }
+
+  /* ================= HERO ================= */
+  .hero {
+    position: relative;
+    padding: 140px 0 100px;
+    background: linear-gradient(180deg, var(--navy-900) 0%, var(--navy-800) 100%);
+    color: var(--ivory);
+    overflow: hidden;
+  }
+  .hero::before {
+    content: ''; position: absolute; inset: 0;
+    background-image:
+      radial-gradient(circle at 15% 25%, var(--hero-glow-a) 0%, transparent 40%),
+      radial-gradient(circle at 85% 80%, var(--hero-glow-b) 0%, transparent 45%);
+    pointer-events: none;
+  }
+  .hero::after {
+    /* flight path accent — subtle nod to aviation */
+    content: ''; position: absolute;
+    bottom: 0; left: 0; right: 0; height: 1px;
+    background: linear-gradient(90deg, transparent 0%, var(--hero-flightpath) 50%, transparent 100%);
+  }
+  .hero .container { position: relative; z-index: 2; }
+  .hero .eyebrow {
+    font-family: 'JetBrains Mono', monospace;
+    font-size: 12px; font-weight: 500;
+    color: var(--gold);
+    letter-spacing: 0.15em;
+    text-transform: uppercase;
+    margin-bottom: 24px;
+    display: flex; align-items: center; gap: 12px;
+  }
+  .hero .eyebrow::before {
+    content: ''; display: inline-block;
+    width: 36px; height: 1px; background: var(--gold);
+  }
+  .hero h1 {
+    font-family: 'Space Grotesk', sans-serif;
+    font-size: clamp(42px, 7vw, 82px);
+    font-weight: 700;
+    letter-spacing: -0.035em;
+    line-height: 0.98;
+    margin-bottom: 24px;
+  }
+  .hero h1 .accent { color: var(--gold); font-style: italic; font-weight: 500; }
+  .hero .tagline {
+    font-size: clamp(18px, 2vw, 22px);
+    color: rgba(246,243,236,0.88);
+    max-width: 780px;
+    font-weight: 300;
+    margin-bottom: 48px;
+    line-height: 1.5;
+  }
+  .hero .tagline strong { color: var(--gold-soft); font-weight: 500; }
+  .hero .meta {
+    display: flex; flex-wrap: wrap; gap: 32px;
+    font-size: 14px; color: rgba(246,243,236,0.75);
+  }
+  .hero .meta .item { display: flex; align-items: center; gap: 10px; }
+  .hero .meta .item svg { width: 16px; height: 16px; color: var(--gold); flex-shrink: 0; }
+  .hero .meta a { color: inherit; text-decoration: none; border-bottom: 1px solid var(--gold-underline); padding-bottom: 1px; transition: border-color 0.2s; }
+  .hero .meta a:hover { border-bottom-color: var(--gold); }
+
+  /* ================= THESIS ================= */
+  section.thesis {
+    padding: 90px 0;
+    background: var(--paper);
+  }
+  .thesis-grid {
+    display: grid;
+    grid-template-columns: 1fr 1.4fr;
+    gap: 80px;
+    align-items: start;
+  }
+  @media (max-width: 900px) { .thesis-grid { grid-template-columns: 1fr; gap: 40px; } }
+  .section-label {
+    font-family: 'JetBrains Mono', monospace;
+    font-size: 11px; font-weight: 500;
+    color: var(--gold);
+    letter-spacing: 0.18em;
+    text-transform: uppercase;
+    margin-bottom: 16px;
+  }
+  .section-title {
+    font-family: 'Space Grotesk', sans-serif;
+    font-size: 40px; font-weight: 600;
+    letter-spacing: -0.025em;
+    color: var(--text-heading);
+    line-height: 1.08;
+  }
+  .thesis-text p {
+    font-size: 18px; color: var(--gray-700);
+    margin-bottom: 20px; line-height: 1.7;
+  }
+  .thesis-text p strong { color: var(--text-strong); font-weight: 600; }
+  .thesis-quote {
+    border-left: 3px solid var(--gold);
+    padding: 8px 0 8px 24px;
+    margin-top: 32px;
+    font-family: 'Space Grotesk', sans-serif;
+    font-size: 20px;
+    color: var(--text-heading);
+    font-style: italic;
+    font-weight: 500;
+  }
+  .thesis-quote cite {
+    display: block; margin-top: 12px;
+    font-style: normal; font-family: 'JetBrains Mono', monospace;
+    font-size: 11px; color: var(--gray-500);
+    letter-spacing: 0.1em; text-transform: uppercase;
+  }
+
+  /* ================= IMPACT METRICS ================= */
+  section.metrics {
+    padding: 80px 0;
+    background: var(--navy-900);
+    color: var(--ivory);
+  }
+  .metrics-header { text-align: center; margin-bottom: 56px; }
+  .metrics-header .section-label { color: var(--gold); }
+  .metrics-header .section-title { color: var(--ivory); }
+  .metrics-grid {
+    display: grid;
+    grid-template-columns: repeat(4, 1fr);
+    gap: 24px;
+  }
+  @media (max-width: 900px) { .metrics-grid { grid-template-columns: repeat(2, 1fr); } }
+  @media (max-width: 480px) { .metrics-grid { grid-template-columns: 1fr; } }
+  .metric-card {
+    padding: 32px 24px;
+    background: var(--metric-card-bg);
+    border: 1px solid var(--metric-card-border);
+    border-radius: var(--radius);
+    text-align: left;
+    transition: all 0.3s ease;
+    position: relative;
+    overflow: hidden;
+  }
+  .metric-card:hover {
+    background: var(--metric-card-bg-hover);
+    border-color: var(--metric-card-border-hover);
+    transform: translateY(-2px);
+  }
+  .metric-card::before {
+    content: ''; position: absolute;
+    top: 0; left: 0; right: 0; height: 2px;
+    background: linear-gradient(90deg, var(--gold) 0%, transparent 100%);
+  }
+  .metric-value {
+    font-family: 'Space Grotesk', sans-serif;
+    font-size: 52px; font-weight: 700;
+    color: var(--gold);
+    letter-spacing: -0.04em;
+    line-height: 1; margin-bottom: 6px;
+  }
+  .metric-value .unit { font-size: 28px; color: var(--gold-soft); margin-left: 4px; }
+  .metric-label {
+    font-size: 14px; color: rgba(246,243,236,0.75);
+    font-weight: 500; line-height: 1.4;
+  }
+  .metric-sub {
+    font-size: 12px; color: rgba(246,243,236,0.45);
+    margin-top: 8px;
+  }
+
+  /* ================= SIGNATURE WORK ================= */
+  section.signature {
+    padding: 100px 0;
+    background: var(--paper);
+  }
+  .signature-header { margin-bottom: 64px; max-width: 720px; }
+  .signature-header .section-title { margin-bottom: 16px; }
+  .signature-header p { font-size: 18px; color: var(--gray-700); line-height: 1.6; }
+  .signature-card {
+    background: var(--card-bg);
+    border: 1px solid var(--gray-200);
+    border-radius: var(--radius);
+    padding: 40px;
+    margin-bottom: 28px;
+    box-shadow: var(--shadow-sm);
+    transition: all 0.3s ease;
+    display: grid;
+    grid-template-columns: 1fr 2fr;
+    gap: 40px;
+    align-items: start;
+  }
+  @media (max-width: 900px) { .signature-card { grid-template-columns: 1fr; gap: 24px; padding: 32px 24px; } }
+  .signature-card:hover {
+    box-shadow: var(--shadow-md);
+    transform: translateY(-2px);
+    border-color: var(--gold-tint-med);
+  }
+  .signature-meta .role-tag {
+    display: inline-block;
+    font-family: 'JetBrains Mono', monospace;
+    font-size: 11px; font-weight: 500;
+    padding: 4px 10px;
+    background: var(--navy-900); color: var(--gold);
+    border-radius: 4px;
+    letter-spacing: 0.08em;
+    text-transform: uppercase;
+    margin-bottom: 12px;
+  }
+  .signature-meta h3 {
+    font-family: 'Space Grotesk', sans-serif;
+    font-size: 26px; font-weight: 600;
+    color: var(--text-heading);
+    line-height: 1.15;
+    letter-spacing: -0.02em;
+    margin-bottom: 12px;
+  }
+  .signature-meta .org {
+    font-size: 15px; font-weight: 500; color: var(--gray-700); margin-bottom: 4px;
+  }
+  .signature-meta .dates {
+    font-family: 'JetBrains Mono', monospace;
+    font-size: 12px; color: var(--gray-500);
+  }
+  .signature-body .summary {
+    font-size: 16.5px; color: var(--gray-900); line-height: 1.65;
+    margin-bottom: 20px;
+    font-weight: 400;
+  }
+  .signature-body .summary strong { color: var(--text-strong); font-weight: 600; }
+  .signature-body ul { list-style: none; padding: 0; margin-top: 12px; }
+  .signature-body li {
+    position: relative;
+    padding-left: 22px;
+    margin-bottom: 12px;
+    font-size: 15px;
+    color: var(--gray-700);
+    line-height: 1.6;
+  }
+  .signature-body li::before {
+    content: '▸'; position: absolute; left: 0; top: 0;
+    color: var(--gold); font-weight: 700;
+  }
+  .signature-body li strong { color: var(--text-strong); font-weight: 600; }
+  .pill-row { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 20px; }
+  .pill {
+    font-size: 12px; font-weight: 500;
+    padding: 4px 12px;
+    background: var(--gray-100); color: var(--gray-700);
+    border-radius: 999px;
+    border: 1px solid var(--gray-200);
+  }
+  .pill.ai { background: var(--pill-ai-bg); color: var(--pill-ai-fg); border-color: var(--pill-ai-border); }
+  .pill.data { background: var(--pill-data-bg); color: var(--pill-data-fg); border-color: var(--pill-data-border); }
+
+  /* ================= TIMELINE ================= */
+  section.timeline {
+    padding: 100px 0;
+    background: linear-gradient(180deg, var(--paper) 0%, var(--section-alt) 100%);
+  }
+  .timeline-header { margin-bottom: 56px; }
+  .timeline-header p { font-size: 17px; color: var(--gray-700); margin-top: 12px; max-width: 680px; }
+  .timeline-track {
+    position: relative;
+    padding: 30px 0 10px;
+  }
+  .timeline-track::before {
+    content: ''; position: absolute;
+    left: 0; right: 0; top: 66px;
+    height: 2px;
+    background: linear-gradient(90deg, var(--accent-aviation) 0%, var(--accent-trades) 20%, var(--accent-ops) 45%, var(--accent-finance) 70%, var(--accent-enterprise) 100%);
+    border-radius: 2px;
+  }
+  .timeline-items {
+    display: grid;
+    grid-template-columns: 1fr 1fr 1fr 1fr 1.2fr;
+    gap: 12px;
+  }
+  @media (max-width: 900px) {
+    .timeline-items { grid-template-columns: 1fr; gap: 20px; }
+    .timeline-track::before { display: none; }
+  }
+  .timeline-item {
+    position: relative;
+    padding-top: 48px;
+    cursor: default;
+  }
+  .timeline-item .year {
+    font-family: 'JetBrains Mono', monospace;
+    font-size: 11px; font-weight: 500;
+    color: var(--gray-500);
+    letter-spacing: 0.08em;
+    margin-bottom: 8px;
+  }
+  .timeline-item .dot {
+    position: absolute;
+    top: 60px;
+    left: 0;
+    width: 14px; height: 14px;
+    border-radius: 50%;
+    border: 3px solid var(--paper);
+    box-shadow: 0 0 0 1px var(--gray-300);
+    z-index: 2;
+    transition: all 0.2s;
+  }
+  .timeline-item:hover .dot { transform: scale(1.2); box-shadow: 0 0 0 2px currentColor; }
+  .timeline-item .role {
+    font-family: 'Space Grotesk', sans-serif;
+    font-weight: 600; font-size: 15px;
+    color: var(--text-heading);
+    line-height: 1.25;
+    margin-bottom: 4px;
+  }
+  .timeline-item .company {
+    font-size: 13px; color: var(--gray-700);
+    margin-bottom: 8px;
+    font-weight: 500;
+  }
+  .timeline-item .industry {
+    font-size: 11px;
+    font-family: 'JetBrains Mono', monospace;
+    font-weight: 500;
+    letter-spacing: 0.06em;
+    text-transform: uppercase;
+    padding: 3px 8px;
+    border-radius: 4px;
+    display: inline-block;
+  }
+  .industry.aviation { background: rgba(45,106,159,0.12); color: var(--accent-aviation); }
+  .industry.trades { background: rgba(198,106,60,0.12); color: var(--accent-trades); }
+  .industry.ops { background: rgba(90,138,74,0.15); color: var(--accent-ops); }
+  .industry.finance { background: rgba(122,92,184,0.12); color: var(--accent-finance); }
+  .industry.enterprise { background: var(--industry-enterprise-bg); color: var(--enterprise-chip-fg); }
+  .timeline-item .dot.aviation { background: var(--accent-aviation); color: var(--accent-aviation); }
+  .timeline-item .dot.trades { background: var(--accent-trades); color: var(--accent-trades); }
+  .timeline-item .dot.ops { background: var(--accent-ops); color: var(--accent-ops); }
+  .timeline-item .dot.finance { background: var(--accent-finance); color: var(--accent-finance); }
+  .timeline-item .dot.enterprise { background: var(--accent-enterprise); color: var(--accent-enterprise); }
+
+  /* ================= BREADTH RADAR + STACK ================= */
+  section.breadth {
+    padding: 100px 0;
+    background: var(--paper);
+  }
+  .breadth-grid {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 64px;
+    align-items: start;
+  }
+  @media (max-width: 900px) { .breadth-grid { grid-template-columns: 1fr; gap: 48px; } }
+  .radar-wrap {
+    background: var(--card-bg);
+    border-radius: var(--radius);
+    padding: 32px;
+    border: 1px solid var(--gray-200);
+    box-shadow: var(--shadow-sm);
+  }
+  .radar-wrap h4 {
+    font-family: 'Space Grotesk', sans-serif;
+    font-size: 18px; font-weight: 600;
+    color: var(--text-heading); margin-bottom: 4px;
+  }
+  .radar-wrap .radar-sub {
+    font-size: 13px; color: var(--gray-500); margin-bottom: 20px;
+  }
+  .radar-wrap canvas { max-height: 400px; }
+  .breadth-copy h3 {
+    font-family: 'Space Grotesk', sans-serif;
+    font-size: 28px; font-weight: 600;
+    color: var(--text-heading);
+    letter-spacing: -0.02em;
+    margin-bottom: 20px;
+    line-height: 1.15;
+  }
+  .breadth-copy p {
+    font-size: 16.5px; color: var(--gray-700);
+    line-height: 1.7; margin-bottom: 18px;
+  }
+  .breadth-copy p strong { color: var(--text-strong); font-weight: 600; }
+  .sector-list { list-style: none; padding: 0; margin-top: 24px; }
+  .sector-list li {
+    display: flex; align-items: center; gap: 14px;
+    padding: 12px 0;
+    border-bottom: 1px solid var(--gray-200);
+    font-size: 14.5px;
+  }
+  .sector-list li:last-child { border-bottom: none; }
+  .sector-list .bar {
+    width: 10px; height: 10px; border-radius: 50%;
+    flex-shrink: 0;
+  }
+  .sector-list .sector-name {
+    font-weight: 600; color: var(--text-heading);
+    min-width: 180px;
+  }
+  .sector-list .sector-detail {
+    color: var(--gray-700);
+  }
+
+  /* ================= STACK ================= */
+  section.stack {
+    padding: 100px 0;
+    background: linear-gradient(180deg, var(--section-alt) 0%, var(--paper) 100%);
+  }
+  .stack-header { margin-bottom: 48px; max-width: 720px; }
+  .stack-grid {
+    display: grid;
+    grid-template-columns: repeat(4, 1fr);
+    gap: 20px;
+  }
+  @media (max-width: 900px) { .stack-grid { grid-template-columns: repeat(2, 1fr); } }
+  .stack-item {
+    background: var(--card-bg);
+    border: 1px solid var(--gray-200);
+    border-radius: var(--radius-sm);
+    padding: 22px 20px;
+    transition: all 0.25s ease;
+  }
+  .stack-item:hover {
+    border-color: var(--gold);
+    transform: translateY(-3px);
+    box-shadow: var(--shadow-md);
+  }
+  .stack-item .stack-name {
+    font-family: 'Space Grotesk', sans-serif;
+    font-weight: 600; font-size: 15px;
+    color: var(--text-heading);
+    margin-bottom: 10px;
+    display: flex; justify-content: space-between; align-items: center;
+  }
+  .stack-item .level {
+    font-family: 'JetBrains Mono', monospace;
+    font-size: 10px; color: var(--gray-500);
+    font-weight: 500;
+    letter-spacing: 0.06em;
+    text-transform: uppercase;
+  }
+  .stack-bar {
+    height: 5px; background: var(--gray-100);
+    border-radius: 3px; overflow: hidden;
+    position: relative;
+  }
+  .stack-bar .fill {
+    height: 100%; background: linear-gradient(90deg, var(--navy-900) 0%, var(--gold) 100%);
+    border-radius: 3px; width: 0;
+    transition: width 1.4s cubic-bezier(0.2, 0.8, 0.2, 1);
+  }
+  .stack-item .category {
+    font-size: 11px; color: var(--gray-500);
+    margin-top: 10px;
+    font-family: 'JetBrains Mono', monospace;
+    letter-spacing: 0.08em;
+    text-transform: uppercase;
+  }
+
+  /* ================= CREDENTIALS ================= */
+  section.credentials {
+    padding: 100px 0;
+    background: var(--paper);
+  }
+  .cred-grid {
+    display: grid;
+    grid-template-columns: 1.2fr 1fr 1fr;
+    gap: 32px;
+  }
+  @media (max-width: 900px) { .cred-grid { grid-template-columns: 1fr; } }
+  .cred-block h3 {
+    font-family: 'Space Grotesk', sans-serif;
+    font-size: 20px; font-weight: 600;
+    color: var(--text-heading);
+    margin-bottom: 20px;
+    padding-bottom: 10px;
+    border-bottom: 1px solid var(--gray-200);
+    display: flex; align-items: center; gap: 10px;
+  }
+  .cred-block h3 .dot {
+    width: 8px; height: 8px; background: var(--gold); border-radius: 50%;
+  }
+  .cred-block ul { list-style: none; padding: 0; }
+  .cred-block li { margin-bottom: 18px; font-size: 14.5px; line-height: 1.5; }
+  .cred-block li .title {
+    font-weight: 600; color: var(--text-heading); display: block; margin-bottom: 2px;
+  }
+  .cred-block li .detail {
+    color: var(--gray-700); font-size: 13.5px; display: block;
+  }
+  .cred-block li .meta {
+    font-family: 'JetBrains Mono', monospace;
+    font-size: 11px; color: var(--gray-500);
+    margin-top: 4px; display: block;
+  }
+
+  /* ================= EDUCATION ================= */
+  section.education {
+    padding: 100px 0;
+    background: var(--navy-900);
+    color: var(--ivory);
+  }
+  .education .section-title { color: var(--ivory); }
+  .edu-grid {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 32px;
+    margin-top: 48px;
+  }
+  @media (max-width: 900px) { .edu-grid { grid-template-columns: 1fr; } }
+  .edu-card {
+    padding: 36px;
+    background: var(--edu-card-bg);
+    border: 1px solid var(--edu-card-border);
+    border-radius: var(--radius);
+    transition: all 0.3s;
+  }
+  .edu-card:hover { border-color: var(--gold); background: var(--edu-card-bg-hover); }
+  .edu-card .degree {
+    font-family: 'Space Grotesk', sans-serif;
+    font-size: 22px; font-weight: 600;
+    color: var(--gold); margin-bottom: 6px; line-height: 1.2;
+  }
+  .edu-card .school {
+    font-size: 15px; color: var(--ivory);
+    font-weight: 500; margin-bottom: 12px;
+  }
+  .edu-card .edu-meta {
+    font-family: 'JetBrains Mono', monospace;
+    font-size: 12px; color: rgba(246,243,236,0.55);
+    margin-bottom: 16px;
+    letter-spacing: 0.04em;
+  }
+  .edu-card p {
+    font-size: 14.5px; color: rgba(246,243,236,0.8);
+    line-height: 1.6;
+  }
+  .edu-card .honor {
+    display: inline-block;
+    font-family: 'JetBrains Mono', monospace;
+    font-size: 11px; font-weight: 500;
+    padding: 3px 10px;
+    background: var(--gold-tint-soft); color: var(--gold);
+    border-radius: 999px;
+    letter-spacing: 0.05em;
+    text-transform: uppercase;
+    margin-top: 14px;
+  }
+
+  /* ================= FOOTER ================= */
+  footer {
+    padding: 80px 0 48px;
+    background: var(--charcoal);
+    color: var(--ivory);
+    text-align: center;
+  }
+  footer h3 {
+    font-family: 'Space Grotesk', sans-serif;
+    font-size: 32px; font-weight: 600;
+    margin-bottom: 20px;
+    letter-spacing: -0.02em;
+  }
+  footer h3 .accent { color: var(--gold); font-style: italic; }
+  footer .contact-links {
+    display: flex; justify-content: center; gap: 24px;
+    flex-wrap: wrap; margin: 32px 0;
+  }
+  footer .contact-links a {
+    color: var(--ivory); text-decoration: none;
+    padding: 10px 22px;
+    border: 1px solid var(--footer-link-border);
+    border-radius: 999px;
+    font-size: 14px; font-weight: 500;
+    transition: all 0.2s;
+    display: flex; align-items: center; gap: 8px;
+  }
+  footer .contact-links a:hover {
+    background: var(--gold); color: var(--navy-900); border-color: var(--gold);
+  }
+  footer .contact-links svg { width: 16px; height: 16px; }
+  footer .fine-print {
+    color: var(--footer-fine);
+    font-size: 12px;
+    font-family: 'JetBrains Mono', monospace;
+    margin-top: 32px;
+    letter-spacing: 0.05em;
+  }
+
+  /* ================= GANTT ================= */
+  .gantt-legend {
+    display: flex; flex-wrap: wrap; gap: 18px;
+    margin-bottom: 20px; margin-top: 8px;
+    font-size: 12px; color: var(--gray-700);
+  }
+  .gantt-legend .swatch {
+    display: inline-flex; align-items: center; gap: 8px;
+    font-family: 'JetBrains Mono', monospace;
+    font-size: 11px; letter-spacing: 0.04em;
+    text-transform: uppercase; font-weight: 500;
+  }
+  .gantt-legend .dot {
+    width: 10px; height: 10px; border-radius: 2px;
+  }
+  .gantt-wrap {
+    background: var(--card-bg);
+    border-radius: var(--radius);
+    padding: 30px 28px 28px;
+    border: 1px solid var(--gray-200);
+    box-shadow: var(--shadow-sm);
+    margin-top: 40px;
+    overflow-x: auto;
+    -webkit-overflow-scrolling: touch;
+  }
+  .gantt { min-width: 780px; position: relative; }
+  .gantt-header {
+    display: grid;
+    grid-template-columns: 170px 1fr;
+    margin-bottom: 16px;
+    padding-bottom: 10px;
+    border-bottom: 1px solid var(--gray-200);
+    align-items: end;
+  }
+  .gantt-header .spacer {
+    font-family: 'JetBrains Mono', monospace;
+    font-size: 10px;
+    color: var(--gray-500);
+    letter-spacing: 0.1em;
+    text-transform: uppercase;
+  }
+  .gantt-years {
+    position: relative; height: 20px;
+    font-family: 'JetBrains Mono', monospace;
+    font-size: 11px; color: var(--gray-500);
+    letter-spacing: 0.04em;
+  }
+  .gantt-years span {
+    position: absolute;
+    transform: translateX(-50%);
+    top: 0;
+  }
+  .gantt-years .now {
+    right: 0;
+    transform: translateX(0);
+    color: var(--gold);
+    font-weight: 600;
+  }
+
+  .gantt-row {
+    display: grid;
+    grid-template-columns: 170px 1fr;
+    align-items: center;
+    min-height: 44px;
+    border-bottom: 1px dashed var(--gray-200);
+  }
+  .gantt-row:last-child { border-bottom: none; }
+  .gantt-row .lane-label {
+    font-family: 'Space Grotesk', sans-serif;
+    font-size: 13.5px;
+    font-weight: 600;
+    color: var(--text-heading);
+    padding-right: 16px;
+  }
+  .gantt-row .lane-label .lane-count {
+    display: block;
+    margin-top: 3px;
+    font-family: 'JetBrains Mono', monospace;
+    font-size: 10px;
+    font-weight: 500;
+    color: var(--gray-500);
+    letter-spacing: 0.06em;
+    text-transform: uppercase;
+  }
+  .gantt-lane {
+    position: relative;
+    height: 44px;
+  }
+  .gantt-lane .vline {
+    position: absolute;
+    top: 2px;
+    bottom: 2px;
+    width: 1px;
+    background: var(--gantt-vline-color);
+    pointer-events: none;
+  }
+  .gantt-bar {
+    position: absolute;
+    top: 10px;
+    bottom: 10px;
+    border-radius: 4px;
+    font-family: 'Inter', sans-serif;
+    font-size: 11px;
+    color: white;
+    padding: 0 8px;
+    display: flex;
+    align-items: center;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    font-weight: 500;
+    cursor: default;
+    transition: all 0.25s ease;
+  }
+  .gantt-bar:hover {
+    filter: brightness(1.08);
+    z-index: 4;
+    box-shadow: 0 4px 14px rgba(10,22,40,0.18);
+    transform: translateY(-1px);
+  }
+  .gantt-bar.enterprise { background: var(--accent-enterprise); color: var(--navy-900); }
+  .gantt-bar.finance { background: var(--accent-finance); }
+  .gantt-bar.ops { background: var(--accent-ops); }
+  .gantt-bar.aviation { background: var(--accent-aviation); }
+  .gantt-bar.trades { background: var(--accent-trades); }
+  .gantt-bar.foundational { background: var(--gray-500); color: white; }
+  .gantt-bar.narrow { justify-content: center; padding: 0 4px; font-size: 0; }
+  .gantt-bar.narrow::after {
+    content: ''; width: 4px; height: 4px;
+    background: rgba(255,255,255,0.8); border-radius: 50%;
+  }
+
+  .gantt-scroll-hint {
+    display: none;
+    font-family: 'JetBrains Mono', monospace;
+    font-size: 11px;
+    color: var(--gray-500);
+    margin-top: 12px;
+    letter-spacing: 0.04em;
+  }
+  @media (max-width: 900px) {
+    .gantt-scroll-hint { display: block; text-align: center; }
+  }
+
+  /* Scroll-in animation */
+  .fade-in {
+    opacity: 0; transform: translateY(20px);
+    transition: opacity 0.7s ease, transform 0.7s ease;
+  }
+  .fade-in.visible { opacity: 1; transform: translateY(0); }
+
+  /* Print styles — always force the light/navy palette for PDF output */
+  @media print {
+    :root, [data-theme="dark"] {
+      --navy-900: #0a1628;
+      --navy-800: #0f2340;
+      --navy-700: #152e4d;
+      --gold: #c9a24b;
+      --gold-soft: #e0be72;
+      --ivory: #f6f3ec;
+      --paper: #ffffff;
+      --charcoal: #1c1e26;
+      --gray-900: #2a2d36;
+      --gray-700: #4b5563;
+      --gray-500: #6b7280;
+      --gray-300: #d1d5db;
+      --gray-200: #e5e7eb;
+      --gray-100: #f3f4f6;
+      --card-bg: #ffffff;
+      --section-alt: #f0ece2;
+      --pill-ai-bg: #fef7ea;
+      --pill-ai-fg: #8b6914;
+      --pill-ai-border: #f2e4c0;
+      --pill-data-bg: #eef4fb;
+      --pill-data-fg: #2a5a87;
+      --pill-data-border: #d4e2f0;
+      --enterprise-chip-fg: #8a6d2f;
+      --gold-underline: rgba(201,162,75,0.3);
+      --gold-tint-soft: rgba(201,162,75,0.15);
+      --gold-tint-med: rgba(201,162,75,0.25);
+      --industry-enterprise-bg: rgba(201,162,75,0.18);
+      --gantt-vline-color: rgba(10,22,40,0.04);
+      --nav-bg: rgba(250, 248, 243, 0.78);
+      --nav-border: rgba(10,22,40,0.08);
+      --text-body: #1c1e26;
+      --text-heading: #0a1628;
+      --text-strong: #0a1628;
+      --text-brand: #0a1628;
+      --text-link-hover: #0a1628;
+    }
+    html { background: #ffffff !important; }
+    nav.topnav, footer .contact-links, .hero::before, .hero::after, .theme-toggle { display: none; }
+    .hero { padding: 40px 0 30px; background: var(--navy-900); color: var(--ivory); }
+    section { padding: 30px 0 !important; page-break-inside: avoid; }
+    .fade-in { opacity: 1; transform: none; }
+    .metrics, .education { background: white !important; color: var(--charcoal) !important; }
+    .metrics .section-title, .education .section-title, .metric-label, .edu-card .school { color: var(--charcoal) !important; }
+    body { font-size: 12pt; background: #ffffff !important; }
+  }
+</style>
+</head>
+<body>
+
+<!-- NAV -->
+<nav class="topnav">
+  <div class="inner">
+    <a href="#" class="brand">Ethan Rosehart<span>.</span></a>
+    <div class="links">
+      <a href="#thesis">Thesis</a>
+      <a href="#work">Signature Work</a>
+      <a href="#timeline">Timeline</a>
+      <a href="#breadth">Breadth</a>
+      <a href="#stack">Stack</a>
+      <a href="#credentials">Credentials</a>
+      <button id="themeToggle" class="theme-toggle" type="button" aria-label="Toggle theme" title="Toggle theme">
+        <svg class="icon-moon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 12.79A9 9 0 1 1 11.21 3 7 7 0 0 0 21 12.79z"/></svg>
+        <svg class="icon-sun" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="4"/><path d="M12 2v2M12 20v2M4.93 4.93l1.41 1.41M17.66 17.66l1.41 1.41M2 12h2M20 12h2M4.93 19.07l1.41-1.41M17.66 6.34l1.41-1.41"/></svg>
+      </button>
+      <a href="https://www.linkedin.com/in/ethanrosehart/" target="_blank" rel="noopener" class="cta">LinkedIn ↗</a>
+    </div>
+  </div>
+</nav>
+
+<!-- HERO -->
+<header class="hero">
+  <div class="container">
+    <div class="eyebrow">Data &amp; Strategy · Chief Executive Office · GTAA</div>
+    <h1>Strategic insights.<br/><span class="accent">AI-native</span> execution.</h1>
+    <p class="tagline">
+      I sit between executive leadership and the data layer at <strong>Canada's busiest airport</strong>, translating C-suite questions into analytical solutions — and back again. A strategist who's led national teams, shipped AI-driven products, and <strong>works naturally at AI's fluency</strong>.
+    </p>
+    <div class="meta">
+      <div class="item">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 2C8.13 2 5 5.13 5 9c0 5.25 7 13 7 13s7-7.75 7-13c0-3.87-3.13-7-7-7zm0 9.5a2.5 2.5 0 010-5 2.5 2.5 0 010 5z" fill="currentColor" stroke="none"/></svg>
+        Greater Toronto Area · Canada
+      </div>
+      <div class="item">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M4 4h16c1.1 0 2 .9 2 2v12c0 1.1-.9 2-2 2H4c-1.1 0-2-.9-2-2V6c0-1.1.9-2 2-2z"/><polyline points="22,6 12,13 2,6"/></svg>
+        <a href="mailto:ethanrosehart@gmail.com">ethanrosehart@gmail.com</a>
+      </div>
+      <div class="item">
+        <svg viewBox="0 0 24 24" fill="currentColor"><path d="M20.447 20.452h-3.554v-5.569c0-1.328-.027-3.037-1.852-3.037-1.853 0-2.136 1.445-2.136 2.939v5.667H9.351V9h3.414v1.561h.046c.477-.9 1.637-1.85 3.37-1.85 3.601 0 4.267 2.37 4.267 5.455v6.286zM5.337 7.433a2.062 2.062 0 01-2.063-2.065 2.063 2.063 0 112.063 2.065zm1.782 13.019H3.555V9h3.564v11.452z"/></svg>
+        <a href="https://www.linkedin.com/in/ethanrosehart/" target="_blank" rel="noopener">linkedin.com/in/ethanrosehart</a>
+      </div>
+    </div>
+  </div>
+</header>
+
+<!-- THESIS -->
+<section class="thesis" id="thesis">
+  <div class="container">
+    <div class="thesis-grid">
+      <div>
+        <div class="section-label">The Thesis</div>
+        <h2 class="section-title">I'm the operator behind the Officer.</h2>
+      </div>
+      <div class="thesis-text">
+        <p>
+          I build the <strong>data and AI infrastructure that lets the executive office make sharper decisions, faster</strong> — structuring the questions before anyone writes a line of code, then shipping the predictive models, KPI frameworks, and exception-based operating tools that move the business.
+        </p>
+        <p>
+          Before I specialized in analytics, I <strong>led a 50-person national field operation</strong>, closed <strong>enterprise B2B contracts</strong>, and built an analytics function from zero. That's the lens I bring to every data problem — business first, engineering second, always in service of execution.
+        </p>
+        <div class="thesis-quote">
+          "Quick, nimble, agile. Move fast, iterate, execute. Drive real change without getting bogged down in committee."
+          <cite>— Operating Principle</cite>
+        </div>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- IMPACT METRICS -->
+<section class="metrics">
+  <div class="container">
+    <div class="metrics-header">
+      <div class="section-label">Impact at a Glance</div>
+      <h2 class="section-title">Built to ship, shaped by scale.</h2>
+    </div>
+    <div class="metrics-grid">
+      <div class="metric-card fade-in">
+        <div class="metric-value"><span class="count" data-target="150">0</span><span class="unit">+</span></div>
+        <div class="metric-label">Regional service sites migrated during full digital transformation</div>
+        <div class="metric-sub">Hosting · security · AI-assisted SEO</div>
+      </div>
+      <div class="metric-card fade-in">
+        <div class="metric-value"><span class="count" data-target="50">0</span><span class="unit">+</span></div>
+        <div class="metric-label">Employees directed nationally as General Manager</div>
+        <div class="metric-sub">Field ops · call centre · analytics</div>
+      </div>
+      <div class="metric-card fade-in">
+        <div class="metric-value"><span class="count" data-target="300">0</span><span class="unit">+</span></div>
+        <div class="metric-label">Daily inbound calls flowing through the ops engine I ran</div>
+        <div class="metric-sub">KPI-instrumented · revenue-weighted</div>
+      </div>
+      <div class="metric-card fade-in">
+        <div class="metric-value"><span class="count" data-target="4">0</span><span class="unit">yrs</span></div>
+        <div class="metric-label">Scaling a national firm as CEO's right hand before pivoting to executive analytics</div>
+        <div class="metric-sub">P&amp;L · team · tech · growth</div>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- SIGNATURE WORK -->
+<section class="signature" id="work">
+  <div class="container">
+    <div class="signature-header">
+      <div class="section-label">Signature Work</div>
+      <h2 class="section-title">Three chapters, one operating thesis.</h2>
+      <p>From the executive office at Canada's busiest airport to the GM seat at a 50-person national service firm, each role has sharpened the same discipline: turn messy reality into the clearest possible decision.</p>
+    </div>
+
+    <!-- GTAA -->
+    <article class="signature-card fade-in">
+      <div class="signature-meta">
+        <span class="role-tag">Current · Enterprise Strategy</span>
+        <h3>Data &amp; Strategy</h3>
+        <div class="org">Greater Toronto Airports Authority</div>
+        <div class="org" style="color: var(--gray-500); font-size: 13.5px;">Chief Executive Office</div>
+        <div class="dates">Jun 2025 — Present · Mississauga, ON</div>
+      </div>
+      <div class="signature-body">
+        <p class="summary">
+          Sitting between executive leadership and data &amp; technology at <strong>Canada's busiest airport</strong>, I translate C-suite business questions into concrete analytical solutions — and back again. I serve as subject-matter expert across data, AI, and enterprise technology, architecting end-to-end solutions on the Microsoft stack while keeping the focus on business value.
+        </p>
+        <ul>
+          <li><strong>Launched the Strategic Objective Reporting Tool (SORT)</strong> — an AI-powered, executive-facing dashboard that quantifies business performance in a uniform way and surfaces where targeted intervention and interdepartmental collaboration would move the needle. Now receiving executive-wide adoption at Pearson.</li>
+          <li><strong>Proposed an exception-based operating model</strong> for executive decision-making — shifting leadership from reactive reporting to proactive strategic intervention.</li>
+          <li><strong>Recognized as SME within 9 months</strong> for all things Data &amp; Insights — the analyst who bridges business and cutting-edge technology (AI solutions, data governance frameworks, performance management practices).</li>
+          <li><strong>Reports directly into the Executive Office</strong> with weekly exposure to the executive leadership team — operating at the altitude where enterprise strategy gets shaped, and consistently delivering at a pace above the broader business.</li>
+          <li>Architect end-to-end solutions on Microsoft Azure, Microsoft Fabric, and Power BI — predictive modeling, KPI frameworks, and data product design.</li>
+        </ul>
+        <div class="pill-row">
+          <span class="pill ai">AI-Native Workflows</span>
+          <span class="pill data">Exception-Based Reporting</span>
+          <span class="pill">Executive Dashboards</span>
+          <span class="pill">Data Governance</span>
+          <span class="pill">Microsoft Fabric</span>
+          <span class="pill">Power BI</span>
+        </div>
+      </div>
+    </article>
+
+    <!-- CI Financial -->
+    <article class="signature-card fade-in">
+      <div class="signature-meta">
+        <span class="role-tag">Consulting · Financial Services</span>
+        <h3>Business Analytics Consultant</h3>
+        <div class="org">CI Financial</div>
+        <div class="org" style="color: var(--gray-500); font-size: 13.5px;">Schulich MBAN Capstone</div>
+        <div class="dates">Sep 2024 — Apr 2025 · Toronto, ON</div>
+      </div>
+      <div class="signature-body">
+        <p class="summary">
+          Led an eight-month graduate analytics consulting engagement, delivering a <strong>data-driven business development proposal to CI Financial senior leadership</strong> that informed a comprehensive go-forward strategy.
+        </p>
+        <ul>
+          <li>Scoped the business problem, designed the analytics approach, and built the data pipelines end-to-end — applying predictive modeling, NLP, and BI to marketing, finance, and operations questions.</li>
+          <li>Delivered the final recommendation to senior stakeholders with visual storytelling that translated model outputs into boardroom-ready decisions.</li>
+          <li>Recognized for top performance across data modeling, project management, ethics, and visual storytelling.</li>
+        </ul>
+        <div class="pill-row">
+          <span class="pill data">Predictive Modeling</span>
+          <span class="pill data">NLP</span>
+          <span class="pill">Stakeholder Storytelling</span>
+          <span class="pill">Python · SQL</span>
+        </div>
+      </div>
+    </article>
+
+    <!-- Direct Locksmith -->
+    <article class="signature-card fade-in">
+      <div class="signature-meta">
+        <span class="role-tag">Operator · National Scale-Up</span>
+        <h3>General Manager</h3>
+        <div class="org">Direct Locksmith</div>
+        <div class="dates">Jun 2021 — May 2025 · 4 yrs · Toronto, ON</div>
+      </div>
+      <div class="signature-body">
+        <p class="summary">
+          Senior leadership across a <strong>50-person national service company</strong> — directly overseeing a call centre handling 300+ daily inbound calls. Partnered with the CEO to re-engineer sales performance, client retention, and revenue through data-driven operating decisions — <strong>all while introducing the organization to AI as ChatGPT launched</strong>.
+        </p>
+        <ul>
+          <li><strong>Won the Canada Post fleet management contract</strong> across the Greater Toronto Area — expanded the commercial book and anchored a new revenue line.</li>
+          <li><strong>Built the analytics team and operating framework from zero</strong> — KPIs, reporting cadences, sales analytics, client-retention telemetry.</li>
+          <li><strong>Reallocated technicians on revenue-per-call</strong> (not call volume) — a non-obvious efficiency lever that raised margin without sacrificing quality.</li>
+          <li><strong>Shipped cloud automation between management and field teams</strong> — reduced loss, raised data accuracy, and compressed the ops cycle.</li>
+          <li><strong>Led full digital transformation</strong> of DirectLocksmith.ca — rebuild, migration of 100+ regional sites, cybersecurity uplift, and AI-assisted SEO content strategy that held top Google rankings in a competitive industry.</li>
+          <li>Received formal recommendation from the Executive Director for work spanning BI, AI-driven sales engagement, process automation, and strategic growth.</li>
+        </ul>
+        <div class="pill-row">
+          <span class="pill ai">Early AI Adoption (2022)</span>
+          <span class="pill data">KPI Framework Design</span>
+          <span class="pill">P&amp;L Accountability</span>
+          <span class="pill">B2B Contract Close</span>
+          <span class="pill">Process Automation</span>
+          <span class="pill">SEO · Google Ads</span>
+        </div>
+      </div>
+    </article>
+  </div>
+</section>
+
+<!-- TIMELINE (GANTT) -->
+<section class="timeline" id="timeline">
+  <div class="container">
+    <div class="timeline-header">
+      <div class="section-label">Career Timeline</div>
+      <h2 class="section-title">Six industries. One pattern of execution.</h2>
+      <p>From the window at a McDonald's to the executive office at Canada's busiest airport — every role has reinforced the same operating instinct: find the signal, ship the decision, raise the level of the room.</p>
+    </div>
+
+    <div class="gantt-legend">
+      <span class="swatch"><span class="dot" style="background: var(--accent-enterprise);"></span>Enterprise Strategy</span>
+      <span class="swatch"><span class="dot" style="background: var(--accent-finance);"></span>Financial Services</span>
+      <span class="swatch"><span class="dot" style="background: var(--accent-ops);"></span>Commercial Ops</span>
+      <span class="swatch"><span class="dot" style="background: var(--accent-aviation);"></span>Aviation</span>
+      <span class="swatch"><span class="dot" style="background: var(--accent-trades);"></span>Trades</span>
+      <span class="swatch"><span class="dot" style="background: var(--gray-500);"></span>Foundational</span>
+    </div>
+
+    <div class="gantt-wrap fade-in">
+      <div class="gantt">
+
+        <div class="gantt-header">
+          <div class="spacer">Industry Lane</div>
+          <div class="gantt-years">
+            <span style="left: 0%;">2011</span>
+            <span style="left: 19.35%;">2014</span>
+            <span style="left: 38.71%;">2017</span>
+            <span style="left: 58.06%;">2020</span>
+            <span style="left: 77.42%;">2023</span>
+            <span class="now">2026 ·</span>
+          </div>
+        </div>
+
+        <!-- Enterprise Strategy -->
+        <div class="gantt-row">
+          <div class="lane-label">Enterprise Strategy<span class="lane-count">1 role</span></div>
+          <div class="gantt-lane">
+            <div class="vline" style="left: 19.35%;"></div>
+            <div class="vline" style="left: 38.71%;"></div>
+            <div class="vline" style="left: 58.06%;"></div>
+            <div class="vline" style="left: 77.42%;"></div>
+            <div class="gantt-bar enterprise" style="left: 93.01%; width: 6.99%;" title="GTAA — Data &amp; Strategy (Jun 2025 – Present)">GTAA</div>
+          </div>
+        </div>
+
+        <!-- Financial Services -->
+        <div class="gantt-row">
+          <div class="lane-label">Financial Services<span class="lane-count">1 role</span></div>
+          <div class="gantt-lane">
+            <div class="vline" style="left: 19.35%;"></div>
+            <div class="vline" style="left: 38.71%;"></div>
+            <div class="vline" style="left: 58.06%;"></div>
+            <div class="vline" style="left: 77.42%;"></div>
+            <div class="gantt-bar finance narrow" style="left: 88.17%; width: 3.76%;" title="CI Financial — Business Analytics Consultant (Sep 2024 – Apr 2025)"></div>
+          </div>
+        </div>
+
+        <!-- Commercial Ops -->
+        <div class="gantt-row">
+          <div class="lane-label">Commercial Ops<span class="lane-count">1 role</span></div>
+          <div class="gantt-lane">
+            <div class="vline" style="left: 19.35%;"></div>
+            <div class="vline" style="left: 38.71%;"></div>
+            <div class="vline" style="left: 58.06%;"></div>
+            <div class="vline" style="left: 77.42%;"></div>
+            <div class="gantt-bar ops" style="left: 67.20%; width: 25.27%;" title="Direct Locksmith — General Manager (Jun 2021 – May 2025)">Direct Locksmith · General Manager</div>
+          </div>
+        </div>
+
+        <!-- Aviation -->
+        <div class="gantt-row">
+          <div class="lane-label">Aviation<span class="lane-count">2 roles</span></div>
+          <div class="gantt-lane">
+            <div class="vline" style="left: 19.35%;"></div>
+            <div class="vline" style="left: 38.71%;"></div>
+            <div class="vline" style="left: 58.06%;"></div>
+            <div class="vline" style="left: 77.42%;"></div>
+            <div class="gantt-bar aviation narrow" style="left: 20.97%; width: 2.69%;" title="Swissport — Ramp Agent (Apr – Sep 2014) · Toronto Pearson"></div>
+            <div class="gantt-bar aviation" style="left: 36.56%; width: 23.66%;" title="Seneca Polytechnic — Honours Bachelor of Aviation Technology (Sep 2016 – May 2020)">Seneca Polytechnic · Aviation Technology</div>
+          </div>
+        </div>
+
+        <!-- Trades -->
+        <div class="gantt-row">
+          <div class="lane-label">Trades<span class="lane-count">2 roles</span></div>
+          <div class="gantt-lane">
+            <div class="vline" style="left: 19.35%;"></div>
+            <div class="vline" style="left: 38.71%;"></div>
+            <div class="vline" style="left: 58.06%;"></div>
+            <div class="vline" style="left: 77.42%;"></div>
+            <div class="gantt-bar trades narrow" style="left: 18.82%; width: 1.61%;" title="AMPower Electric — Electrical Apprentice (Dec 2013 – Mar 2014)"></div>
+            <div class="gantt-bar trades" style="left: 28.49%; width: 5.91%;" title="Zerem Electrical — Electrical Apprentice (Jun 2015 – May 2016)">Zerem</div>
+          </div>
+        </div>
+
+        <!-- Foundational -->
+        <div class="gantt-row">
+          <div class="lane-label">Foundational<span class="lane-count">4 roles</span></div>
+          <div class="gantt-lane">
+            <div class="vline" style="left: 19.35%;"></div>
+            <div class="vline" style="left: 38.71%;"></div>
+            <div class="vline" style="left: 58.06%;"></div>
+            <div class="vline" style="left: 77.42%;"></div>
+            <div class="gantt-bar foundational" style="left: 4.84%; width: 5.91%;" title="McDonald's Canada — Customer Service (Oct 2011 – Sep 2012)">McDonald's</div>
+            <div class="gantt-bar foundational narrow" style="left: 8.06%; width: 2.69%;" title="Weston Private Golf &amp; C.C — Backshop (Apr – Sep 2012)"></div>
+            <div class="gantt-bar foundational narrow" style="left: 16.67%; width: 3.76%;" title="Ready Honda — Auto Detailing (Aug 2013 – Mar 2014)"></div>
+            <div class="gantt-bar foundational narrow" style="left: 24.19%; width: 2.69%;" title="Gap Inc. — Forklift Operator, Brampton DC (Oct 2014 – Mar 2015)"></div>
+          </div>
+        </div>
+
+      </div>
+    </div>
+    <div class="gantt-scroll-hint">← scroll to explore →</div>
+
+    <p style="margin-top: 32px; font-size: 15.5px; color: var(--gray-700); max-width: 820px; line-height: 1.65;">
+      The pattern isn't the résumé — it's the <strong style="color: var(--text-strong);">reps</strong>. Eleven years in the workforce, six distinct industries, from window-service at McDonald's to the CEO's office at Canada's busiest airport. Every domain has a different operating logic. Seeing the common structure is what compounds.
+    </p>
+  </div>
+</section>
+
+<!-- BREADTH + RADAR -->
+<section class="breadth" id="breadth">
+  <div class="container">
+    <div class="breadth-grid">
+      <div class="breadth-copy">
+        <div class="section-label">Capability Synthesis</div>
+        <h3>Where the reps compound.</h3>
+        <p>
+          A decade of operating across six industries synthesizes into a capability profile built for executive execution — not analysis for its own sake, but <strong>decision-making at the altitude where strategy and data meet</strong>.
+        </p>
+        <p>
+          Four dimensions do most of the work: fluency in AI and emerging technology, storytelling that lands in the boardroom, the strategic framing to know what's worth answering, and the operational muscle to actually ship it.
+        </p>
+      </div>
+
+      <div class="radar-wrap fade-in">
+        <h4>Capability Profile</h4>
+        <div class="radar-sub">Self-assessed depth across the CDO/CSO operating stack</div>
+        <canvas id="capabilityRadar"></canvas>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- STACK -->
+<section class="stack" id="stack">
+  <div class="container">
+    <div class="stack-header">
+      <div class="section-label">Technical Stack</div>
+      <h2 class="section-title">Fluent where it matters.</h2>
+      <p style="font-size: 16.5px; color: var(--gray-700); margin-top: 14px; line-height: 1.65;">I'm <strong style="color: var(--text-strong);">AI-native</strong>, not AI-adjacent — I work naturally with AI tooling, understand how the systems are built and deployed, and track the industry trends that matter to enterprise execution. The rest of the stack sits underneath.</p>
+    </div>
+    <div class="stack-grid">
+      <div class="stack-item"><div class="stack-name">AI &amp; LLMs <span class="level">Native</span></div><div class="stack-bar"><div class="fill" data-fill="95"></div></div><div class="category">Core Leverage</div></div>
+      <div class="stack-item"><div class="stack-name">Python <span class="level">Advanced</span></div><div class="stack-bar"><div class="fill" data-fill="85"></div></div><div class="category">Languages</div></div>
+      <div class="stack-item"><div class="stack-name">SQL <span class="level">Advanced</span></div><div class="stack-bar"><div class="fill" data-fill="88"></div></div><div class="category">Languages</div></div>
+      <div class="stack-item"><div class="stack-name">Microsoft Azure <span class="level">Practiced</span></div><div class="stack-bar"><div class="fill" data-fill="78"></div></div><div class="category">Cloud</div></div>
+      <div class="stack-item"><div class="stack-name">Microsoft Fabric <span class="level">Practiced</span></div><div class="stack-bar"><div class="fill" data-fill="80"></div></div><div class="category">Data Platform</div></div>
+      <div class="stack-item"><div class="stack-name">Power BI <span class="level">Expert</span></div><div class="stack-bar"><div class="fill" data-fill="92"></div></div><div class="category">Visualization</div></div>
+      <div class="stack-item"><div class="stack-name">Tableau <span class="level">Advanced</span></div><div class="stack-bar"><div class="fill" data-fill="85"></div></div><div class="category">Visualization</div></div>
+      <div class="stack-item"><div class="stack-name">PySpark <span class="level">Practiced</span></div><div class="stack-bar"><div class="fill" data-fill="72"></div></div><div class="category">Big Data</div></div>
+    </div>
+  </div>
+</section>
+
+<!-- CREDENTIALS -->
+<section class="credentials" id="credentials">
+  <div class="container">
+    <div class="section-label">Credentials &amp; Recognition</div>
+    <h2 class="section-title" style="margin-bottom: 48px;">Signals beyond the job description.</h2>
+    <div class="cred-grid" style="grid-template-columns: 1fr 1fr;">
+      <div class="cred-block">
+        <h3><span class="dot"></span>Executive Education &amp; Licences</h3>
+        <ul>
+          <li>
+            <span class="title">GTAA Elevate: Building High-Performance Teams</span>
+            <span class="detail">Ivey Business School Executive Education</span>
+            <span class="meta">Jan 2026</span>
+          </li>
+          <li>
+            <span class="title">Stakeholder Management &amp; Influence</span>
+            <span class="detail">Ivey Business School Executive Education</span>
+            <span class="meta">Jan 2026</span>
+          </li>
+          <li>
+            <span class="title">Frozen Airline Transport Pilot License</span>
+            <span class="detail">Transport Canada · Seneca Polytechnic</span>
+            <span class="meta">May 2020</span>
+          </li>
+          <li>
+            <span class="title">Commercial Pilot License · Multi-Engine Instrument Rating</span>
+            <span class="detail">Transport Canada</span>
+            <span class="meta">May 2020</span>
+          </li>
+        </ul>
+      </div>
+      <div class="cred-block">
+        <h3><span class="dot"></span>Recognition &amp; Service</h3>
+        <ul>
+          <li>
+            <span class="title">MBAN Program Improvement Committee</span>
+            <span class="detail">Appointed to advise on the future direction of the program</span>
+            <span class="meta">Schulich School of Business</span>
+          </li>
+          <li>
+            <span class="title">INEO Orientation Panel Speaker</span>
+            <span class="detail">Invited to address incoming Schulich master's students</span>
+          </li>
+          <li>
+            <span class="title">Formal Recommendation — Executive Director, Direct Locksmith</span>
+            <span class="detail">On business intelligence, AI-driven growth, B2B contract delivery, and team leadership</span>
+          </li>
+        </ul>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- EDUCATION -->
+<section class="education" id="education">
+  <div class="container">
+    <div class="section-label" style="color: var(--gold);">Education</div>
+    <h2 class="section-title">Formal foundations.</h2>
+    <div class="edu-grid">
+      <div class="edu-card fade-in">
+        <div class="degree">Master of Business Analytics (MBAN)</div>
+        <div class="school">Schulich School of Business · York University</div>
+        <div class="edu-meta">May 2024 — May 2025 · Grade A−</div>
+        <p>Highly applied analytics program bridging data science, technology, and business strategy. Coursework in Data Science, AI in Business, Operations Modeling, Visual Analytics, Database Management, and Strategic Case Analysis. Capstone delivered to CI Financial senior leadership.</p>
+        <span class="honor">Graduated With Distinction</span>
+      </div>
+      <div class="edu-card fade-in">
+        <div class="degree">Honours Bachelor of Aviation Technology</div>
+        <div class="school">Seneca Polytechnic</div>
+        <div class="edu-meta">Sep 2016 — May 2020</div>
+        <p>One of Canada's premier aviation programs. Earned Commercial Pilot License, Multi-Engine Instrument Rating, and met all Transport Canada requirements for the Frozen ATPL. Capstone on airport operations planning integrating safety compliance and logistical design.</p>
+        <span class="honor">Frozen ATPL · 150+ Flight Hours</span>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- FOOTER -->
+<footer>
+  <div class="container">
+    <h3>Let's build something <span class="accent">that ships.</span></h3>
+    <p style="color: rgba(246,243,236,0.7); max-width: 620px; margin: 0 auto; font-size: 15px; line-height: 1.6;">
+      Always open to a conversation — analytics leadership, strategic consulting, executive data partnerships, or anything where speed, signal, and real execution matter. If the problem is interesting and the team moves, I'd like to hear about it.
+    </p>
+    <div class="contact-links">
+      <a href="mailto:ethanrosehart@gmail.com">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M4 4h16c1.1 0 2 .9 2 2v12c0 1.1-.9 2-2 2H4c-1.1 0-2-.9-2-2V6c0-1.1.9-2 2-2z"/><polyline points="22,6 12,13 2,6"/></svg>
+        ethanrosehart@gmail.com
+      </a>
+      <a href="https://www.linkedin.com/in/ethanrosehart/" target="_blank" rel="noopener">
+        <svg viewBox="0 0 24 24" fill="currentColor"><path d="M20.447 20.452h-3.554v-5.569c0-1.328-.027-3.037-1.852-3.037-1.853 0-2.136 1.445-2.136 2.939v5.667H9.351V9h3.414v1.561h.046c.477-.9 1.637-1.85 3.37-1.85 3.601 0 4.267 2.37 4.267 5.455v6.286zM5.337 7.433a2.062 2.062 0 01-2.063-2.065 2.063 2.063 0 112.063 2.065zm1.782 13.019H3.555V9h3.564v11.452z"/></svg>
+        LinkedIn
+      </a>
+      <a href="#" onclick="window.print();return false;">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="6 9 6 2 18 2 18 9"/><path d="M6 18H4a2 2 0 01-2-2v-5a2 2 0 012-2h16a2 2 0 012 2v5a2 2 0 01-2 2h-2"/><rect x="6" y="14" width="12" height="8"/></svg>
+        Save as PDF
+      </a>
+    </div>
+    <p class="fine-print">Built as a living document · Updated April 2026</p>
+  </div>
+</footer>
+
+<script>
+  /* Fade-in on scroll */
+  const observer = new IntersectionObserver((entries) => {
+    entries.forEach(entry => {
+      if (entry.isIntersecting) {
+        entry.target.classList.add('visible');
+        observer.unobserve(entry.target);
+      }
+    });
+  }, { threshold: 0.12, rootMargin: '0px 0px -40px 0px' });
+  document.querySelectorAll('.fade-in').forEach(el => observer.observe(el));
+
+  /* Animated counters */
+  const counterObserver = new IntersectionObserver((entries) => {
+    entries.forEach(entry => {
+      if (!entry.isIntersecting) return;
+      const el = entry.target;
+      const target = parseInt(el.dataset.target, 10);
+      const duration = 1400;
+      const start = performance.now();
+      const step = (now) => {
+        const p = Math.min((now - start) / duration, 1);
+        const eased = 1 - Math.pow(1 - p, 3);
+        el.textContent = Math.floor(eased * target);
+        if (p < 1) requestAnimationFrame(step);
+        else el.textContent = target;
+      };
+      requestAnimationFrame(step);
+      counterObserver.unobserve(el);
+    });
+  }, { threshold: 0.4 });
+  document.querySelectorAll('.count').forEach(el => counterObserver.observe(el));
+
+  /* Stack bar fills */
+  const stackObserver = new IntersectionObserver((entries) => {
+    entries.forEach(entry => {
+      if (!entry.isIntersecting) return;
+      const fill = entry.target;
+      fill.style.width = fill.dataset.fill + '%';
+      stackObserver.unobserve(fill);
+    });
+  }, { threshold: 0.3 });
+  document.querySelectorAll('.stack-bar .fill').forEach(el => stackObserver.observe(el));
+
+  /* ---- Theme management ---- */
+  const THEME_KEY = 'er-resume-theme';
+  const root = document.documentElement;
+
+  function getSavedTheme() {
+    try { return localStorage.getItem(THEME_KEY); } catch (e) { return null; }
+  }
+  function saveTheme(t) {
+    try { localStorage.setItem(THEME_KEY, t); } catch (e) {}
+  }
+  function applyTheme(theme) {
+    if (theme === 'dark') root.setAttribute('data-theme', 'dark');
+    else root.removeAttribute('data-theme');
+  }
+
+  /* Apply saved theme on load (defaults to dark) */
+  applyTheme(getSavedTheme() === 'light' ? 'light' : 'dark');
+
+  /* Helper: convert hex (or passthrough rgba) to rgba string */
+  function toRgba(color, alpha) {
+    if (!color) return 'rgba(0,0,0,' + alpha + ')';
+    color = color.trim();
+    if (color.startsWith('rgba') || color.startsWith('rgb')) {
+      // swap existing alpha
+      const nums = color.match(/[\d.]+/g);
+      if (nums && nums.length >= 3) return 'rgba(' + nums[0] + ',' + nums[1] + ',' + nums[2] + ',' + alpha + ')';
+      return color;
+    }
+    // hex
+    let hex = color.replace('#', '');
+    if (hex.length === 3) hex = hex.split('').map(c => c + c).join('');
+    const r = parseInt(hex.substring(0, 2), 16);
+    const g = parseInt(hex.substring(2, 4), 16);
+    const b = parseInt(hex.substring(4, 6), 16);
+    return 'rgba(' + r + ',' + g + ',' + b + ',' + alpha + ')';
+  }
+  function cssVar(name) {
+    return getComputedStyle(root).getPropertyValue(name).trim();
+  }
+
+  /* Capability radar — theme-aware, re-renders on toggle */
+  let radarChart = null;
+  function renderRadar() {
+    const ctx = document.getElementById('capabilityRadar');
+    if (!ctx || typeof Chart === 'undefined') return;
+
+    const gold = cssVar('--gold') || '#c9a24b';
+    const navy = cssVar('--navy-900') || '#0a1628';
+    const ivory = cssVar('--ivory') || '#f6f3ec';
+    const isDark = root.getAttribute('data-theme') === 'dark';
+    const gridColor = isDark ? 'rgba(255,255,255,0.12)' : toRgba(navy, 0.08);
+    const pointLabelColor = isDark ? ivory : navy;
+    const tooltipBg = isDark ? toRgba('#000000', 0.95) : toRgba(navy, 0.95);
+
+    if (radarChart) { radarChart.destroy(); radarChart = null; }
+
+    radarChart = new Chart(ctx, {
+      type: 'radar',
+      data: {
+        labels: [
+          'AI & Emerging Tech',
+          'Executive Storytelling',
+          'Strategic Framing',
+          'Data Engineering',
+          'Operational Delivery',
+          'People Leadership',
+          'Business Acumen'
+        ],
+        datasets: [{
+          label: 'Capability Profile',
+          data: [95, 88, 85, 78, 92, 86, 90],
+          fill: true,
+          backgroundColor: toRgba(gold, 0.22),
+          borderColor: toRgba(gold, 1),
+          borderWidth: 2,
+          pointBackgroundColor: isDark ? toRgba(gold, 1) : toRgba(navy, 1),
+          pointBorderColor: toRgba(gold, 1),
+          pointBorderWidth: 2,
+          pointRadius: 5,
+          pointHoverRadius: 7
+        }]
+      },
+      options: {
+        responsive: true,
+        maintainAspectRatio: true,
+        plugins: {
+          legend: { display: false },
+          tooltip: {
+            backgroundColor: tooltipBg,
+            titleColor: toRgba(gold, 1),
+            titleFont: { family: 'Space Grotesk', size: 13, weight: '600' },
+            bodyColor: ivory,
+            bodyFont: { family: 'Inter', size: 12 },
+            padding: 12,
+            borderColor: toRgba(gold, 0.4),
+            borderWidth: 1,
+            displayColors: false,
+            callbacks: { label: (c) => c.parsed.r + ' / 100' }
+          }
+        },
+        scales: {
+          r: {
+            angleLines: { color: gridColor },
+            grid: { color: gridColor },
+            pointLabels: {
+              color: pointLabelColor,
+              font: { family: 'Space Grotesk', size: 12, weight: '600' }
+            },
+            ticks: { display: false, stepSize: 20, backdropColor: 'transparent' },
+            min: 0,
+            max: 100
+          }
+        }
+      }
+    });
+  }
+
+  window.addEventListener('load', () => {
+    renderRadar();
+
+    const btn = document.getElementById('themeToggle');
+    if (btn) {
+      btn.addEventListener('click', () => {
+        const next = root.getAttribute('data-theme') === 'dark' ? 'light' : 'dark';
+        applyTheme(next);
+        saveTheme(next);
+        renderRadar();
+      });
+    }
+  });
+</script>
+
+</body>
+</html>
