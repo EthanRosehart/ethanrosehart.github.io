@@ -1,0 +1,8 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512">
+  <!-- Ethan Rosehart — brand favicon (dark variant) -->
+  <rect width="512" height="512" rx="96" ry="96" fill="#0a0a0a"/>
+  <path d="M 130 110 L 362 110 L 362 180 L 204 180 L 204 224 L 342 224 L 342 290 L 204 290 L 204 332 L 368 332 L 368 402 L 130 402 Z"
+        fill="#ffffff"/>
+  <circle cx="412" cy="402" r="32" fill="#ff3ea5"/>
+</svg>
