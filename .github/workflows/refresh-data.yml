@@ -1,0 +1,61 @@
+name: Refresh data
+
+# Pulls fresh public data and commits the snapshots to
+# portfolio/glidepath/data/*.json. GitHub Pages redeploys automatically, so
+# the Glidepath app always serves last night's numbers — fetched server-side
+# here, never from the visitor's browser.
+#   macro.json     — World Bank population & historical GDP/capita
+#   activity.json  — Eurostat / StatCan monthly passengers by airport
+#   oecd.json      — OECD Economic Outlook GDP-growth projections
+#   airports.json  — OpenFlights authoritative airport reference
+
+on:
+  schedule:
+    - cron: "17 3 * * *"   # 03:17 UTC nightly
+  workflow_dispatch: {}     # allow manual "Run workflow" from the Actions tab
+
+permissions:
+  contents: write           # needed to commit the refreshed snapshot
+
+concurrency:
+  group: refresh-data
+  cancel-in-progress: false
+
+jobs:
+  refresh:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+
+      - name: Fetch airport reference (OpenFlights)
+        run: node portfolio/glidepath/scripts/fetch-openflights.mjs
+        continue-on-error: true
+
+      - name: Fetch macro snapshot from World Bank
+        run: node portfolio/glidepath/scripts/fetch-data.mjs
+
+      - name: Fetch GDP projections (OECD Economic Outlook)
+        run: node portfolio/glidepath/scripts/fetch-oecd.mjs
+        continue-on-error: true   # OECD dataflow ids shift between releases
+
+      - name: Fetch monthly passengers (Eurostat + StatCan)
+        run: node portfolio/glidepath/scripts/fetch-activity.mjs
+        continue-on-error: true   # a feed outage keeps the last good snapshot
+
+      - name: Commit if changed
+        run: |
+          git config user.name  "glidepath-bot"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add portfolio/glidepath/data/*.json
+          if git diff --staged --quiet; then
+            echo "No change in data — nothing to commit."
+          else
+            git commit -m "chore(data): nightly Glidepath refresh [skip ci]"
+            git push
+          fi

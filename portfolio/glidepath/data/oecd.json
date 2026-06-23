@@ -1,0 +1,71 @@
+{
+  "generatedAt": "2026-06-22T03:15:10Z",
+  "seed": true,
+  "source": "OECD Economic Outlook — real GDP growth projections (SDMX, OECD.ECO)",
+  "note": "Forward-looking real GDP growth projections. Refreshed nightly by fetch-oecd.mjs. Sets the GDP-growth lever default in the long-term model (preferred over World Bank historical mean). seed:true until first live Action run.",
+  "countries": {
+    "CAN": {
+      "name": "Canada",
+      "gdpProj": 1.8,
+      "gdpcapProj": 0.6,
+      "horizon": "2025-2027",
+      "measure": "GDPV_ANNPCT"
+    },
+    "USA": {
+      "name": "United States",
+      "gdpProj": 2,
+      "gdpcapProj": 1.4,
+      "horizon": "2025-2027",
+      "measure": "GDPV_ANNPCT"
+    },
+    "GBR": {
+      "name": "United Kingdom",
+      "gdpProj": 1.3,
+      "gdpcapProj": 0.8,
+      "horizon": "2025-2027",
+      "measure": "GDPV_ANNPCT"
+    },
+    "NLD": {
+      "name": "Netherlands",
+      "gdpProj": 1.6,
+      "gdpcapProj": 1,
+      "horizon": "2025-2027",
+      "measure": "GDPV_ANNPCT"
+    },
+    "DEU": {
+      "name": "Germany",
+      "gdpProj": 1.1,
+      "gdpcapProj": 0.7,
+      "horizon": "2025-2027",
+      "measure": "GDPV_ANNPCT"
+    },
+    "DNK": {
+      "name": "Denmark",
+      "gdpProj": 1.9,
+      "gdpcapProj": 1.4,
+      "horizon": "2025-2027",
+      "measure": "GDPV_ANNPCT"
+    },
+    "AUT": {
+      "name": "Austria",
+      "gdpProj": 1.3,
+      "gdpcapProj": 0.7,
+      "horizon": "2025-2027",
+      "measure": "GDPV_ANNPCT"
+    },
+    "ITA": {
+      "name": "Italy",
+      "gdpProj": 0.9,
+      "gdpcapProj": 1,
+      "horizon": "2025-2027",
+      "measure": "GDPV_ANNPCT"
+    },
+    "POL": {
+      "name": "Poland",
+      "gdpProj": 3.1,
+      "gdpcapProj": 3.3,
+      "horizon": "2025-2027",
+      "measure": "GDPV_ANNPCT"
+    }
+  }
+}
