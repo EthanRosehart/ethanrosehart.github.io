@@ -1042,21 +1042,41 @@
     body { font-size: 12pt; background: #ffffff !important; }
   }
 
-  /* Portfolio dropdown — added for GlidePath */
-  .nav-portfolio { position: relative; }
+  /* ── Portfolio dropdown ── */
+  .nav-portfolio {
+    position: relative;
+    display: inline-flex;
+    align-items: center;
+  }
   .nav-portfolio > a {
     display: inline-flex; align-items: center; gap: 5px;
     color: var(--gray-700); text-decoration: none; font-size: 13.5px;
     font-weight: 500; letter-spacing: 0.01em;
-    transition: color 0.2s; cursor: pointer;
+    transition: color 0.2s; cursor: default;
+    -webkit-user-select: none; user-select: none;
   }
-  .nav-portfolio > a:hover { color: var(--text-link-hover); }
-  .nav-portfolio > a svg { transition: transform 0.2s; }
+  .nav-portfolio:hover > a,
+  .nav-portfolio:focus-within > a { color: var(--text-link-hover); }
+  .nav-portfolio > a svg {
+    transition: transform 0.2s;
+    flex-shrink: 0;
+  }
   .nav-portfolio:hover > a svg,
-  .nav-portfolio.open > a svg { transform: rotate(180deg); }
+  .nav-portfolio:focus-within > a svg { transform: rotate(180deg); }
+
+  /* Invisible hover bridge — stops dropdown from closing when
+     the mouse travels from the trigger down into the menu */
+  .nav-portfolio > a::after {
+    content: '';
+    position: absolute;
+    top: 100%;
+    left: 0; right: 0;
+    height: 14px; /* matches the gap below the trigger */
+  }
+
   .nav-portfolio .port-dropdown {
-    display: none;
-    position: absolute; top: calc(100% + 10px); left: 50%;
+    position: absolute;
+    top: calc(100% + 10px); left: 50%;
     transform: translateX(-50%);
     background: var(--nav-bg);
     backdrop-filter: saturate(180%) blur(14px);
@@ -1067,9 +1087,18 @@
     min-width: 140px;
     box-shadow: var(--shadow-md);
     z-index: 200;
+    /* Hidden by default */
+    opacity: 0;
+    pointer-events: none;
+    transform: translateX(-50%) translateY(-4px);
+    transition: opacity 0.15s ease, transform 0.15s ease;
   }
   .nav-portfolio:hover .port-dropdown,
-  .nav-portfolio.open .port-dropdown { display: block; }
+  .nav-portfolio:focus-within .port-dropdown {
+    opacity: 1;
+    pointer-events: auto;
+    transform: translateX(-50%) translateY(0);
+  }
   .nav-portfolio .port-dropdown a {
     display: block;
     padding: 8px 14px;
@@ -1102,12 +1131,12 @@
       <a href="#stack">Stack</a>
       <a href="#credentials">Credentials</a>
       <div class="nav-portfolio">
-        <a href="#" onclick="this.closest('.nav-portfolio').classList.toggle('open');return false">
+        <a href="#" tabindex="0" aria-haspopup="true">
           Portfolio
-          <svg width="10" height="6" viewBox="0 0 10 6" fill="currentColor"><path d="M0 0l5 6 5-6z"/></svg>
+          <svg width="10" height="6" viewBox="0 0 10 6" fill="currentColor" aria-hidden="true"><path d="M0 0l5 6 5-6z"/></svg>
         </a>
-        <div class="port-dropdown">
-          <a href="/portfolio/glidepath/">GlidePath</a>
+        <div class="port-dropdown" role="menu">
+          <a href="/portfolio/glidepath/" role="menuitem">GlidePath</a>
         </div>
       </div>
       <button id="themeToggle" class="theme-toggle" type="button" aria-label="Toggle theme" title="Toggle theme">
@@ -1744,12 +1773,5 @@
 </script>
 
 
-<script>
-  document.addEventListener('click', function(e) {
-    document.querySelectorAll('.nav-portfolio.open').forEach(function(el) {
-      if (!el.contains(e.target)) el.classList.remove('open');
-    });
-  });
-</script>
 </body>
 </html>
