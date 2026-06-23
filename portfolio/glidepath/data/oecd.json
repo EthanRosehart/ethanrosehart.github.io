@@ -1,8 +1,8 @@
 {
-  "generatedAt": "2026-06-22T03:15:10Z",
-  "seed": true,
+  "generatedAt": "2026-06-23T23:12:58.409Z",
+  "seed": false,
   "source": "OECD Economic Outlook — real GDP growth projections (SDMX, OECD.ECO)",
-  "note": "Forward-looking real GDP growth projections. Refreshed nightly by fetch-oecd.mjs. Sets the GDP-growth lever default in the long-term model (preferred over World Bank historical mean). seed:true until first live Action run.",
+  "note": "Forward-looking real GDP growth projections. Sets the GDP-growth lever default in the long-term model.",
   "countries": {
     "CAN": {
       "name": "Canada",

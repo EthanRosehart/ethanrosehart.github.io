@@ -1,5 +1,5 @@
 {
-  "generatedAt": "2026-06-21T03:17:42Z",
+  "generatedAt": "2026-06-23T23:12:54.177Z",
   "source": "World Bank Open Data — Indicators API (api.worldbank.org/v2)",
   "note": "Committed snapshot. Refreshed nightly by .github/workflows/refresh-data.yml. The browser reads THIS file, never the live API.",
   "indicators": {
@@ -8,14 +8,77 @@
     "pop": "SP.POP.TOTL · population, latest year-over-year growth (%)"
   },
   "countries": {
-    "CAN": { "name": "Canada",         "gdp": 1.7, "gdpcap": 0.4, "pop": 2.9, "popTotal": 40769890, "year": 2023 },
-    "USA": { "name": "United States",  "gdp": 2.2, "gdpcap": 1.6, "pop": 0.5, "popTotal": 334914895, "year": 2023 },
-    "GBR": { "name": "United Kingdom", "gdp": 1.3, "gdpcap": 0.7, "pop": 1.0, "popTotal": 68350000, "year": 2023 },
-    "NLD": { "name": "Netherlands",    "gdp": 1.4, "gdpcap": 0.6, "pop": 1.0, "popTotal": 17879500, "year": 2023 },
-    "DEU": { "name": "Germany",        "gdp": 1.0, "gdpcap": 0.5, "pop": 0.3, "popTotal": 84482267, "year": 2023 },
-    "DNK": { "name": "Denmark",        "gdp": 2.0, "gdpcap": 1.6, "pop": 0.7, "popTotal": 5946952, "year": 2023 },
-    "AUT": { "name": "Austria",        "gdp": 1.1, "gdpcap": 0.3, "pop": 1.0, "popTotal": 9132383, "year": 2023 },
-    "ITA": { "name": "Italy",          "gdp": 1.0, "gdpcap": 1.2, "pop": -0.1, "popTotal": 58761146, "year": 2023 },
-    "POL": { "name": "Poland",         "gdp": 3.4, "gdpcap": 3.6, "pop": -0.2, "popTotal": 36685849, "year": 2023 }
+    "CAN": {
+      "name": "Canada",
+      "gdp": 1.6,
+      "gdpcap": -0.2,
+      "pop": 3,
+      "popTotal": 41288599,
+      "year": 2024
+    },
+    "USA": {
+      "name": "United States",
+      "gdp": 2.4,
+      "gdpcap": 1.8,
+      "pop": 1,
+      "popTotal": 340110988,
+      "year": 2024
+    },
+    "GBR": {
+      "name": "United Kingdom",
+      "gdp": 1,
+      "gdpcap": 0.2,
+      "pop": 1.1,
+      "popTotal": 69226000,
+      "year": 2024
+    },
+    "NLD": {
+      "name": "Netherlands",
+      "gdp": 1.6,
+      "gdpcap": 0.8,
+      "pop": 0.7,
+      "popTotal": 17993485,
+      "year": 2024
+    },
+    "DEU": {
+      "name": "Germany",
+      "gdp": 0,
+      "gdpcap": -0.1,
+      "pop": 0.3,
+      "popTotal": 83516593,
+      "year": 2024
+    },
+    "DNK": {
+      "name": "Denmark",
+      "gdp": 1.8,
+      "gdpcap": 1.3,
+      "pop": 0.5,
+      "popTotal": 5976992,
+      "year": 2024
+    },
+    "AUT": {
+      "name": "Austria",
+      "gdp": 0.5,
+      "gdpcap": -0.2,
+      "pop": 0.5,
+      "popTotal": 9177982,
+      "year": 2024
+    },
+    "ITA": {
+      "name": "Italy",
+      "gdp": 1.3,
+      "gdpcap": 1.6,
+      "pop": -0.1,
+      "popTotal": 58952704,
+      "year": 2024
+    },
+    "POL": {
+      "name": "Poland",
+      "gdp": 2.7,
+      "gdpcap": 3.5,
+      "pop": -0.3,
+      "popTotal": 36559233,
+      "year": 2024
+    }
   }
 }
