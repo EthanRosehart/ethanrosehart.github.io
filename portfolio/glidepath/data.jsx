@@ -205,10 +205,15 @@ function shortTermForecast(history, key, horizon=24){
 }
 
 /* ============================================================
-   LONG-TERM STRATEGIC MODEL  (elasticity, 10yr, annual)
+   LONG-TERM STRATEGIC MODEL  (elasticity, 10yr, MONTHLY)
    demand growth gₜ = gdpPerCap·ε  +  pop  +  tourism·τ  −  yieldDrag
-   PAX compounds at gₜ; ATM constrained by slot/noise capacity,
-   residual demand absorbed by gauge (seats/movement) & load factor.
+   PAX compounds at the monthly-equivalent of gₜ and rides the
+   observed seasonal shape, so the whole 10-year trajectory is
+   resolved month-by-month (not just annual snapshots). ATM is
+   constrained by a seasonally-distributed slot/noise ceiling;
+   residual demand is absorbed by gauge (seats/movement) & load
+   factor. Annual rows are rolled up from the monthly path for the
+   headline KPIs, CAGR and summary exports.
    ============================================================ */
 function defaultScenario(iata){
   const a = ANCHOR[iata];
@@ -226,39 +231,78 @@ function defaultScenario(iata){
 
 function longTermForecast(iata, history, scenario){
   const a = ANCHOR[iata];
-  const annualPax = annualize(history.filter(r=>r.y===2025), "pax")[0].v;
-  const annualAtm = annualize(history.filter(r=>r.y===2025), "atm")[0].v;
-  const annualSeats = annualize(history.filter(r=>r.y===2025), "seats")[0].v;
-  const annualCargo = annualize(history.filter(r=>r.y===2025), "cargo")[0].v;
   const s = scenario;
-  // annual demand growth rate (%) decomposed
+  // base year = the 2025 monthly actuals, ordered Jan→Dec. These carry the
+  // observed seasonal shape that the whole forecast will ride.
+  const base = history.filter(r=>r.y===2025).slice().sort((x,y)=>x.m-y.m);
+  const annualPax   = base.reduce((t,r)=>t+r.pax,0);
+  const annualAtm   = base.reduce((t,r)=>t+r.atm,0);
+  const annualSeats = base.reduce((t,r)=>t+r.seats,0);
+  const annualCargo = base.reduce((t,r)=>t+r.cargo,0);
+
+  // annual demand growth rate (%) decomposed, plus its monthly equivalent
   const gIncome  = s.gdp * s.elasticity;
   const gPop     = s.pop;
   const gTourism = s.tourism * 0.5;
   const gLCC     = s.lcc;
   const yieldDrag = -s.fuel * 0.18;   // higher fuel/yield suppresses demand
   const gDemand = (gIncome + gPop + gTourism + gLCC + yieldDrag) / 100;
+  const gCargo  = gDemand * 0.6 + 0.005;
 
-  const rows = [{ y:2025, pax:annualPax, atm:annualAtm, seats:annualSeats, cargo:annualCargo, gauge:annualSeats/annualAtm, lf:annualPax/annualSeats }];
-  let pax=annualPax, atm=annualAtm, seats=annualSeats, cargo=annualCargo;
-  let gauge = annualSeats/annualAtm, lf = annualPax/annualSeats;
+  // gauge & load factor anchors (annual) + their yearly creep factors
+  const gauge0 = annualSeats / annualAtm;
+  const lf0    = annualPax / annualSeats;
+  const gaugeCreep = 1 + 0.008 + (a.noiseCapped ? 0.004 : 0);  // per year
+  const lfCreep    = 1.004;                                    // per year
   const atmCap = a.capATM;
-  for (let i=1;i<=s.horizon;i++){
-    pax = pax * (1+gDemand);
-    cargo = cargo * (1 + gDemand*0.6 + 0.005);
-    // gauge & load factor creep upward as constrained gateways densify
-    gauge = gauge * (1 + 0.008 + (a.noiseCapped?0.004:0));
-    lf = Math.min(0.90, lf * 1.004);
-    seats = pax / lf;
-    atm = seats / gauge;
+  // the annual movement ceiling, split across months by the 2025 seasonal
+  // share of movements, so peak months bind before shoulder months do.
+  const monthCapFrac = base.map(r => r.atm / annualAtm);
+
+  // ---- month-by-month trajectory across the full horizon ----------------
+  const months = [];
+  let yy = 2025, mm = 11;   // start the walk just after Dec 2025
+  const totalMonths = s.horizon * 12;
+  for (let k=1; k<=totalMonths; k++){
+    mm++; if (mm>11){ mm=0; yy++; }
+    const yearsFrom = k/12;                       // fractional years since 2025
+    let pax   = base[mm].pax * Math.pow(1+gDemand, yearsFrom);
+    let cargo = base[mm].cargo * Math.pow(1+gCargo, yearsFrom);
+    const gauge = gauge0 * Math.pow(gaugeCreep, yearsFrom);
+    let lf = Math.min(0.90, lf0 * Math.pow(lfCreep, yearsFrom));
+    let seats = pax / lf;
+    let atm = seats / gauge;
     let constrained = false;
-    if (atm > atmCap){ atm = atmCap; seats = atm*gauge; lf = Math.min(0.92, pax/seats); constrained = true;
-      if (pax/seats > 0.92){ pax = seats*0.92; } }
-    rows.push({ y:2025+i, pax:Math.round(pax), atm:Math.round(atm), seats:Math.round(seats),
-      cargo:Math.round(cargo), gauge:Math.round(gauge*10)/10, lf:Math.round((pax/seats)*1000)/10, constrained });
+    const capM = atmCap * monthCapFrac[mm];       // this month's slot ceiling
+    if (atm > capM){
+      atm = capM; seats = atm * gauge;
+      if (pax/seats > 0.92){ pax = seats*0.92; }  // residual met by fuller cabins
+      lf = pax/seats; constrained = true;
+    }
+    months.push({ y:yy, m:mm, date:`${yy}-${String(mm+1).padStart(2,"0")}`,
+      label:`${MONTHS[mm]} ${String(yy).slice(2)}`,
+      pax:Math.round(pax), atm:Math.round(atm), seats:Math.round(seats),
+      cargo:Math.round(cargo*10)/10, gauge:Math.round(gauge*10)/10,
+      lf:Math.round((pax/seats)*1000)/10, constrained });
   }
+
+  // ---- annual roll-up (derived from the monthly path) -------------------
+  const rows = [{ y:2025, pax:annualPax, atm:annualAtm, seats:annualSeats, cargo:Math.round(annualCargo),
+    gauge:Math.round(gauge0*10)/10, lf:Math.round(lf0*1000)/10 }];
+  for (let i=1;i<=s.horizon;i++){
+    const yr = 2025+i;
+    const ms = months.filter(r=>r.y===yr);
+    const pax   = ms.reduce((t,r)=>t+r.pax,0);
+    const atm   = ms.reduce((t,r)=>t+r.atm,0);
+    const seats = ms.reduce((t,r)=>t+r.seats,0);
+    const cargo = ms.reduce((t,r)=>t+r.cargo,0);
+    rows.push({ y:yr, pax, atm, seats, cargo:Math.round(cargo),
+      gauge:Math.round((seats/atm)*10)/10, lf:Math.round((pax/seats)*1000)/10,
+      constrained: ms.some(r=>r.constrained) });
+  }
+
   const cagr = Math.pow(rows[rows.length-1].pax/annualPax, 1/s.horizon)-1;
-  return { rows, gDemand:gDemand*100, cagr:cagr*100,
+  return { rows, months, gDemand:gDemand*100, cagr:cagr*100,
     breakdown:[
       { k:"Income × elasticity", v:gIncome, c:"var(--pink)" },
       { k:"Catchment population", v:gPop, c:"var(--cyan)" },
@@ -266,7 +310,7 @@ function longTermForecast(iata, history, scenario){
       { k:"LCC / route stimulation", v:gLCC, c:"var(--violet)" },
       { k:"Yield / fuel drag", v:yieldDrag, c:"var(--bad)" },
     ],
-    atmCap, constrainedFrom: rows.find(r=>r.constrained)?.y };
+    atmCap, constrainedFrom: months.find(r=>r.constrained)?.y };
 }
 
 /* destination mix for the selected gateway (illustrative) ----- */
