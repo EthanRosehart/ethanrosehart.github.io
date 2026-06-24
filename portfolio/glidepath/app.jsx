@@ -193,9 +193,15 @@ function App(){
 
       <main className="main">
         <div className="topbar">
-          <div className="topbar-title">
-            <div className="eyebrow">{t1}</div>
-            <h2>{t2}</h2>
+          <div style={{display:"flex",alignItems:"center",gap:16,minWidth:0}}>
+            <a className="btn btn-sm" href="/" title="Back to ethanrosehart.com" style={{textDecoration:"none",flex:"none"}}>
+              <svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" strokeWidth="2"><path d="M19 12H5M11 18l-6-6 6-6"/></svg>
+              Back to site
+            </a>
+            <div className="topbar-title">
+              <div className="eyebrow">{t1}</div>
+              <h2>{t2}</h2>
+            </div>
           </div>
           <div style={{display:"flex",alignItems:"center",gap:12}}>
             {macroMeta && <span className="chip" title={"World Bank snapshot · "+(macroMeta.source||"")}><span className="dot dot-ok"></span>WB snapshot {new Date(macroMeta.generatedAt).toLocaleDateString("en-CA")}</span>}

@@ -39,7 +39,7 @@ function Onboarding({ onSelect, selected }){
         <span className="chip mono">{list.length} of {AIRPORTS.length}</span>
       </div>
 
-      <div className="grid" style={{gridTemplateColumns:"1fr 1fr", gap:10, maxHeight:"calc(100vh - 430px)", overflowY:"auto", overflowX:"hidden", paddingRight:4, marginBottom:24}}>
+      <div className="grid" style={{gridTemplateColumns:"repeat(2, minmax(0, 1fr))", gap:10, maxHeight:"calc(100vh - 430px)", overflowY:"auto", overflowX:"hidden", overscrollBehavior:"contain", paddingRight:4, marginBottom:24}}>
         {list.map(a => (
           <div key={a.iata} className={"air-card"+(selected?.iata===a.iata?" sel":"")} onClick={()=>onSelect(a)}>
             <div className="air-code">{a.iata}</div>
