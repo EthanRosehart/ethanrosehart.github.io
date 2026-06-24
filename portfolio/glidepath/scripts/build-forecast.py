@@ -50,7 +50,7 @@ MIN_MONTHS = 36         # need a few seasons before Prophet is meaningful
 # IATA -> ISO 3166-1 alpha-2 (for the holidays package / Prophet). Keep in sync
 # with the airport catalogue in data.jsx.
 COUNTRY = {
-    "YTZ": "CA", "YOW": "CA", "YHM": "CA", "YQB": "CA", "YHZ": "CA", "YKF": "CA",
+    "YYZ": "CA", "YTZ": "CA", "YOW": "CA", "YHM": "CA", "YQB": "CA", "YHZ": "CA", "YKF": "CA",
     "BUR": "US", "PVU": "US", "PSP": "US", "BZN": "US",
     "EXT": "GB", "NQY": "GB", "INV": "GB",
     "RTM": "NL", "FMM": "DE", "AAR": "DK",

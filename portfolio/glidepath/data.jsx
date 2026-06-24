@@ -13,6 +13,7 @@
 /* fields mirror the OpenFlights airports.dat columns; enriched at
    runtime from data/airports.json (authoritative identifiers).    */
 const AIRPORTS = [
+  { iata:"YYZ", icao:"CYYZ", name:"Toronto Pearson Intl", city:"Toronto", country:"Canada", cc:"CAN", lat:43.6772, lon:-79.6306, elev:569, tz:"America/Toronto", runwayM:3368, gates:120, region:"North America" },
   { iata:"YTZ", icao:"CYTZ", name:"Billy Bishop Toronto City", city:"Toronto", country:"Canada", cc:"CAN", lat:43.6275, lon:-79.3962, elev:252, tz:"America/Toronto", runwayM:1216, gates:11, region:"North America" },
   { iata:"YOW", icao:"CYOW", name:"Ottawa Macdonald–Cartier Intl", city:"Ottawa", country:"Canada", cc:"CAN", lat:45.3225, lon:-75.6692, elev:374, tz:"America/Toronto", runwayM:3048, gates:24, region:"North America" },
   { iata:"YHM", icao:"CYHM", name:"John C. Munro Hamilton Intl", city:"Hamilton", country:"Canada", cc:"CAN", lat:43.1736, lon:-79.9350, elev:780, tz:"America/Toronto", runwayM:3048, gates:6, region:"North America" },

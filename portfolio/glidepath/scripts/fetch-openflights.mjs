@@ -19,8 +19,8 @@ const __dirname = dirname(fileURLToPath(import.meta.url));
 const OUT = resolve(__dirname, "..", "data", "airports.json");
 
 /* the Glidepath set, by IATA. Add codes here to widen the catalogue
-   (you must also add an ANCHOR row in data.jsx for it to forecast). */
-const WANT = ["YTZ","YOW","YHM","YQB","YHZ","YKF","BUR","PVU","PSP","BZN",
+   (also add the airport to data.jsx AIRPORTS and wire its activity feed). */
+const WANT = ["YYZ","YTZ","YOW","YHM","YQB","YHZ","YKF","BUR","PVU","PSP","BZN",
               "EXT","NQY","INV","RTM","FMM","AAR","GRZ","KLU","SZG","NAP","WRO"];
 
 const REGION = {
