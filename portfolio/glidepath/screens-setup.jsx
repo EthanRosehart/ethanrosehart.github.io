@@ -15,12 +15,13 @@ const Ico = {
 
 function Onboarding({ onSelect, selected }){
   const [q, setQ] = useStateA("");
+  const live = GP_liveAirports();
   const list = useMemoA(()=>{
     const t = q.trim().toLowerCase();
-    let arr = AIRPORTS;
-    if (t) arr = AIRPORTS.filter(a => (a.iata+a.icao+a.name+a.city+a.country).toLowerCase().includes(t));
+    let arr = live;
+    if (t) arr = live.filter(a => (a.iata+a.icao+a.name+a.city+a.country).toLowerCase().includes(t));
     return arr.slice(0, 40);
-  },[q]);
+  },[q, live.length]);
 
   return (
     <div className="content fade-in" style={{maxWidth:860}}>
@@ -60,7 +61,7 @@ function Onboarding({ onSelect, selected }){
             <div style={{width:54,height:54,borderRadius:12,background:"var(--pink-soft)",border:"1px solid var(--pink-line)",display:"grid",placeItems:"center",color:"var(--pink-2)",fontFamily:"var(--mono)",fontWeight:700,fontSize:18}}>{selected.iata}</div>
             <div>
               <div style={{fontSize:17,fontWeight:600}}>{selected.name}</div>
-              <div className="air-meta" style={{marginTop:3}}>{selected.icao} · {selected.lat.toFixed(3)}, {selected.lon.toFixed(3)} · {selected.region} · {ANCHOR[selected.iata]?GP_fmt.k1(ANCHOR[selected.iata].pax)+" PAX/yr":"—"}</div>
+              <div className="air-meta" style={{marginTop:3}}>{selected.icao} · {selected.lat.toFixed(3)}, {selected.lon.toFixed(3)} · {selected.region} · {(()=>{const fy=GP_fullYears(GP_buildHistory(selected.iata),"pax");return fy.length?GP_fmt.k1(fy[fy.length-1].v)+" PAX/yr":"—";})()}</div>
             </div>
           </div>
           <button className="btn btn-primary btn-lg" onClick={()=>onSelect(selected, true)}>Connect data {Ico.arrow}</button>

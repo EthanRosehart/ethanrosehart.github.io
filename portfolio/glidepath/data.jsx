@@ -1,13 +1,17 @@
 /* ============================================================
-   data.jsx — datasets + forecasting engine
-   Curated real airports (OpenFlights-style schema), synthetic-
-   but-plausible aero history, and the two forecast models:
-   short-term ML (tactical) + long-term elasticity (strategic).
-   Exposed on window for the other babel modules.
+   data.jsx — real datasets + forecast access
+   No synthetic series. Monthly activity (passengers / movements /
+   cargo) comes from public sources via the nightly pipeline
+   (data/activity.json); the short-term forecast is Meta Prophet,
+   precomputed server-side (data/forecast.json). The long-term
+   strategic model compounds the real base year with public macro
+   drivers. Everything here is exposed on window for the other
+   babel modules.
    ============================================================ */
 
 /* ---- curated airport reference (OpenFlights schema) -------- */
-/* fields mirror the OpenFlights airports.dat columns           */
+/* fields mirror the OpenFlights airports.dat columns; enriched at
+   runtime from data/airports.json (authoritative identifiers).    */
 const AIRPORTS = [
   { iata:"YTZ", icao:"CYTZ", name:"Billy Bishop Toronto City", city:"Toronto", country:"Canada", cc:"CAN", lat:43.6275, lon:-79.3962, elev:252, tz:"America/Toronto", runwayM:1216, gates:11, region:"North America" },
   { iata:"YOW", icao:"CYOW", name:"Ottawa Macdonald–Cartier Intl", city:"Ottawa", country:"Canada", cc:"CAN", lat:45.3225, lon:-75.6692, elev:374, tz:"America/Toronto", runwayM:3048, gates:24, region:"North America" },
@@ -33,7 +37,8 @@ const AIRPORTS = [
 ];
 
 /* ---- macro baselines (OECD / IMF / World Bank style) -------- */
-/* trend real GDP growth, GDP/cap, income (PAX) elasticity by mkt */
+/* trend real GDP growth, GDP/cap, income (PAX) elasticity by mkt;
+   live World Bank / OECD figures merged over these at runtime.     */
 const MACRO = {
   CAN: { gdp:1.9, gdpcap:1.0, pop:1.1, elasticity:1.7, tourism:1.2, label:"Canada" },
   USA: { gdp:2.1, gdpcap:1.4, pop:0.6, elasticity:1.5, tourism:1.0, label:"United States" },
@@ -46,42 +51,15 @@ const MACRO = {
   POL: { gdp:3.1, gdpcap:3.0, pop:-0.2, elasticity:1.9, tourism:1.8, label:"Poland" },
 };
 
-/* per-airport "today" anchors (annualised, latest full year)   */
-/* tuned to be plausible for each gateway's size & gauge        */
-const ANCHOR = {
-  YTZ: { pax:2720000, atm:112400, cargoT:410,  seats:3315000, basedAircraft:34, carriers:2,  topRoute:"Montréal YUL", capATM:202000, noiseCapped:true },
-  YOW: { pax:5100000, atm:131000, cargoT:2900, seats:6200000, basedAircraft:22, carriers:9,  topRoute:"Toronto YYZ", capATM:230000, noiseCapped:false },
-  YHM: { pax:920000,  atm:42000,  cargoT:95000,seats:1180000, basedAircraft:9,  carriers:3,  topRoute:"Calgary YYC", capATM:160000, noiseCapped:false },
-  YQB: { pax:1700000, atm:64000,  cargoT:1600, seats:2150000, basedAircraft:11, carriers:7,  topRoute:"Montréal YUL", capATM:140000, noiseCapped:false },
-  YHZ: { pax:4200000, atm:88000,  cargoT:30000,seats:5050000, basedAircraft:14, carriers:11, topRoute:"Toronto YYZ", capATM:170000, noiseCapped:false },
-  YKF: { pax:280000,  atm:19000,  cargoT:40,   seats:360000,  basedAircraft:6,  carriers:1,  topRoute:"Calgary YYC", capATM:90000,  noiseCapped:false },
-  BUR: { pax:5900000, atm:135000, cargoT:54000,seats:7100000, basedAircraft:18, carriers:8,  topRoute:"Las Vegas LAS",capATM:200000, noiseCapped:true },
-  PVU: { pax:740000,  atm:24000,  cargoT:120,  seats:920000,  basedAircraft:5,  carriers:3,  topRoute:"Denver DEN",  capATM:110000, noiseCapped:false },
-  PSP: { pax:3000000, atm:62000,  cargoT:1100, seats:3650000, basedAircraft:7,  carriers:13, topRoute:"Seattle SEA", capATM:150000, noiseCapped:false },
-  BZN: { pax:2400000, atm:55000,  cargoT:3400, seats:2900000, basedAircraft:8,  carriers:9,  topRoute:"Denver DEN",  capATM:140000, noiseCapped:false },
-  EXT: { pax:980000,  atm:32000,  cargoT:600,  seats:1240000, basedAircraft:6,  carriers:5,  topRoute:"Dublin DUB",  capATM:120000, noiseCapped:false },
-  NQY: { pax:460000,  atm:17000,  cargoT:30,   seats:580000,  basedAircraft:3,  carriers:4,  topRoute:"London LGW",  capATM:90000,  noiseCapped:false },
-  INV: { pax:920000,  atm:34000,  cargoT:250,  seats:1160000, basedAircraft:5,  carriers:6,  topRoute:"London LGW",  capATM:120000, noiseCapped:false },
-  RTM: { pax:2100000, atm:50000,  cargoT:900,  seats:2560000, basedAircraft:7,  carriers:14, topRoute:"London LCY", capATM:130000, noiseCapped:true },
-  FMM: { pax:2300000, atm:38000,  cargoT:200,  seats:2780000, basedAircraft:6,  carriers:5,  topRoute:"Antalya AYT", capATM:120000, noiseCapped:false },
-  AAR: { pax:330000,  atm:14000,  cargoT:60,   seats:420000,  basedAircraft:3,  carriers:3,  topRoute:"Copenhagen CPH",capATM:80000, noiseCapped:false },
-  GRZ: { pax:880000,  atm:30000,  cargoT:1200, seats:1110000, basedAircraft:5,  carriers:7,  topRoute:"Vienna VIE",  capATM:110000, noiseCapped:false },
-  KLU: { pax:210000,  atm:11000,  cargoT:30,   seats:270000,  basedAircraft:3,  carriers:3,  topRoute:"Vienna VIE",  capATM:70000,  noiseCapped:false },
-  SZG: { pax:1600000, atm:42000,  cargoT:400,  seats:1980000, basedAircraft:6,  carriers:12, topRoute:"London LGW", capATM:130000, noiseCapped:true },
-  NAP: { pax:10900000,atm:84000,  cargoT:6500, seats:13200000,basedAircraft:9,  carriers:30, topRoute:"Milan MXP",  capATM:150000, noiseCapped:false },
-  WRO: { pax:4000000, atm:48000,  cargoT:1500, seats:4850000, basedAircraft:7,  carriers:18, topRoute:"Warsaw WAW",  capATM:140000, noiseCapped:false },
-};
-
-/* deterministic PRNG so a given airport always renders identically */
-function rng(seed){ let s = seed % 2147483647; if (s<=0) s += 2147483646; return () => (s = s*16807 % 2147483647) / 2147483647; }
-function hashCode(str){ let h=0; for (let i=0;i<str.length;i++){ h=(h*31 + str.charCodeAt(i))|0; } return Math.abs(h); }
-
 const MONTHS = ["Jan","Feb","Mar","Apr","May","Jun","Jul","Aug","Sep","Oct","Nov","Dec"];
-/* seasonal shape — northern-hemisphere leisure/biz blend, sums ~12 */
-const SEASON = [0.74,0.71,0.92,0.98,1.07,1.18,1.27,1.24,1.10,1.04,0.86,0.89];
+const METRIC_KEYS = ["pax","atm","cargo"];
 
-/* observed monthly passengers, loaded from data/activity.json at runtime.
-   iata -> { "YYYY-MM": pax }.  buildHistory prefers these over synthetic. */
+/* ============================================================
+   OBSERVED ACTIVITY  (data/activity.json, real, same-origin)
+   iata -> { pax:{ "YYYY-MM":n }, atm:{...}, cargo:{...} }
+   Supports the new per-metric "series" shape and the legacy
+   passengers-only "monthly" shape.
+   ============================================================ */
 const OBSERVED = {};
 let ACTIVITY_META = null;
 function setActivity(json){
@@ -89,242 +67,172 @@ function setActivity(json){
   if (!json || !json.airports) return;
   Object.keys(json.airports).forEach(iata => {
     const a = json.airports[iata];
-    if (a && a.observed && a.monthly) OBSERVED[iata] = a.monthly;
+    if (!a || !a.observed) return;
+    if (a.series && typeof a.series === "object") OBSERVED[iata] = a.series;
+    else if (a.monthly) OBSERVED[iata] = { pax: a.monthly };
   });
   ACTIVITY_META = json;
   window.GP_ACTIVITY_META = json;
 }
+function availableMetrics(iata){
+  const s = OBSERVED[iata]; if (!s) return [];
+  return METRIC_KEYS.filter(m => s[m] && Object.keys(s[m]).length);
+}
 function activityFor(iata){
   const a = ACTIVITY_META && ACTIVITY_META.airports ? ACTIVITY_META.airports[iata] : null;
-  if (!a) return { observed:false, source:"modeled", months:0 };
-  return { observed:!!a.observed, source:a.source, months:a.months||0, rep:a.rep_airp,
-    latest: a.monthly ? Object.keys(a.monthly).sort().pop() : null };
+  const s = OBSERVED[iata];
+  if (!a || !s || !s.pax) return { observed:false, source:"none", months:0, metrics:[] };
+  const paxKeys = Object.keys(s.pax);
+  return { observed:!!a.observed, source:a.source, rep:a.rep_airp,
+    months: a.months || paxKeys.length,
+    latest: paxKeys.sort().pop() || null,
+    metrics: availableMetrics(iata) };
 }
-
-/* Build 11 years of monthly history (2015-01 .. 2025-12) ----- */
-function buildHistory(iata){
-  const a = ANCHOR[iata];
-  const rand = rng(hashCode(iata)+7);
-  const startYear = 2015, endYear = 2025;
-  // back-cast: assume the gateway grew ~3.6%/yr to the anchor, with a COVID crater
-  const out = [];
-  // index anchor at 2024 average month
-  const anchorMonthlyPax = a.pax/12;
-  const baseGrowth = 0.036 + (rand()-0.5)*0.01;
-  for (let y=startYear; y<=endYear; y++){
-    for (let m=0; m<12; m++){
-      const yearsFrom2024 = y - 2024;
-      let trend = Math.pow(1+baseGrowth, yearsFrom2024);
-      // covid shock
-      let covid = 1;
-      if (y===2020){ const sev=[0.92,0.86,0.42,0.06,0.05,0.09,0.14,0.18,0.20,0.19,0.16,0.18]; covid = sev[m]; }
-      if (y===2021){ const sev=[0.17,0.16,0.22,0.27,0.31,0.40,0.52,0.55,0.58,0.63,0.66,0.61]; covid = sev[m]; }
-      if (y===2022){ const sev=[0.58,0.62,0.72,0.80,0.85,0.90,0.93,0.94,0.93,0.95,0.93,0.92]; covid = sev[m]; }
-      if (y===2023){ covid = 0.95 + m*0.004; }
-      const noise = 1 + (rand()-0.5)*0.045;
-      let pax = anchorMonthlyPax * SEASON[m] * trend * covid * noise;
-      // prefer the observed value from the committed activity snapshot, if present
-      const obsKey = `${y}-${String(m+1).padStart(2,"0")}`;
-      const obs = OBSERVED[iata] && OBSERVED[iata][obsKey];
-      const observed = obs != null;
-      if (observed) pax = obs;
-      const lf = 0.80 + (SEASON[m]-1)*0.05 + (rand()-0.5)*0.03; // load factor moves with season
-      const seats = pax / Math.min(0.93, Math.max(0.62, lf));
-      // movements track seats via airport-specific gauge (seats per movement),
-      // anchored so 2024 reproduces the published movement count; gauge creeps up over time
-      const gaugeBase = a.seats / a.atm;
-      const gauge = gaugeBase * Math.pow(1.011, y-2024);
-      const atm = (seats / gauge) * (1 + (rand()-0.5)*0.04);
-      const cargo = (a.cargoT/12) * SEASON[m] * trend * covid * (1+(rand()-0.5)*0.08);
-      out.push({ y, m, date:`${y}-${String(m+1).padStart(2,"0")}`, label:`${MONTHS[m]} ${String(y).slice(2)}`,
-        pax:Math.round(pax), seats:Math.round(seats), atm:Math.round(atm), cargo:Math.round(cargo*10)/10,
-        lf:Math.round(Math.min(0.95,Math.max(0.60,lf))*1000)/10, observed });
-    }
-  }
-  return out;
-}
-
-/* annual roll-up */
-function annualize(history, key){
-  const by = {};
-  history.forEach(r => { by[r.y] = (by[r.y]||0) + r[key]; });
-  return Object.keys(by).map(y => ({ y:+y, v: Math.round(by[y]) }));
-}
+/* airports we can actually show — real passenger data present */
+function liveAirports(){ return AIRPORTS.filter(a => availableMetrics(a.iata).includes("pax")); }
 
 /* ============================================================
-   SHORT-TERM TACTICAL MODEL  (ML, monthly, ~24-mo horizon)
-   Decomposition forecast: log-trend (Holt) × multiplicative
-   seasonal index, with an expanding prediction interval.
-   Reports an honest backtest MAPE on a held-out tail.
+   PROPHET FORECASTS  (data/forecast.json, precomputed nightly)
+   iata -> metric -> { mape, seasonal12, holidays, forecast[] }
    ============================================================ */
-function shortTermForecast(history, key, horizon=24){
-  const series = history.map(r => r[key]);
-  const n = series.length;
-  // seasonal indices from last 3 clean years (2023-2025)
-  const clean = history.filter(r => r.y>=2023);
-  const seasAvg = Array(12).fill(0), seasCnt = Array(12).fill(0);
-  const cleanMean = clean.reduce((s,r)=>s+r[key],0)/clean.length;
-  clean.forEach(r => { seasAvg[r.m]+=r[key]; seasCnt[r.m]++; });
-  const seasIdx = seasAvg.map((s,i)=> seasCnt[i] ? (s/seasCnt[i])/cleanMean : 1);
-  // deseasonalize then fit log-linear trend on last 30 months (post-recovery)
-  const fitWin = history.slice(-30);
-  const xs=[], ys=[];
-  fitWin.forEach((r,i)=>{ const d = r[key]/ (seasIdx[r.m]||1); if (d>0){ xs.push(i); ys.push(Math.log(d)); } });
-  const mx = xs.reduce((a,b)=>a+b,0)/xs.length, my = ys.reduce((a,b)=>a+b,0)/ys.length;
-  let num=0, den=0; xs.forEach((x,i)=>{ num+=(x-mx)*(ys[i]-my); den+=(x-mx)*(x-mx); });
-  const slope = num/den, intercept = my - slope*mx;
-  const baseIdx = fitWin.length - 1;
-  // backtest: fit on all-but-last-12, predict the 12, compute MAPE
-  let mape = 0, cnt=0;
-  for (let h=1; h<=12; h++){
-    const idx = baseIdx - 12 + h;
-    const r = fitWin[fitWin.length-12-1+h];
-    if (!r) continue;
-    const pred = Math.exp(intercept + slope*(idx)) * (seasIdx[r.m]||1);
-    mape += Math.abs(pred - r[key]) / r[key]; cnt++;
-  }
-  mape = cnt ? (mape/cnt)*100 : 6;
-  // forward forecast
-  const last = history[n-1];
-  const fitted = history.map((r,i)=>{
-    const localIdx = i - (n - fitWin.length);
-    if (localIdx < 0) return null;
-    return { date:r.date, label:r.label, v: Math.round(Math.exp(intercept + slope*localIdx)*(seasIdx[r.m]||1)) };
-  });
-  const fc = [];
-  let yy = last.y, mm = last.m;
-  for (let h=1; h<=horizon; h++){
-    mm++; if (mm>11){ mm=0; yy++; }
-    const idx = baseIdx + h;
-    const mean = Math.exp(intercept + slope*idx) * (seasIdx[mm]||1);
-    const sigma = (mape/100) * Math.sqrt(h/3) * 0.9; // widening band
-    fc.push({ date:`${yy}-${String(mm+1).padStart(2,"0")}`, label:`${MONTHS[mm]} ${String(yy).slice(2)}`,
-      v:Math.round(mean), lo:Math.round(mean*(1-1.28*sigma)), hi:Math.round(mean*(1+1.28*sigma)), y:yy, m:mm });
-  }
-  return { fitted, forecast:fc, mape:Math.round(mape*10)/10, slope, seasIdx };
+const FORECASTS = {};
+let FORECAST_META = null;
+function setForecast(json){
+  for (const k in FORECASTS) delete FORECASTS[k];
+  if (!json || !json.airports) return;
+  Object.keys(json.airports).forEach(iata => { FORECASTS[iata] = json.airports[iata].metrics || {}; });
+  FORECAST_META = json;
+  window.GP_FORECAST_META = json;
+}
+function hasForecast(iata, key){
+  const a = FORECASTS[iata];
+  return key ? !!(a && a[key]) : !!(a && Object.keys(a).length);
+}
+function forecastFor(iata, key){
+  const m = FORECASTS[iata] && FORECASTS[iata][key];
+  if (!m) return null;
+  const forecast = (m.forecast || []).map(r => ({ ...r, label:`${MONTHS[r.m]} ${String(r.y).slice(2)}` }));
+  return { forecast, mape:m.mape, seasIdx:m.seasonal12 || Array(12).fill(1),
+    holidays:m.holidays || [], holidaysTotal:m.holidays_total || 0,
+    latest:m.latest, monthsHistory:m.months_history };
 }
 
 /* ============================================================
-   LONG-TERM STRATEGIC MODEL  (elasticity, 10yr, MONTHLY)
-   demand growth gₜ = gdpPerCap·ε  +  pop  +  tourism·τ  −  yieldDrag
-   PAX compounds at the monthly-equivalent of gₜ and rides the
-   observed seasonal shape, so the whole 10-year trajectory is
-   resolved month-by-month (not just annual snapshots). ATM is
-   constrained by a seasonally-distributed slot/noise ceiling;
-   residual demand is absorbed by gauge (seats/movement) & load
-   factor. Annual rows are rolled up from the monthly path for the
-   headline KPIs, CAGR and summary exports.
+   HISTORY  (real monthly records, no synthesis)
+   ============================================================ */
+function buildHistory(iata){
+  const s = OBSERVED[iata];
+  if (!s || !s.pax) return [];
+  const keys = availableMetrics(iata);
+  const monthSet = new Set();
+  keys.forEach(k => Object.keys(s[k]).forEach(ms => monthSet.add(ms)));
+  return [...monthSet].sort().map(ms => {
+    const y = +ms.slice(0,4), m = +ms.slice(5,7) - 1;
+    const rec = { y, m, date:ms, label:`${MONTHS[m]} ${String(y).slice(2)}`, observed:true };
+    keys.forEach(k => { if (s[k][ms] != null) rec[k] = s[k][ms]; });
+    return rec;
+  });
+}
+
+/* annual roll-up — n = months present that year (callers can require 12) */
+function annualize(history, key){
+  const by = {}, cnt = {};
+  history.forEach(r => { if (r[key] == null) return; by[r.y] = (by[r.y]||0) + r[key]; cnt[r.y] = (cnt[r.y]||0) + 1; });
+  return Object.keys(by).map(y => ({ y:+y, v:Math.round(by[y]), n:cnt[+y] }));
+}
+function fullYears(history, key){ return annualize(history, key).filter(r => r.n === 12); }
+
+/* ============================================================
+   LONG-TERM STRATEGIC MODEL  (elasticity, monthly, real base)
+   demand growth gₜ = gdpPerCap·ε + pop + tourism·τ + lcc − yieldDrag
+   PAX compounds at the monthly-equivalent of gₜ riding the real
+   base-year seasonal shape. Movements are held proportional to
+   passengers at the latest observed ratio; cargo compounds on its
+   own elasticity. Only metrics with real data are projected.
    ============================================================ */
 function defaultScenario(iata){
-  const a = ANCHOR[iata];
   const m = MACRO[AIRPORTS.find(x=>x.iata===iata).cc];
   return {
-    gdp: (m.gdpcapProj != null ? m.gdpcapProj : m.gdpcap),  // OECD forward projection if present, else World Bank historical
-    elasticity: m.elasticity,      // income elasticity of air travel
-    pop: m.pop,                    // catchment population growth %
-    tourism: 0,                    // tourism demand shift % (additive)
-    fuel: 0,                       // jet-fuel / yield shock % (0 = neutral)
-    lcc: 0,                        // new LCC / route stimulation % uplift
+    gdp: (m.gdpcapProj != null ? m.gdpcapProj : m.gdpcap),
+    elasticity: m.elasticity,
+    pop: m.pop,
+    tourism: 0,
+    fuel: 0,
+    lcc: 0,
     horizon: 10,
   };
 }
 
 function longTermForecast(iata, history, scenario){
-  const a = ANCHOR[iata];
   const s = scenario;
-  // base year = the 2025 monthly actuals, ordered Jan→Dec. These carry the
-  // observed seasonal shape that the whole forecast will ride.
-  const base = history.filter(r=>r.y===2025).slice().sort((x,y)=>x.m-y.m);
-  const annualPax   = base.reduce((t,r)=>t+r.pax,0);
-  const annualAtm   = base.reduce((t,r)=>t+r.atm,0);
-  const annualSeats = base.reduce((t,r)=>t+r.seats,0);
-  const annualCargo = base.reduce((t,r)=>t+r.cargo,0);
+  const paxYears = fullYears(history, "pax");
+  if (!paxYears.length) return null;
+  const baseYear = paxYears[paxYears.length-1].y;
+  const annualPax = paxYears[paxYears.length-1].v;
+  const baseMonths = history.filter(r => r.y===baseYear && r.pax!=null).sort((a,b)=>a.m-b.m);
+  if (baseMonths.length < 12) return null;
 
-  // annual demand growth rate (%) decomposed, plus its monthly equivalent
+  const atmYears = fullYears(history, "atm");
+  const cargoYears = fullYears(history, "cargo");
+  const annualAtm = atmYears.length ? atmYears[atmYears.length-1].v : null;
+  const annualCargo = cargoYears.length ? cargoYears[cargoYears.length-1].v : null;
+  const hasAtm = annualAtm != null && baseMonths.every(r => r.atm != null);
+  const hasCargo = annualCargo != null;
+  const atmPerPax = hasAtm ? annualAtm / annualPax : null;
+
   const gIncome  = s.gdp * s.elasticity;
   const gPop     = s.pop;
   const gTourism = s.tourism * 0.5;
   const gLCC     = s.lcc;
-  const yieldDrag = -s.fuel * 0.18;   // higher fuel/yield suppresses demand
+  const yieldDrag = -s.fuel * 0.18;
   const gDemand = (gIncome + gPop + gTourism + gLCC + yieldDrag) / 100;
   const gCargo  = gDemand * 0.6 + 0.005;
 
-  // gauge & load factor anchors (annual) + their yearly creep factors
-  const gauge0 = annualSeats / annualAtm;
-  const lf0    = annualPax / annualSeats;
-  const gaugeCreep = 1 + 0.008 + (a.noiseCapped ? 0.004 : 0);  // per year
-  const lfCreep    = 1.004;                                    // per year
-  const atmCap = a.capATM;
-  // the annual movement ceiling, split across months by the 2025 seasonal
-  // share of movements, so peak months bind before shoulder months do.
-  const monthCapFrac = base.map(r => r.atm / annualAtm);
+  const basePax = {}, baseCargo = {};
+  baseMonths.forEach(r => { basePax[r.m] = r.pax; if (r.cargo != null) baseCargo[r.m] = r.cargo; });
+  const cargoMonthAvg = hasCargo ? annualCargo / 12 : null;
 
-  // ---- month-by-month trajectory across the full horizon ----------------
   const months = [];
-  let yy = 2025, mm = 11;   // start the walk just after Dec 2025
-  const totalMonths = s.horizon * 12;
-  for (let k=1; k<=totalMonths; k++){
+  let yy = baseYear, mm = 11;
+  const total = s.horizon * 12;
+  for (let k=1; k<=total; k++){
     mm++; if (mm>11){ mm=0; yy++; }
-    const yearsFrom = k/12;                       // fractional years since 2025
-    let pax   = base[mm].pax * Math.pow(1+gDemand, yearsFrom);
-    let cargo = base[mm].cargo * Math.pow(1+gCargo, yearsFrom);
-    const gauge = gauge0 * Math.pow(gaugeCreep, yearsFrom);
-    let lf = Math.min(0.90, lf0 * Math.pow(lfCreep, yearsFrom));
-    let seats = pax / lf;
-    let atm = seats / gauge;
-    let constrained = false;
-    const capM = atmCap * monthCapFrac[mm];       // this month's slot ceiling
-    if (atm > capM){
-      atm = capM; seats = atm * gauge;
-      if (pax/seats > 0.92){ pax = seats*0.92; }  // residual met by fuller cabins
-      lf = pax/seats; constrained = true;
-    }
-    months.push({ y:yy, m:mm, date:`${yy}-${String(mm+1).padStart(2,"0")}`,
-      label:`${MONTHS[mm]} ${String(yy).slice(2)}`,
-      pax:Math.round(pax), atm:Math.round(atm), seats:Math.round(seats),
-      cargo:Math.round(cargo*10)/10, gauge:Math.round(gauge*10)/10,
-      lf:Math.round((pax/seats)*1000)/10, constrained });
+    const yf = k/12;
+    const pax = (basePax[mm] != null ? basePax[mm] : annualPax/12) * Math.pow(1+gDemand, yf);
+    const rec = { y:yy, m:mm, date:`${yy}-${String(mm+1).padStart(2,"0")}`,
+      label:`${MONTHS[mm]} ${String(yy).slice(2)}`, pax:Math.round(pax) };
+    if (hasAtm)   rec.atm   = Math.round(pax * atmPerPax);
+    if (hasCargo) rec.cargo = Math.round((baseCargo[mm] != null ? baseCargo[mm] : cargoMonthAvg) * Math.pow(1+gCargo, yf));
+    months.push(rec);
   }
 
-  // ---- annual roll-up (derived from the monthly path) -------------------
-  const rows = [{ y:2025, pax:annualPax, atm:annualAtm, seats:annualSeats, cargo:Math.round(annualCargo),
-    gauge:Math.round(gauge0*10)/10, lf:Math.round(lf0*1000)/10 }];
-  for (let i=1;i<=s.horizon;i++){
-    const yr = 2025+i;
-    const ms = months.filter(r=>r.y===yr);
-    const pax   = ms.reduce((t,r)=>t+r.pax,0);
-    const atm   = ms.reduce((t,r)=>t+r.atm,0);
-    const seats = ms.reduce((t,r)=>t+r.seats,0);
-    const cargo = ms.reduce((t,r)=>t+r.cargo,0);
-    rows.push({ y:yr, pax, atm, seats, cargo:Math.round(cargo),
-      gauge:Math.round((seats/atm)*10)/10, lf:Math.round((pax/seats)*1000)/10,
-      constrained: ms.some(r=>r.constrained) });
+  const rows = [{ y:baseYear, pax:annualPax, base:true,
+    ...(hasAtm?{atm:annualAtm}:{}), ...(hasCargo?{cargo:annualCargo}:{}) }];
+  for (let i=1; i<=s.horizon; i++){
+    const yr = baseYear+i, ms = months.filter(r => r.y===yr);
+    const row = { y:yr, pax: ms.reduce((t,r)=>t+r.pax,0) };
+    if (hasAtm)   row.atm   = ms.reduce((t,r)=>t+(r.atm||0),0);
+    if (hasCargo) row.cargo = ms.reduce((t,r)=>t+(r.cargo||0),0);
+    rows.push(row);
   }
-
-  const cagr = Math.pow(rows[rows.length-1].pax/annualPax, 1/s.horizon)-1;
-  return { rows, months, gDemand:gDemand*100, cagr:cagr*100,
+  const cagr = Math.pow(rows[rows.length-1].pax/annualPax, 1/s.horizon) - 1;
+  return { rows, months, baseYear, endYear:baseYear+s.horizon, hasAtm, hasCargo,
+    gDemand:gDemand*100, cagr:cagr*100,
     breakdown:[
       { k:"Income × elasticity", v:gIncome, c:"var(--pink)" },
       { k:"Catchment population", v:gPop, c:"var(--cyan)" },
       { k:"Tourism shift", v:gTourism, c:"var(--lime)" },
       { k:"LCC / route stimulation", v:gLCC, c:"var(--violet)" },
       { k:"Yield / fuel drag", v:yieldDrag, c:"var(--bad)" },
-    ],
-    atmCap, constrainedFrom: months.find(r=>r.constrained)?.y };
+    ] };
 }
 
-/* destination mix for the selected gateway (illustrative) ----- */
-function routeMix(iata){
-  const a = ANCHOR[iata];
-  const rand = rng(hashCode(iata)+99);
-  const pool = ["Montréal YUL","Ottawa YOW","Boston BOS","Chicago ORD","New York EWR","Washington IAD","Halifax YHZ","Québec YQB","Vancouver YVR","Calgary YYC","London LGW","Dublin DUB"];
-  const n = 6;
-  let shares = Array.from({length:n}, ()=> 0.4+rand());
-  const sum = shares.reduce((x,y)=>x+y,0);
-  shares = shares.map(x=> x/sum);
-  shares.sort((x,y)=>y-x);
-  return shares.map((sh,i)=> ({ name: i===0 ? a.topRoute : pool[(hashCode(iata)+i*3)%pool.length], share: Math.round(sh*1000)/10, pax: Math.round(a.pax*sh) }));
-}
+/* metric display metadata (data-driven toggles) */
+const METRIC_META = {
+  pax:   { key:"pax",   label:"Passengers", unit:"" },
+  atm:   { key:"atm",   label:"Movements",  unit:"" },
+  cargo: { key:"cargo", label:"Cargo",      unit:"t" },
+};
 
 const fmt = {
   int:  n => Math.round(n).toLocaleString("en-US"),
@@ -336,7 +244,10 @@ const fmt = {
 };
 
 Object.assign(window, {
-  AIRPORTS, MACRO, ANCHOR, MONTHS, GP_buildHistory:buildHistory, GP_annualize:annualize,
-  GP_shortTerm:shortTermForecast, GP_longTerm:longTermForecast, GP_defaultScenario:defaultScenario,
-  GP_routeMix:routeMix, GP_fmt:fmt, GP_setActivity:setActivity, GP_activityFor:activityFor,
+  AIRPORTS, MACRO, MONTHS, METRIC_META,
+  GP_buildHistory:buildHistory, GP_annualize:annualize, GP_fullYears:fullYears,
+  GP_longTerm:longTermForecast, GP_defaultScenario:defaultScenario,
+  GP_forecastFor:forecastFor, GP_hasForecast:hasForecast,
+  GP_availableMetrics:availableMetrics, GP_liveAirports:liveAirports,
+  GP_fmt:fmt, GP_setActivity:setActivity, GP_activityFor:activityFor, GP_setForecast:setForecast,
 });

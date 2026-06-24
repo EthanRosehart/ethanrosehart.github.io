@@ -8,7 +8,7 @@ const NAV = [
   { id:"select",   label:"Select airport", group:"Setup", step:1, icon:GP_Ico.pin },
   { id:"connect",  label:"Connect data",   group:"Setup", step:2, icon:GP_Ico.db },
   { id:"overview", label:"Overview",       group:"Forecast", icon:<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><rect x="3" y="3" width="7" height="9" rx="1"/><rect x="14" y="3" width="7" height="5" rx="1"/><rect x="14" y="12" width="7" height="9" rx="1"/><rect x="3" y="16" width="7" height="5" rx="1"/></svg> },
-  { id:"short",    label:"Short-term (ML)",group:"Forecast", icon:<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><path d="M3 17l5-5 4 3 8-9"/><path d="M21 6v5h-5"/></svg> },
+  { id:"short",    label:"Short-term (Prophet)",group:"Forecast", icon:<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><path d="M3 17l5-5 4 3 8-9"/><path d="M21 6v5h-5"/></svg> },
   { id:"long",     label:"Long-term (10yr)",group:"Forecast", icon:<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><path d="M3 3v18h18"/><path d="M7 14l4-4 3 3 5-6"/></svg> },
   { id:"scenario", label:"Scenario builder",group:"Forecast", icon:<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><circle cx="6" cy="8" r="2"/><path d="M6 10v6M6 4v2"/><circle cx="14" cy="14" r="2"/><path d="M14 4v8M14 16v4"/><circle cx="20" cy="7" r="0"/></svg> },
   { id:"export",   label:"Export",         group:"Deliver", icon:<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><path d="M12 3v12m0-12l-4 4m4-4l4 4"/><path d="M4 17v2a2 2 0 002 2h12a2 2 0 002-2v-2"/></svg> },
@@ -82,8 +82,8 @@ function App(){
     return ()=>{ alive = false; };
   },[]);
 
-  // Load the committed monthly-passengers snapshot (data/activity.json) and let
-  // buildHistory run the forecasts on the observed series. Same-origin, no CORS.
+  // Load the committed monthly activity snapshot (data/activity.json) — the
+  // real observed series the whole app renders. Same-origin, no CORS.
   useEffectApp(()=>{
     let alive = true;
     fetch("data/activity.json", { cache:"no-store" })
@@ -92,7 +92,24 @@ function App(){
         if (!alive || !j) return;
         GP_setActivity(j);
         setActMeta(j);
-        setActVer(v => v + 1);   // force history (and every forecast) to rebuild
+        setActVer(v => v + 1);   // force history to rebuild
+      })
+      .catch(()=>{});
+    return ()=>{ alive = false; };
+  },[]);
+
+  // Load the precomputed Meta Prophet forecasts (data/forecast.json), fit
+  // nightly server-side on the observed series. The browser only renders them.
+  const [fcMeta, setFcMeta] = useStateApp(window.GP_FORECAST_META || null);
+  useEffectApp(()=>{
+    let alive = true;
+    fetch("data/forecast.json", { cache:"no-store" })
+      .then(r => r.ok ? r.json() : null)
+      .then(j => {
+        if (!alive || !j) return;
+        GP_setForecast(j);
+        setFcMeta(j);
+        setActVer(v => v + 1);
       })
       .catch(()=>{});
     return ()=>{ alive = false; };
