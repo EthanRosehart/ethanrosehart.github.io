@@ -48,6 +48,19 @@ jobs:
         run: node portfolio/glidepath/scripts/fetch-activity.mjs
         continue-on-error: true   # a feed outage keeps the last good snapshot
 
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+
+      - name: Install forecasting deps (Prophet + holidays)
+        run: pip install prophet holidays pandas
+
+      - name: Build short-term forecasts (Meta Prophet)
+        run: python portfolio/glidepath/scripts/build-forecast.py
+        continue-on-error: true   # never block the data refresh on the model step
+
       - name: Commit if changed
         run: |
           git config user.name  "glidepath-bot"
