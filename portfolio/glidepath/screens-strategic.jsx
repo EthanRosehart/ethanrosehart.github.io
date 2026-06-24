@@ -10,13 +10,14 @@ function LongTerm({ airport, history, scenario, go }){
   const metrics=[{k:"pax",label:"Passengers"},{k:"atm",label:"Movements"},{k:"cargo",label:"Cargo"},{k:"seats",label:"Seats"}];
   const d = useMemoS(()=>{
     const lt = GP_longTerm(airport.iata, history, scenario);
-    const histAnn = GP_annualize(history, metric);
-    const histTail = histAnn.filter(r=>r.y>=2018);
-    const labels = [...histTail.map(r=>"'"+String(r.y).slice(2)), ...lt.rows.slice(1).map(r=>"'"+String(r.y).slice(2))];
+    // monthly actuals tail spliced onto the monthly forecast path
+    const histTail = history.filter(r=>r.y>=2022);
+    const fc = lt.months;
+    const labels = [...histTail.map(r=>r.label), ...fc.map(r=>r.label)];
     const nHist = histTail.length;
-    const histVals = [...histTail.map(r=>r.v), ...lt.rows.slice(1).map(()=>null)];
-    const fcVals = [...histTail.map(()=>null), ...lt.rows.slice(1).map(r=>r[metric])];
-    fcVals[nHist-1] = histTail[histTail.length-1].v;
+    const histVals = [...histTail.map(r=>r[metric]), ...fc.map(()=>null)];
+    const fcVals = [...histTail.map(()=>null), ...fc.map(r=>r[metric])];
+    fcVals[nHist-1] = histTail[histTail.length-1][metric];   // bridge the seam
     return { lt, labels, histVals, fcVals, nHist };
   },[airport, history, scenario, metric]);
 
@@ -36,7 +37,7 @@ function LongTerm({ airport, history, scenario, go }){
 
       <div className="grid" style={{gridTemplateColumns:"1.55fr 1fr", marginBottom:16}}>
         <div className="panel panel-pad">
-          <SectionHead kicker="Strategic forecast · elasticity model" title="10-year trajectory to 2035"
+          <SectionHead kicker="Strategic forecast · elasticity model" title="Monthly trajectory to 2035"
             right={<div className="seg">{metrics.map(m=><button key={m.k} className={metric===m.k?"on":""} onClick={()=>setMetric(m.k)}>{m.label}</button>)}</div>}/>
           <LineChart labels={d.labels} height={285} markerIndex={d.nHist-1}
             yFmt={cargoFmt?(v=>GP_fmt.k(v)):undefined}
@@ -79,24 +80,27 @@ function LongTerm({ airport, history, scenario, go }){
       </div>
 
       <div className="panel panel-pad">
-        <SectionHead kicker={"Annual table · "+macro.label+" macro baseline"} title="Year-by-year forecast"/>
-        <table className="tbl">
-          <thead><tr><th>Year</th><th>Passengers</th><th>Movements</th><th>Seats</th><th>Cargo (t)</th><th>Avg gauge</th><th>Load factor</th></tr></thead>
-          <tbody>
-            {d.lt.rows.map((r,i)=>(
-              <tr key={i} style={i===0?{opacity:.65}:{}}>
-                <td style={{color:i===0?"var(--faint)":"var(--text)",fontWeight:i===0?400:600}}>{r.y}{i===0?" · base":""}</td>
-                <td style={{color:"var(--pink-2)",fontWeight:700}}>{GP_fmt.int(r.pax)}</td>
-                <td style={r.constrained?{color:"var(--amber)"}:{}}>{GP_fmt.int(r.atm)}{r.constrained?" ▲":""}</td>
-                <td>{GP_fmt.int(r.seats)}</td>
-                <td>{GP_fmt.int(r.cargo)}</td>
-                <td>{r.gauge.toFixed(1)}</td>
-                <td>{r.lf}%</td>
-              </tr>
-            ))}
-          </tbody>
-        </table>
-        <div className="air-meta" style={{marginTop:12}}>▲ movements bound by {airport.iata} slot/noise ceiling ({GP_fmt.int(d.lt.atmCap)}/yr) — residual demand absorbed by larger gauge & higher load factor.</div>
+        <SectionHead kicker={"Monthly table · "+macro.label+" macro baseline"} title="Month-by-month forecast"
+          right={<span className="air-meta">{d.lt.months.length} months · {macro.label} baseline</span>}/>
+        <div style={{maxHeight:360,overflowY:"auto"}}>
+          <table className="tbl">
+            <thead><tr><th>Month</th><th>Passengers</th><th>Movements</th><th>Seats</th><th>Cargo (t)</th><th>Avg gauge</th><th>Load factor</th></tr></thead>
+            <tbody>
+              {d.lt.months.map((r,i)=>(
+                <tr key={i} style={r.m===0?{borderTop:"1px solid var(--line-2)"}:{}}>
+                  <td style={{color:r.m===0?"var(--text)":"var(--dim)",fontWeight:r.m===0?700:400}}>{r.label}</td>
+                  <td style={{color:"var(--pink-2)",fontWeight:700}}>{GP_fmt.int(r.pax)}</td>
+                  <td style={r.constrained?{color:"var(--amber)"}:{}}>{GP_fmt.int(r.atm)}{r.constrained?" ▲":""}</td>
+                  <td>{GP_fmt.int(r.seats)}</td>
+                  <td>{GP_fmt.int(r.cargo)}</td>
+                  <td>{r.gauge.toFixed(1)}</td>
+                  <td>{r.lf}%</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+        <div className="air-meta" style={{marginTop:12}}>▲ movements bound by {airport.iata} slot/noise ceiling ({GP_fmt.int(d.lt.atmCap)}/yr, distributed seasonally) — residual demand absorbed by larger gauge & higher load factor.</div>
       </div>
     </div>
   );
@@ -124,7 +128,7 @@ function Scenario({ airport, history, scenario, setScenario }){
   const d = useMemoS(()=>{
     const lt = GP_longTerm(airport.iata, history, scenario);
     const baseLt = GP_longTerm(airport.iata, history, base);
-    const labels = lt.rows.map(r=>"'"+String(r.y).slice(2));
+    const labels = lt.months.map(r=>r.label);
     return { lt, baseLt, labels };
   },[airport, history, scenario, base]);
 
@@ -196,8 +200,8 @@ function Scenario({ airport, history, scenario, setScenario }){
               </div>}/>
             <LineChart labels={d.labels} height={270} markerIndex={0}
               series={[
-                { name:"Baseline", color:"var(--faint)", values:d.baseLt.rows.map(r=>r.pax), dash:"5 4", width:1.8 },
-                { name:"Scenario", color:"var(--pink)", values:d.lt.rows.map(r=>r.pax), fill:true, glow:true, width:2.8 },
+                { name:"Baseline", color:"var(--faint)", values:d.baseLt.months.map(r=>r.pax), dash:"5 4", width:1.8 },
+                { name:"Scenario", color:"var(--pink)", values:d.lt.months.map(r=>r.pax), fill:true, glow:true, width:2.8 },
               ]}/>
           </div>
 
@@ -258,9 +262,12 @@ function ExportView({ airport, history, scenario }){
   const genCSV = ()=>{
     let csv = "GLIDEPATH FORECAST — "+airport.name+" ("+airport.iata+")\n";
     csv += "generated,"+stamp+"\n\n";
-    csv += "ANNUAL LONG-TERM FORECAST\n";
+    csv += "ANNUAL LONG-TERM FORECAST (roll-up)\n";
     csv += "year,passengers,movements,seats,cargo_t,avg_gauge,load_factor_pct,capacity_bound\n";
     d.lt.rows.forEach(r=> csv += `${r.y},${r.pax},${r.atm},${r.seats},${r.cargo},${r.gauge},${r.lf},${r.constrained?1:0}\n`);
+    csv += "\nMONTHLY LONG-TERM FORECAST\n";
+    csv += "month,passengers,movements,seats,cargo_t,avg_gauge,load_factor_pct,capacity_bound\n";
+    d.lt.months.forEach(r=> csv += `${r.date},${r.pax},${r.atm},${r.seats},${r.cargo},${r.gauge},${r.lf},${r.constrained?1:0}\n`);
     csv += "\nMONTHLY SHORT-TERM FORECAST (passengers)\n";
     csv += "month,forecast,low,high\n";
     d.st.forecast.forEach(r=> csv += `${r.date},${r.v},${r.lo},${r.hi}\n`);
@@ -293,6 +300,10 @@ function ExportView({ airport, history, scenario }){
     const ltAoa = [["Year","Passengers","Movements","Seats","Cargo (t)","Avg gauge","Load factor %","Capacity-bound"]];
     d.lt.rows.forEach(r=> ltAoa.push([r.y,r.pax,r.atm,r.seats,r.cargo,r.gauge,r.lf, r.constrained?"Yes":"No"]));
     XLSX.utils.book_append_sheet(wb, XLSX.utils.aoa_to_sheet(ltAoa), "Long-term annual");
+
+    const ltmAoa = [["Month","Passengers","Movements","Seats","Cargo (t)","Avg gauge","Load factor %","Capacity-bound"]];
+    d.lt.months.forEach(r=> ltmAoa.push([r.date,r.pax,r.atm,r.seats,r.cargo,r.gauge,r.lf, r.constrained?"Yes":"No"]));
+    XLSX.utils.book_append_sheet(wb, XLSX.utils.aoa_to_sheet(ltmAoa), "Long-term monthly");
 
     const stAoa = [["Month","Forecast PAX","Low (P10)","High (P90)"]];
     d.st.forecast.forEach(r=> stAoa.push([r.date, r.v, r.lo, r.hi]));
@@ -440,7 +451,7 @@ Eurostat/StatCan (monthly passengers). Every figure traces to a public source.</
 
   const deliverables = [
     { id:"pptx", name:"Stakeholder deck", desc:"Editable PowerPoint: title, headline KPIs, 10-yr trajectory table and scenario assumptions.", tag:"PPTX" },
-    { id:"xlsx", name:"Model workbook", desc:"Real Excel workbook — summary, long-term annual, short-term monthly, full history and assumptions.", tag:"XLSX" },
+    { id:"xlsx", name:"Model workbook", desc:"Real Excel workbook — summary, long-term annual + monthly, short-term monthly, full history and assumptions.", tag:"XLSX" },
     { id:"docx", name:"Executive brief", desc:"Word-openable narrative: summary, KPIs, trajectory table, assumptions and provenance.", tag:"DOCX" },
     { id:"csv", name:"Forecast data extract", desc:"Flat annual + monthly tables for your BI stack or master-plan model.", tag:"CSV" },
   ];
