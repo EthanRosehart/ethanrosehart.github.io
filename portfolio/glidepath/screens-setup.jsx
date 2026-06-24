@@ -39,13 +39,13 @@ function Onboarding({ onSelect, selected }){
         <span className="chip mono">{list.length} of {AIRPORTS.length}</span>
       </div>
 
-      <div className="grid" style={{gridTemplateColumns:"1fr 1fr", gap:10, maxHeight:"calc(100vh - 430px)", overflowY:"auto", paddingRight:4, marginBottom:24}}>
+      <div className="grid" style={{gridTemplateColumns:"1fr 1fr", gap:10, maxHeight:"calc(100vh - 430px)", overflowY:"auto", overflowX:"hidden", paddingRight:4, marginBottom:24}}>
         {list.map(a => (
           <div key={a.iata} className={"air-card"+(selected?.iata===a.iata?" sel":"")} onClick={()=>onSelect(a)}>
             <div className="air-code">{a.iata}</div>
             <div style={{flex:1, minWidth:0}}>
               <div style={{fontSize:14, fontWeight:600, whiteSpace:"nowrap", overflow:"hidden", textOverflow:"ellipsis"}}>{a.name}</div>
-              <div className="air-meta">{a.city}, {a.country} · {a.icao}</div>
+              <div className="air-meta" style={{whiteSpace:"nowrap", overflow:"hidden", textOverflow:"ellipsis"}}>{a.city}, {a.country} · {a.icao}</div>
             </div>
             {selected?.iata===a.iata
               ? <span style={{width:22,height:22,color:"var(--pink)"}}>{Ico.check}</span>
@@ -106,8 +106,8 @@ function ConnectData({ airport, onDone, alreadyDone, macroMeta, actMeta, oecdMet
         <div className="eyebrow" style={{marginBottom:12}}>Step 02 · Integrate public data</div>
         <h1 style={{fontSize:34, marginBottom:12}}>Assembling the evidence base for <span style={{color:"var(--pink-2)"}}>{airport.iata}</span></h1>
         <p style={{color:"var(--dim)", fontSize:16, maxWidth:640}}>
-          No MIDT licence, no procurement cycle. Glidepath stitches together free and public feeds into one
-          forecasting-ready dataset — the same inputs the big consultancies charge six figures for.
+          Glidepath assembles a forecasting-ready dataset from verified public sources — passenger activity,
+          macroeconomic indicators, and airport reference data — aligned to <span style={{color:"var(--pink-2)",fontWeight:600}}>{airport.iata}</span>.
         </p>
       </div>
 
@@ -120,9 +120,7 @@ function ConnectData({ airport, onDone, alreadyDone, macroMeta, actMeta, oecdMet
               <div style={{flex:1, minWidth:0}}>
                 <div style={{display:"flex", alignItems:"center", gap:10}}>
                   <span style={{fontSize:14.5, fontWeight:600}}>{s.name}</span>
-                  {s.wired
-                    ? <span className="chip chip-ok" style={{fontSize:9.5, padding:"2px 7px"}}>WIRED · NIGHTLY</span>
-                    : s.live && <span className="chip" style={{fontSize:9.5, padding:"2px 7px"}}>LIVE API</span>}
+                  {s.live && <span className="chip chip-ok" style={{fontSize:9.5, padding:"2px 7px"}}>LIVE</span>}
                 </div>
                 <div style={{fontSize:12.5, color:"var(--faint)", marginTop:2}}>
                   {s.kind==="macro" && ok && wb
@@ -173,15 +171,6 @@ function ConnectData({ airport, onDone, alreadyDone, macroMeta, actMeta, oecdMet
         <button className="btn btn-primary btn-lg" disabled={!done} onClick={onDone}>Build forecast {Ico.arrow}</button>
       </div>
 
-      {(macroMeta || actMeta || oecdMeta || ofMeta) && (
-        <div className="air-meta" style={{marginTop:14, lineHeight:1.6}}>
-          {of && <span>● Reference verified against <b style={{color:"var(--dim)"}}>OpenFlights</b>. </span>}
-          {act && act.observed && <span>● Passengers wired to <b style={{color:"var(--dim)"}}>{actMeta&&actMeta.sources?(actMeta.sources[act.source.split(":")[0]]||act.source):act.source}</b> — the forecasts run on these observed months. </span>}
-          {oecd && <span>● Income lever set by <b style={{color:"var(--dim)"}}>OECD Economic Outlook</b> projections. </span>}
-          {macroMeta && <span>● Population from <b style={{color:"var(--dim)"}}>World Bank</b>. </span>}
-          All four feeds refreshed nightly via GitHub Action.
-        </div>
-      )}
     </div>
   );
 }
