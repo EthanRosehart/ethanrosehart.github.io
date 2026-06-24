@@ -217,7 +217,9 @@ h1,h2,h3 { font-weight: 600; letter-spacing: -0.02em; line-height: 1.08; }
 .nav-air-code { font-family: var(--mono); font-weight: 700; font-size: 15px; color: var(--pink-2); }
 
 /* main column */
-.main { overflow-y: auto; overflow-x: hidden; height: 100vh; }
+/* min-width:0 lets this grid item shrink below the intrinsic width of its
+   content (e.g. a chart SVG mid-resize), preventing horizontal blowout. */
+.main { overflow-y: auto; overflow-x: hidden; height: 100vh; min-width: 0; }
 .topbar {
   position: sticky; top: 0; z-index: 20;
   display: flex; align-items: center; justify-content: space-between;
@@ -230,6 +232,10 @@ h1,h2,h3 { font-weight: 600; letter-spacing: -0.02em; line-height: 1.08; }
 .content { padding: 30px; max-width: 1320px; margin: 0 auto; }
 
 .grid { display: grid; gap: 16px; }
+/* grid items default to min-width:auto and won't shrink below their content's
+   intrinsic width — a chart SVG mid-resize would otherwise blow out the track.
+   Letting them shrink keeps every column bound to its share of the row. */
+.grid > * { min-width: 0; }
 .g-2 { grid-template-columns: repeat(2,1fr); }
 .g-3 { grid-template-columns: repeat(3,1fr); }
 .g-4 { grid-template-columns: repeat(4,1fr); }
@@ -339,3 +345,66 @@ hr.sep { border: none; border-top: 1px solid var(--line); margin: 0; }
 .stat-strip > div { flex: 1; padding: 14px 18px; border-right: 1px solid var(--line); }
 .stat-strip > div:last-child { border-right: none; }
 .stat-strip .num { font-size: 18px; font-weight: 700; }
+
+/* ============================================================
+   RESPONSIVE / MOBILE
+   The desktop shell is a fixed sidebar + scrolling main column.
+   On narrow screens the sidebar becomes an off-canvas drawer,
+   the topbar trims to essentials, and every multi-column grid
+   collapses so the whole flow reads top-to-bottom on a phone.
+   ============================================================ */
+.mobile-only { display: none; }
+.nav-overlay { display: none; }
+
+@media (max-width: 860px) {
+  .mobile-only { display: inline-flex; }
+
+  /* sidebar → off-canvas drawer */
+  .app { grid-template-columns: 1fr; }
+  .nav {
+    position: fixed; top: 0; left: 0; bottom: 0; width: 270px; max-width: 84vw;
+    z-index: 60; transform: translateX(-100%);
+    transition: transform .26s cubic-bezier(.4, 0, .2, 1);
+    box-shadow: var(--shadow); overflow-y: auto;
+  }
+  .nav.open { transform: none; }
+  .nav-overlay {
+    display: block; position: fixed; inset: 0; z-index: 55;
+    background: rgba(0, 0, 0, 0.55); backdrop-filter: blur(2px);
+    animation: fade .2s ease both;
+  }
+
+  /* topbar: drop the verbose chips, keep nav + title + export */
+  .topbar { padding: 12px 14px; gap: 10px; }
+  .topbar-chips { display: none !important; }
+  .topbar-title { gap: 8px; min-width: 0; }
+  .topbar-title h2 { font-size: 16px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .topbar .btn-sm { padding: 7px 10px; }
+
+  /* tighten the canvas */
+  .content { padding: 18px 14px; }
+  .panel-pad { padding: 16px; }
+
+  /* collapse every multi-column grid (overrides inline templates) */
+  .content .grid { grid-template-columns: 1fr !important; }
+  .content .grid.g-4 { grid-template-columns: repeat(2, 1fr) !important; }
+
+  /* screen-specific tweaks */
+  .air-grid { max-height: none !important; }            /* airport picker list */
+  .lever-panel { position: static !important; }         /* don't pin levers */
+  .confirm-bar { flex-direction: column; align-items: stretch !important; }
+  .confirm-bar .btn { width: 100%; justify-content: center; }
+
+  /* wide tables scroll horizontally instead of bursting the panel */
+  .tbl { display: block; overflow-x: auto; white-space: nowrap; -webkit-overflow-scrolling: touch; }
+
+  /* typography */
+  h1 { font-size: 27px !important; }
+  .kpi-value { font-size: 25px; }
+}
+
+@media (max-width: 460px) {
+  .content .grid.g-4 { grid-template-columns: 1fr !important; }
+  .stat-strip { flex-wrap: wrap; }
+  .stat-strip > div { flex: 1 0 50%; }
+}

@@ -154,7 +154,7 @@ function Scenario({ airport, history, scenario, setScenario }){
     <div className="content fade-in">
       <div className="grid" style={{gridTemplateColumns:"1fr 1.5fr", alignItems:"start"}}>
         {/* left: levers */}
-        <div className="panel panel-pad" style={{position:"sticky",top:18}}>
+        <div className="panel panel-pad lever-panel" style={{position:"sticky",top:18}}>
           <SectionHead kicker="Assumptions" title="Scenario levers"/>
           <div style={{display:"flex",gap:7,flexWrap:"wrap",marginBottom:8}}>
             {Object.keys(PRESETS).map(id=>(

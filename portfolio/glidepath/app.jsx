@@ -31,6 +31,7 @@ function App(){
   const [oecdMeta, setOecdMeta] = useStateApp(window.GP_OECD_META || null);
   const [ofMeta, setOfMeta] = useStateApp(window.GP_OF_META || null);
   const [actVer, setActVer] = useStateApp(0);
+  const [navOpen, setNavOpen] = useStateApp(false);   // mobile drawer
 
   const history = useMemoApp(()=> airport ? GP_buildHistory(airport.iata) : null, [airport, actVer]);
 
@@ -144,13 +145,14 @@ function App(){
     if (id==="connect") return !!airport;
     return !!airport && connected;
   };
-  const go = (id)=>{ if (reachable(id)) setScreen(id); };
+  const go = (id)=>{ if (reachable(id)){ setScreen(id); setNavOpen(false); } };
 
   const [t1,t2] = TITLES[screen] || ["",""];
 
   return (
     <div className="app">
-      <aside className="nav">
+      {navOpen && <div className="nav-overlay" onClick={()=>setNavOpen(false)}></div>}
+      <aside className={"nav"+(navOpen?" open":"")}>
         <div className="brand">
           <div className="brand-mark"><svg viewBox="0 0 24 24" width="17" height="17" fill="currentColor"><path d="M21 16v-2l-8-5V3.5a1.5 1.5 0 0 0-3 0V9l-8 5v2l8-2.5V19l-2 1.5V22l3.5-1 3.5 1v-1.5L11 19v-5.5z"/></svg></div>
           <div className="brand-name">Glide<span>path</span></div>
@@ -181,7 +183,7 @@ function App(){
                 <div style={{fontSize:12,whiteSpace:"nowrap",overflow:"hidden",textOverflow:"ellipsis",color:"var(--dim)"}}>{airport.city}</div>
                 <div className="air-meta" style={{fontSize:10}}>{connected?<span style={{color:"var(--ok)"}}>● data live</span>:"not connected"}</div>
               </div>
-              <button className="icon-btn" title="Change airport" onClick={()=>setScreen("select")} style={{width:30,height:30}}>
+              <button className="icon-btn" title="Change airport" onClick={()=>{ setScreen("select"); setNavOpen(false); }} style={{width:30,height:30}}>
                 <svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" strokeWidth="2"><path d="M3 12h18M3 6h18M3 18h18"/></svg>
               </button>
             </div>
@@ -193,7 +195,10 @@ function App(){
 
       <main className="main">
         <div className="topbar">
-          <div style={{display:"flex",alignItems:"center",gap:16,minWidth:0}}>
+          <div style={{display:"flex",alignItems:"center",gap:12,minWidth:0}}>
+            <button className="icon-btn mobile-only" title="Menu" aria-label="Open navigation" onClick={()=>setNavOpen(true)} style={{flex:"none"}}>
+              <svg viewBox="0 0 24 24" width="17" height="17" fill="none" stroke="currentColor" strokeWidth="2"><path d="M3 12h18M3 6h18M3 18h18"/></svg>
+            </button>
             <a className="btn btn-sm" href="/" title="Back to ethanrosehart.com" style={{textDecoration:"none",flex:"none"}}>
               <svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" strokeWidth="2"><path d="M19 12H5M11 18l-6-6 6-6"/></svg>
               Back to site
@@ -204,10 +209,12 @@ function App(){
             </div>
           </div>
           <div style={{display:"flex",alignItems:"center",gap:12}}>
-            {macroMeta && <span className="chip" title={"World Bank snapshot · "+(macroMeta.source||"")}><span className="dot dot-ok"></span>WB snapshot {new Date(macroMeta.generatedAt).toLocaleDateString("en-CA")}</span>}
-            {airport && <span className="chip chip-pink"><span className="dot dot-pink"></span>{airport.iata} · {airport.icao}</span>}
-            {connected && <span className="chip chip-ok"><span className="dot dot-ok"></span>4 sources live</span>}
-            {connected && screen!=="export" && <button className="btn btn-primary btn-sm" onClick={()=>setScreen("export")}>Export</button>}
+            <span className="topbar-chips" style={{display:"flex",alignItems:"center",gap:12}}>
+              {macroMeta && <span className="chip" title={"World Bank snapshot · "+(macroMeta.source||"")}><span className="dot dot-ok"></span>WB snapshot {new Date(macroMeta.generatedAt).toLocaleDateString("en-CA")}</span>}
+              {airport && <span className="chip chip-pink"><span className="dot dot-pink"></span>{airport.iata} · {airport.icao}</span>}
+              {connected && <span className="chip chip-ok"><span className="dot dot-ok"></span>4 sources live</span>}
+            </span>
+            {connected && screen!=="export" && <button className="btn btn-primary btn-sm" onClick={()=>{ setScreen("export"); setNavOpen(false); }}>Export</button>}
           </div>
         </div>
 

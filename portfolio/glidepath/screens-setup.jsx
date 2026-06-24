@@ -39,7 +39,7 @@ function Onboarding({ onSelect, selected }){
         <span className="chip mono">{list.length} of {AIRPORTS.length}</span>
       </div>
 
-      <div className="grid" style={{gridTemplateColumns:"repeat(2, minmax(0, 1fr))", gap:10, maxHeight:"calc(100vh - 430px)", overflowY:"auto", overflowX:"hidden", overscrollBehavior:"contain", paddingRight:4, marginBottom:24}}>
+      <div className="grid air-grid" style={{gridTemplateColumns:"repeat(2, minmax(0, 1fr))", gap:10, maxHeight:"calc(100vh - 430px)", overflowY:"auto", overflowX:"hidden", overscrollBehavior:"contain", paddingRight:4, marginBottom:24}}>
         {list.map(a => (
           <div key={a.iata} className={"air-card"+(selected?.iata===a.iata?" sel":"")} onClick={()=>onSelect(a)}>
             <div className="air-code">{a.iata}</div>
@@ -55,7 +55,7 @@ function Onboarding({ onSelect, selected }){
       </div>
 
       {selected && (
-        <div className="panel panel-pad fade-in" style={{display:"flex", alignItems:"center", justifyContent:"space-between", gap:20}}>
+        <div className="panel panel-pad fade-in confirm-bar" style={{display:"flex", alignItems:"center", justifyContent:"space-between", gap:20}}>
           <div style={{display:"flex", alignItems:"center", gap:18}}>
             <div style={{width:54,height:54,borderRadius:12,background:"var(--pink-soft)",border:"1px solid var(--pink-line)",display:"grid",placeItems:"center",color:"var(--pink-2)",fontFamily:"var(--mono)",fontWeight:700,fontSize:18}}>{selected.iata}</div>
             <div>
@@ -156,7 +156,7 @@ function ConnectData({ airport, onDone, alreadyDone, macroMeta, actMeta, oecdMet
         })}
       </div>
 
-      <div className="panel panel-pad" style={{display:"flex", alignItems:"center", justifyContent:"space-between", gap:20,
+      <div className="panel panel-pad confirm-bar" style={{display:"flex", alignItems:"center", justifyContent:"space-between", gap:20,
         borderColor: done?"var(--pink-line)":"var(--line)", background: done?"var(--pink-soft)":"var(--bg-1)"}}>
         <div style={{display:"flex",alignItems:"center",gap:14}}>
           <span style={{width:38,height:38,borderRadius:10,display:"grid",placeItems:"center",
