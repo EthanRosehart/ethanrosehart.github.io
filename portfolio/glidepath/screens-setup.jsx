@@ -16,12 +16,16 @@ const Ico = {
 function Onboarding({ onSelect, selected }){
   const [q, setQ] = useStateA("");
   const live = GP_liveAirports();
-  const list = useMemoA(()=>{
-    const t = q.trim().toLowerCase();
-    let arr = live;
-    if (t) arr = live.filter(a => (a.iata+a.icao+a.name+a.city+a.country).toLowerCase().includes(t));
-    return arr.slice(0, 40);
-  },[q, live.length]);
+  const t = q.trim().toLowerCase();
+  const matches = useMemoA(()=>{
+    if (!t) return live;
+    return live.filter(a => (a.iata+a.icao+a.name+a.city+a.country).toLowerCase().includes(t));
+  },[t, live.length]);
+  // keep the picker short — a long catalogue is hard to scan and, on mobile,
+  // an over-tall list traps the scroll gesture. Show a compact set and lean on
+  // search to narrow rather than dumping every gateway at once.
+  const CAP = t ? 24 : 8;
+  const list = matches.slice(0, CAP);
 
   return (
     <div className="content fade-in" style={{maxWidth:860}}>
@@ -37,10 +41,10 @@ function Onboarding({ onSelect, selected }){
       <div className="search" style={{marginBottom:18}}>
         <span style={{width:20,height:20,color:"var(--faint)"}}>{Ico.search}</span>
         <input autoFocus value={q} onChange={e=>setQ(e.target.value)} placeholder="Search IATA / ICAO / city — try “YTZ”, “Toronto”, “Exeter”…" />
-        <span className="chip mono">{list.length} of {AIRPORTS.length}</span>
+        <span className="chip mono">{matches.length} of {live.length}</span>
       </div>
 
-      <div className="grid air-grid" style={{gridTemplateColumns:"repeat(2, minmax(0, 1fr))", gap:10, maxHeight:"calc(100vh - 430px)", overflowY:"auto", overflowX:"hidden", overscrollBehavior:"contain", paddingRight:4, marginBottom:24}}>
+      <div className="grid air-grid" style={{gridTemplateColumns:"repeat(2, minmax(0, 1fr))", gap:10, maxHeight:420, overflowY:"auto", overflowX:"hidden", overscrollBehavior:"contain", paddingRight:4, marginBottom:14}}>
         {list.map(a => (
           <div key={a.iata} className={"air-card"+(selected?.iata===a.iata?" sel":"")} onClick={()=>onSelect(a)}>
             <div className="air-code">{a.iata}</div>
@@ -53,6 +57,14 @@ function Onboarding({ onSelect, selected }){
               : <span className="air-meta">{(()=>{const fy=GP_fullYears(GP_buildHistory(a.iata),"pax");return fy.length?GP_fmt.k1(fy[fy.length-1].v)+"/yr":a.region;})()}</span>}
           </div>
         ))}
+      </div>
+
+      <div className="air-meta" style={{textAlign:"center", marginBottom:24, minHeight:16}}>
+        {matches.length > list.length
+          ? <>Showing {list.length} of {matches.length} matches — keep typing to narrow it down.</>
+          : matches.length===0
+          ? <>No gateway matches “{q.trim()}”. Try an IATA code or city name.</>
+          : null}
       </div>
 
       {selected && (
@@ -78,9 +90,8 @@ const SOURCES = [
   { id:"worldbank",   abbr:"WB", name:"World Bank Open Data", desc:"Population & historical GDP/capita — catchment driver", rows:"Indicators API", live:true, wired:true, kind:"macro" },
 ];
 
-function ConnectData({ airport, onDone, alreadyDone, macroMeta, actMeta, oecdMeta, ofMeta }){
+function ConnectData({ airport, onDone, alreadyDone, macroMeta, actMeta, ofMeta }){
   const wb = macroMeta && macroMeta.countries ? macroMeta.countries[airport.cc] : null;
-  const oecd = oecdMeta && oecdMeta.countries ? oecdMeta.countries[airport.cc] : null;
   const of = ofMeta && ofMeta.airports ? ofMeta.airports[airport.iata] : null;
   const act = (typeof GP_activityFor==="function") ? GP_activityFor(airport.iata) : null;
   const [progress, setProgress] = useStateA(alreadyDone ? SOURCES.map(()=>100) : SOURCES.map(()=>0));
@@ -125,8 +136,6 @@ function ConnectData({ airport, onDone, alreadyDone, macroMeta, actMeta, oecdMet
                 <div style={{fontSize:12.5, color:"var(--faint)", marginTop:2}}>
                   {s.kind==="macro" && ok && wb
                     ? <span>{wb.name}: population <b style={{color:"var(--cyan)"}}>{(wb.pop>=0?"+":"")+wb.pop}%</b> · GDP/capita <b style={{color:"var(--cyan)"}}>{(wb.gdpcap>=0?"+":"")+wb.gdpcap}%</b> ({wb.year})</span>
-                    : s.kind==="oecd" && ok && oecd
-                    ? <span>{oecd.name}: GDP/capita projection <b style={{color:"var(--cyan)"}}>{(oecd.gdpcapProj>=0?"+":"")+oecd.gdpcapProj}%</b>{oecd.horizon?` (${oecd.horizon})`:""} — drives the income lever</span>
                     : s.kind==="openflights" && ok && of
                     ? <span>{of.icao} · {of.lat!=null?of.lat.toFixed(3):"—"}, {of.lon!=null?of.lon.toFixed(3):"—"} · verified against {ofMeta?ofMeta.count:""} reference airports</span>
                     : s.kind==="activity" && ok && act
@@ -146,7 +155,6 @@ function ConnectData({ airport, onDone, alreadyDone, macroMeta, actMeta, oecdMet
                 <div className="air-meta" style={{marginTop:4}}>
                   {s.kind==="activity" && actMeta ? "snapshot "+new Date(actMeta.generatedAt).toLocaleDateString("en-CA")
                     : s.kind==="macro" && macroMeta ? "snapshot "+new Date(macroMeta.generatedAt).toLocaleDateString("en-CA")
-                    : s.kind==="oecd" && oecdMeta ? "snapshot "+new Date(oecdMeta.generatedAt).toLocaleDateString("en-CA")
                     : s.kind==="openflights" && ofMeta ? "snapshot "+new Date(ofMeta.generatedAt).toLocaleDateString("en-CA")
                     : s.rows}
                 </div>

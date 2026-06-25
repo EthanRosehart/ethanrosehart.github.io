@@ -18,7 +18,7 @@
 const AIRPORTS = [];
 let REFERENCE = {};                       // iata -> OpenFlights record
 
-/* ---- macro baselines (OECD / IMF / World Bank style) -------- */
+/* ---- macro baselines (World Bank / IMF style) --------------- */
 /* trend real GDP growth, GDP/cap, income (PAX) elasticity by mkt;
    live World Bank figures merged over these at runtime. Countries
    not listed here get MACRO_DEFAULT, filled in as airports load.   */

@@ -113,7 +113,7 @@ function LongTerm({ airport, history, scenario, go }){
 
 /* ---------- SCENARIO BUILDER --------------------------------- */
 const LEVERS = [
-  { k:"gdp",        name:"Real GDP / capita growth", unit:"%/yr", min:-1, max:5, step:0.1, desc:"OECD trend output per head — the core income signal." },
+  { k:"gdp",        name:"Real GDP / capita growth", unit:"%/yr", min:-1, max:5, step:0.1, desc:"World Bank trend output per head — the core income signal." },
   { k:"elasticity", name:"Income elasticity of demand", unit:"×", min:0.8, max:2.6, step:0.05, desc:"How strongly air travel responds to income. Mature ~1.5, emerging ~2.0." },
   { k:"pop",        name:"Catchment population growth", unit:"%/yr", min:-1, max:3, step:0.1, desc:"Net migration + natural change in the airport's drive-time catchment." },
   { k:"tourism",    name:"Inbound tourism shift", unit:"%/yr", min:-3, max:6, step:0.25, desc:"Destination-marketing, events & visa policy tailwinds (half-weighted)." },
@@ -122,7 +122,7 @@ const LEVERS = [
 ];
 
 const PRESETS = {
-  base:    { label:"Macro baseline", desc:"OECD/IMF central case", icon:"◆" },
+  base:    { label:"Macro baseline", desc:"World Bank central case", icon:"◆" },
   bull:    { label:"Upside", desc:"Strong economy + LCC entry", icon:"▲", set:{ gdp:+0.8, tourism:2.5, lcc:1.5, fuel:-3 } },
   bear:    { label:"Downside", desc:"Stagnation + fuel spike", icon:"▼", set:{ gdp:-1.0, tourism:-1.5, fuel:18, lcc:0 } },
   shock:   { label:"Demand shock", desc:"Recession-style contraction", icon:"⊘", set:{ gdp:-2.0, tourism:-2.5, fuel:10, pop:-0.4, lcc:0 } },
@@ -214,6 +214,7 @@ function Scenario({ airport, history, scenario, setScenario }){
           <div className="panel panel-pad">
             <SectionHead kicker="Decomposition" title="Driver contribution to annual growth"/>
             <BarChart labels={d.lt.breakdown.map(b=>b.k.split(" ")[0])} height={170} yFmt={v=>v.toFixed(1)+"%"}
+              tipFmt={v=>v.toFixed(2)+"%/yr"}
               series={[{ name:"Contribution", color:"var(--pink)", values:d.lt.breakdown.map(b=>Math.max(0,b.v)) }]}/>
             <div className="method" style={{marginTop:6}}>
               <b>Model —</b> <span className="formula">g = GDPpc·ε + pop + 0.5·tourism + lcc − 0.18·fuel</span>. Passengers
@@ -355,7 +356,7 @@ function ExportView({ airport, history, scenario }){
     s.addText(airport.name, { x:0.6, y:2.5, w:11, fontSize:40, bold:true, color:INK });
     s.addText("Aero demand forecast · "+airport.iata+" / "+airport.icao+" · "+airport.city+", "+airport.country,
       { x:0.6, y:3.7, w:11, fontSize:18, color:DIM });
-    s.addText("Generated "+stamp+"  ·  Sources: OpenFlights · OECD · World Bank · Eurostat/StatCan",
+    s.addText("Generated "+stamp+"  ·  Sources: OpenFlights · World Bank · Eurostat/StatCan/BTS",
       { x:0.6, y:6.7, w:12, fontSize:11, color:DIM });
 
     // 2 — headline KPIs
@@ -447,7 +448,7 @@ driven by blended income, population and tourism dynamics totalling <b>${GP_fmt.
 Passengers compound on the observed base-year seasonal shape${hasAtm?"; movements are held proportional to passengers at the latest observed ratio":""}.</p>
 
 <h2>Provenance</h2>
-<p style='font-size:9.5pt;color:#444;'>OpenFlights reference &middot; OECD Economic Outlook (GDP projections) &middot; World Bank (population) &middot;
+<p style='font-size:9.5pt;color:#444;'>OpenFlights reference &middot; World Bank (GDP per capita &amp; population) &middot;
 Eurostat / StatCan / US BTS (monthly passengers, movements, cargo) &middot; Meta Prophet short-term forecast. Every figure traces to a public source.</p>
 </body></html>`;
     GP_saveBlob(new Blob(["﻿"+html], {type:"application/msword"}), fileBase+"_brief.doc");
@@ -525,7 +526,7 @@ Eurostat / StatCan / US BTS (monthly passengers, movements, cargo) &middot; Meta
             ))}
           </div>
           <div className="method" style={{marginTop:16}}>
-            <b>Provenance —</b> OpenFlights reference · OECD Economic Outlook (GDP projections) · World Bank (population) · Eurostat/StatCan (monthly passengers, wired nightly). Every figure traces to a public source; the workbook ships the full audit trail.
+            <b>Provenance —</b> OpenFlights reference · World Bank (GDP per capita & population) · Eurostat/StatCan/BTS (monthly passengers, movements & cargo, wired nightly). Every figure traces to a public source; the workbook ships the full audit trail.
           </div>
         </div>
       </div>

@@ -390,7 +390,16 @@ hr.sep { border: none; border-top: 1px solid var(--line); margin: 0; }
   .content .grid.g-4 { grid-template-columns: repeat(2, 1fr) !important; }
 
   /* screen-specific tweaks */
-  .air-grid { max-height: none !important; }            /* airport picker list */
+  /* Airport picker: drop the inner scroll entirely on mobile. With its own
+     overflow:auto + overscroll-behavior:contain, a touch-drag over the cards
+     was captured by a container that couldn't scroll, so the gesture never
+     chained up to the page and the screen felt frozen. Letting the list flow
+     into the normal page scroll fixes that. */
+  .air-grid {
+    max-height: none !important;
+    overflow: visible !important;
+    overscroll-behavior: auto !important;
+  }
   .lever-panel { position: static !important; }         /* don't pin levers */
   .confirm-bar { flex-direction: column; align-items: stretch !important; }
   .confirm-bar .btn { width: 100%; justify-content: center; }
