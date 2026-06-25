@@ -39,8 +39,10 @@ const DATAFLOW = "OECD.ECO.MAD,DSD_EO@DF_EO";    // Economic Outlook dataflow
 const startPeriod = new Date().getFullYear();     // current year's projection onward
 
 async function fetchMeasure(measure) {
-  // key: <REF_AREA>.<MEASURE>.<FREQ> — plus-joined country list
-  const key = `${codes.join("+")}.${measure}.A`;
+  // key: <REF_AREA>.<MEASURE>.<FREQ>. Leave REF_AREA empty (all countries) and
+  // filter client-side — the proven Data Explorer query is ".GDPV_ANNPCT.A";
+  // a plus-joined REF_AREA list makes OECD's SDMX return HTTP 500.
+  const key = `.${measure}.A`;
   const url = `${BASE}/${DATAFLOW}/${key}?startPeriod=${startPeriod}&dimensionAtObservation=AllDimensions&format=jsondata`;
   const res = await fetch(url, { headers: { Accept: "application/vnd.sdmx.data+json", "User-Agent": "glidepath-data-bot" } });
   if (!res.ok) {
