@@ -28,7 +28,6 @@ function App(){
   const [scenario, setScenario] = useStateApp(saved.scenario || (saved.iata ? GP_defaultScenario(saved.iata) : null));
   const [macroMeta, setMacroMeta] = useStateApp(window.GP_MACRO_META || null);
   const [actMeta, setActMeta] = useStateApp(window.GP_ACTIVITY_META || null);
-  const [oecdMeta, setOecdMeta] = useStateApp(window.GP_OECD_META || null);
   const [ofMeta, setOfMeta] = useStateApp(window.GP_OF_META || null);
   const [actVer, setActVer] = useStateApp(0);
   const [navOpen, setNavOpen] = useStateApp(false);   // mobile drawer
@@ -213,7 +212,7 @@ function App(){
         </div>
 
         {screen==="select"   && <Onboarding onSelect={selectAirport} selected={airport}/>}
-        {screen==="connect"  && airport && <ConnectData airport={airport} onDone={finishConnect} alreadyDone={connected} macroMeta={macroMeta} actMeta={actMeta} oecdMeta={oecdMeta} ofMeta={ofMeta}/>}
+        {screen==="connect"  && airport && <ConnectData airport={airport} onDone={finishConnect} alreadyDone={connected} macroMeta={macroMeta} actMeta={actMeta} ofMeta={ofMeta}/>}
         {screen==="overview" && airport && connected && scenario && <Overview airport={airport} history={history} scenario={scenario} go={go}/>}
         {screen==="short"    && airport && connected && <ShortTerm airport={airport} history={history}/>}
         {screen==="long"     && airport && connected && scenario && <LongTerm airport={airport} history={history} scenario={scenario} go={go}/>}

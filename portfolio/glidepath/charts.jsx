@@ -16,12 +16,14 @@ function niceMax(v){
 /* ---------- LineChart ---------------------------------------
    props:
    labels: string[]
-   series: [{ name, color, values:number[], dash?, width? }]
-   band:   { lo:number[], hi:number[], color } (optional CI)
+   series: [{ name, color, values:number[], dash?, width?, axis? }]
+           axis:"right" plots the series on an independent right-hand
+           scale (e.g. movements vs passengers, very different magnitudes)
+   band:   { lo:number[], hi:number[], color } (optional CI, left axis)
    markerIndex: index where forecast begins (draws a divider)
-   height, yFmt, valueFmt
+   height, yFmt (left axis), yFmtRight (right axis), valueFmt
 */
-function LineChart({ labels, series, band, markerIndex, height=260, yFmt, valueFmt, padL=52 }){
+function LineChart({ labels, series, band, markerIndex, height=260, yFmt, yFmtRight, valueFmt, padL=52 }){
   const wrapRef = useRef(null);
   const [w, setW] = useState(720);
   const [hover, setHover] = useState(null);
@@ -31,30 +33,45 @@ function LineChart({ labels, series, band, markerIndex, height=260, yFmt, valueF
     ro.observe(wrapRef.current);
     return ()=> ro.disconnect();
   },[]);
-  const padR=18, padT=14, padB=28;
+  const hasRight = series.some(s => s.axis==="right");
+  const padR = hasRight ? 52 : 18, padT=14, padB=28;
   const H=height, innerW=Math.max(10,w-padL-padR), innerH=H-padT-padB;
   const n = labels.length;
-  let maxV = 0, minV = Infinity;
-  series.forEach(s => s.values.forEach(v=>{ if(v!=null){ maxV=Math.max(maxV,v); minV=Math.min(minV,v);} }));
-  if (band) band.hi.forEach(v=>{ if(v!=null) maxV=Math.max(maxV,v); });
-  if (band) band.lo.forEach(v=>{ if(v!=null) minV=Math.min(minV,v); });
-  minV = Math.min(minV, maxV*0.6);
-  const top = niceMax(maxV*1.08);
-  const bot = Math.max(0, Math.floor(minV/ (top/5)) * (top/5) - (top/5)*0.0);
-  const x = i => padL + (n<=1?0:(i/(n-1))*innerW);
-  const y = v => padT + innerH - ((v-bot)/(top-bot))*innerH;
-  const ticks = 5;
-  const gl = Array.from({length:ticks+1},(_,i)=> bot + (top-bot)*i/ticks);
 
-  function path(vals){
+  // build an independent {top,bot} scale from a flat list of values
+  function scaleFor(vals){
+    let maxV = 0, minV = Infinity;
+    vals.forEach(v=>{ if(v!=null){ maxV=Math.max(maxV,v); minV=Math.min(minV,v);} });
+    if (!isFinite(minV)){ minV=0; maxV=1; }
+    minV = Math.min(minV, maxV*0.6);
+    const top = niceMax(maxV*1.08);
+    const bot = Math.max(0, Math.floor(minV/(top/5)) * (top/5));
+    return { top, bot };
+  }
+  const leftVals = [];
+  series.filter(s=>s.axis!=="right").forEach(s=> s.values.forEach(v=> leftVals.push(v)));
+  if (band){ band.hi.forEach(v=>leftVals.push(v)); band.lo.forEach(v=>leftVals.push(v)); }
+  const L = scaleFor(leftVals);
+  const rightVals = [];
+  series.filter(s=>s.axis==="right").forEach(s=> s.values.forEach(v=> rightVals.push(v)));
+  const R = hasRight ? scaleFor(rightVals) : null;
+
+  const x  = i => padL + (n<=1?0:(i/(n-1))*innerW);
+  const yL = v => padT + innerH - ((v-L.bot)/(L.top-L.bot))*innerH;
+  const yR = v => R ? padT + innerH - ((v-R.bot)/(R.top-R.bot))*innerH : yL(v);
+  const yOf = s => (s && s.axis==="right") ? yR : yL;
+  const ticks = 5;
+  const gl = Array.from({length:ticks+1},(_,i)=> L.bot + (L.top-L.bot)*i/ticks);
+
+  function path(vals, yf){
     let d="";
-    vals.forEach((v,i)=>{ if(v==null) return; d += (d===""?"M":"L") + x(i).toFixed(1) + " " + y(v).toFixed(1) + " "; });
+    vals.forEach((v,i)=>{ if(v==null) return; d += (d===""?"M":"L") + x(i).toFixed(1) + " " + yf(v).toFixed(1) + " "; });
     return d;
   }
   function area(lo,hi){
     let d="";
-    hi.forEach((v,i)=>{ if(v==null) return; d += (d===""?"M":"L") + x(i).toFixed(1)+" "+y(v).toFixed(1)+" "; });
-    for (let i=lo.length-1;i>=0;i--){ if(lo[i]==null) continue; d += "L"+x(i).toFixed(1)+" "+y(lo[i]).toFixed(1)+" "; }
+    hi.forEach((v,i)=>{ if(v==null) return; d += (d===""?"M":"L") + x(i).toFixed(1)+" "+yL(v).toFixed(1)+" "; });
+    for (let i=lo.length-1;i>=0;i--){ if(lo[i]==null) continue; d += "L"+x(i).toFixed(1)+" "+yL(lo[i]).toFixed(1)+" "; }
     return d+"Z";
   }
   function onMove(e){
@@ -64,8 +81,10 @@ function LineChart({ labels, series, band, markerIndex, height=260, yFmt, valueF
     idx = Math.max(0, Math.min(n-1, idx));
     setHover(idx);
   }
-  const yf = yFmt || (v=>GP_fmt.k(v));
-  const vf = valueFmt || (v=>GP_fmt.int(v));
+  const yf  = yFmt || (v=>GP_fmt.k(v));
+  const yfR = yFmtRight || (v=>GP_fmt.k(v));
+  const vf  = valueFmt || (v=>GP_fmt.int(v));
+  const rcol = (series.find(s=>s.axis==="right")||{}).color || "var(--faint)";
 
   return (
     <div className="chart-wrap" ref={wrapRef} style={{position:"relative"}}>
@@ -80,8 +99,13 @@ function LineChart({ labels, series, band, markerIndex, height=260, yFmt, valueF
         </defs>
         {gl.map((g,i)=> (
           <g key={i}>
-            <line x1={padL} x2={w-padR} y1={y(g)} y2={y(g)} stroke="var(--line)" strokeWidth="1"/>
-            <text x={padL-10} y={y(g)+4} textAnchor="end" fontSize="10.5" fill="var(--faint)" fontFamily="var(--mono)">{yf(g)}</text>
+            <line x1={padL} x2={w-padR} y1={yL(g)} y2={yL(g)} stroke="var(--line)" strokeWidth="1"/>
+            <text x={padL-10} y={yL(g)+4} textAnchor="end" fontSize="10.5" fill="var(--faint)" fontFamily="var(--mono)">{yf(g)}</text>
+            {hasRight && (
+              <text x={w-padR+8} y={yL(g)+4} textAnchor="start" fontSize="10.5" fill={rcol} fontFamily="var(--mono)">
+                {yfR(R.bot + (R.top-R.bot)*i/ticks)}
+              </text>
+            )}
           </g>
         ))}
         {/* forecast divider */}
@@ -91,20 +115,22 @@ function LineChart({ labels, series, band, markerIndex, height=260, yFmt, valueF
             <text x={x(markerIndex)+6} y={padT+11} fontSize="9.5" fill="var(--pink-2)" fontFamily="var(--mono)" letterSpacing="0.1em">FORECAST →</text>
           </g>
         )}
-        {/* confidence band */}
+        {/* confidence band (left axis) */}
         {band && <path d={area(band.lo,band.hi)} fill={band.color||"var(--pink)"} fillOpacity="0.13" stroke="none"/>}
         {/* fill under primary line */}
         {series.filter(s=>s.fill).map((s,i)=>{
           const idx = series.indexOf(s);
-          const p = path(s.values);
+          const yf2 = yOf(s);
+          const p = path(s.values, yf2);
           if(!p) return null;
           const lastI = s.values.map((v,j)=>v!=null?j:-1).filter(j=>j>=0);
           const x0 = x(lastI[0]), x1 = x(lastI[lastI.length-1]);
-          return <path key={i} d={`${p} L${x1} ${y(bot)} L${x0} ${y(bot)} Z`} fill={`url(#fill${idx})`} stroke="none"/>;
+          const baseY = yf2(s.axis==="right" ? R.bot : L.bot);
+          return <path key={i} d={`${p} L${x1} ${baseY} L${x0} ${baseY} Z`} fill={`url(#fill${idx})`} stroke="none"/>;
         })}
         {/* lines */}
         {series.map((s,i)=> (
-          <path key={i} d={path(s.values)} fill="none" stroke={s.color} strokeWidth={s.width||2.2}
+          <path key={i} d={path(s.values, yOf(s))} fill="none" stroke={s.color} strokeWidth={s.width||2.2}
             strokeDasharray={s.dash||"none"} strokeLinejoin="round" strokeLinecap="round"
             style={{filter: s.glow?`drop-shadow(0 0 6px ${s.color}66)`:"none"}}/>
         ))}
@@ -113,7 +139,7 @@ function LineChart({ labels, series, band, markerIndex, height=260, yFmt, valueF
           <g>
             <line x1={x(hover)} x2={x(hover)} y1={padT} y2={padT+innerH} stroke="var(--line-3)" strokeWidth="1"/>
             {series.map((s,i)=> s.values[hover]!=null && (
-              <circle key={i} cx={x(hover)} cy={y(s.values[hover])} r="4" fill="var(--bg)" stroke={s.color} strokeWidth="2.5"/>
+              <circle key={i} cx={x(hover)} cy={yOf(s)(s.values[hover])} r="4" fill="var(--bg)" stroke={s.color} strokeWidth="2.5"/>
             ))}
           </g>
         )}
@@ -140,7 +166,7 @@ function LineChart({ labels, series, band, markerIndex, height=260, yFmt, valueF
 }
 
 /* ---------- BarChart (grouped) ------------------------------- */
-function BarChart({ labels, series, height=240, stacked=false, yFmt }){
+function BarChart({ labels, series, height=240, stacked=false, yFmt, tipFmt }){
   const wrapRef = useRef(null);
   const [w,setW] = useState(680);
   const [hover,setHover] = useState(null);
@@ -154,6 +180,7 @@ function BarChart({ labels, series, height=240, stacked=false, yFmt }){
   const y=v=> padT+innerH-(v/top)*innerH;
   const groupW = innerW/n;
   const yf = yFmt || (v=>GP_fmt.k(v));
+  const tf = tipFmt || (v=>GP_fmt.int(v));
   const ticks=4, gl=Array.from({length:ticks+1},(_,i)=>top*i/ticks);
   return (
     <div className="chart-wrap" ref={wrapRef} style={{position:"relative"}}>
@@ -188,7 +215,7 @@ function BarChart({ labels, series, height=240, stacked=false, yFmt }){
           {series.map((se,i)=>(
             <div className="tip-row" key={i}>
               <span className="tip-k"><span className="legend-swatch" style={{background:se.color,width:8,height:8}}></span>{se.name}</span>
-              <span className="tip-v" style={{color:se.color}}>{GP_fmt.int(se.values[hover])}</span>
+              <span className="tip-v" style={{color:se.color}}>{tf(se.values[hover])}</span>
             </div>
           ))}
         </div>

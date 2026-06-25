@@ -49,6 +49,13 @@ function Overview({ airport, history, scenario, go }){
   const baseYear = d.lt ? d.lt.baseYear : (d.paxY.length?d.paxY[d.paxY.length-1].y:"");
   const endYear = d.lt ? d.lt.endYear : "";
 
+  // align movements to the passenger years so chart indices line up even when
+  // the two series cover slightly different complete-year spans
+  const atmByYear = Object.fromEntries(d.atmY.map(r=>[r.y, r.v]));
+  const atmVals = d.paxY.map(r=> atmByYear[r.y] ?? null);
+  const latestAtm = d.atmY.length ? d.atmY[d.atmY.length-1] : null;
+  const latestCargo = d.cargoY.length ? d.cargoY[d.cargoY.length-1] : null;
+
   return (
     <div className="content fade-in">
       <div className="grid g-4" style={{marginBottom:16}}>
@@ -71,19 +78,27 @@ function Overview({ airport, history, scenario, go }){
 
       <div className="grid" style={{gridTemplateColumns:"1.55fr 1fr", marginBottom:16}}>
         <div className="panel panel-pad">
-          <SectionHead kicker={"Observed history · "+(d.paxY.length?d.paxY[0].y:"")+"–"+baseYear} title="Annual passenger throughput"
+          <SectionHead kicker={"Observed history · "+(d.paxY.length?d.paxY[0].y:"")+"–"+baseYear} title="Annual throughput"
             right={<div className="chart-legend">
               <span className="legend-item"><span className="legend-line" style={{borderColor:"var(--pink)"}}></span>Passengers</span>
-              {d.hasAtm && <span className="legend-item"><span className="legend-line" style={{borderColor:"var(--lime)"}}></span>Movements</span>}
+              {d.hasAtm && <span className="legend-item"><span className="legend-line" style={{borderColor:"var(--lime)"}}></span>Movements <span style={{color:"var(--faint)"}}>(right axis)</span></span>}
             </div>}/>
-          <LineChart labels={yrLabels} height={250}
+          <LineChart labels={yrLabels} height={250} yFmtRight={v=>GP_fmt.k(v)}
             series={[
               { name:"Passengers", color:"var(--pink)", values:d.paxY.map(r=>r.v), fill:true, glow:true, width:2.6 },
-              ...(d.hasAtm?[{ name:"Movements", color:"var(--lime)", values:GP_fullYears(history,"atm").map(r=>r.v), width:1.8, dash:"4 4" }]:[]),
+              ...(d.hasAtm?[{ name:"Movements", color:"var(--lime)", values:atmVals, width:2, dash:"4 4", axis:"right" }]:[]),
             ]}/>
+          {(d.hasAtm || d.hasCargo) && (
+            <div className="stat-strip" style={{marginTop:14}}>
+              <div><div className="air-meta">Passengers · {baseYear}</div><div className="num" style={{color:"var(--pink-2)"}}>{GP_fmt.k1(d.last)}</div></div>
+              {latestAtm && <div><div className="air-meta">Movements · {latestAtm.y}</div><div className="num" style={{color:"var(--lime)"}}>{GP_fmt.k(latestAtm.v)}</div></div>}
+              {latestCargo && <div><div className="air-meta">Cargo · {latestCargo.y}</div><div className="num" style={{color:"var(--cyan)"}}>{GP_fmt.t(latestCargo.v)}</div></div>}
+            </div>
+          )}
           <div className="method" style={{marginTop:14}}>
             <b>Source —</b> real monthly filings ({(GP_activityFor(airport.iata).source||"public").split(":")[0]}),
-            reconciled to complete calendar years. Indexed to {macro.label} macro drivers for the strategic outlook.
+            reconciled to complete calendar years{(d.hasAtm||d.hasCargo)?` — passengers${d.hasAtm?", aircraft movements":""}${d.hasCargo?" and cargo tonnage":""} tracked side by side`:""}.
+            Indexed to {macro.label} macro drivers for the strategic outlook.
           </div>
         </div>
 
@@ -92,7 +107,8 @@ function Overview({ airport, history, scenario, go }){
           {d.st
             ? <>
                 <BarChart labels={MONTHS} height={210} yFmt={v=>v.toFixed(2)+"×"}
-                  series={[{ name:"Seasonal index", color:"var(--cyan)", values:d.st.seasIdx }]}/>
+                  tipFmt={v=>(v>=1?"+":"")+Math.round((v-1)*100)+"% vs avg month"}
+                  series={[{ name:"Demand", color:"var(--cyan)", values:d.st.seasIdx }]}/>
                 <div className="method" style={{marginTop:10}}>
                   <b>Peak —</b> {MONTHS[d.st.seasIdx.indexOf(Math.max(...d.st.seasIdx))]} runs
                   {" "}{(Math.max(...d.st.seasIdx)/Math.min(...d.st.seasIdx)).toFixed(2)}× the quietest month.
@@ -111,7 +127,7 @@ function Overview({ airport, history, scenario, go }){
             <div style={{padding:0,border:"none"}}><div className="air-meta">MAPE</div><div className="num" style={{fontSize:17}}>±{d.st.mape}%</div></div>
             <div style={{padding:0,border:"none"}}><div className="air-meta">Next peak</div><div className="num" style={{fontSize:17}}>{GP_fmt.k(Math.max(...d.st.forecast.slice(0,12).map(r=>r.v)))}</div></div>
           </div>
-          <div className="btn btn-ghost btn-sm" style={{marginTop:12,paddingLeft:0,color:"var(--pink-2)"}}>Open tactical view {GP_Ico.arrow}</div>
+          <div className="btn btn-sm" style={{marginTop:14,width:"100%",justifyContent:"center",color:"var(--pink-2)",borderColor:"var(--pink-line)"}}>Open tactical view {GP_Ico.arrow}</div>
         </div>}
         {d.lt && <div className="panel panel-pad" style={{cursor:"pointer"}} onClick={()=>go("long")}>
           <div className="eyebrow" style={{marginBottom:10}}>Strategic · Elasticity</div>
@@ -121,7 +137,7 @@ function Overview({ airport, history, scenario, go }){
             <div style={{padding:0,border:"none"}}><div className="air-meta">PAX CAGR</div><div className="num" style={{fontSize:17,color:"var(--cyan)"}}>{GP_fmt.pct(d.lt.cagr)}</div></div>
             <div style={{padding:0,border:"none"}}><div className="air-meta">{endYear} PAX</div><div className="num" style={{fontSize:17}}>{GP_fmt.k1(d.lt.rows[d.lt.rows.length-1].pax)}</div></div>
           </div>
-          <div className="btn btn-ghost btn-sm" style={{marginTop:12,paddingLeft:0,color:"var(--pink-2)"}}>Open strategic view {GP_Ico.arrow}</div>
+          <div className="btn btn-sm" style={{marginTop:14,width:"100%",justifyContent:"center",color:"var(--pink-2)",borderColor:"var(--pink-line)"}}>Open strategic view {GP_Ico.arrow}</div>
         </div>}
         {d.lt && <div className="panel panel-pad" style={{cursor:"pointer"}} onClick={()=>go("scenario")}>
           <div className="eyebrow" style={{marginBottom:10}}>What-if · Levers</div>
@@ -131,7 +147,7 @@ function Overview({ airport, history, scenario, go }){
             <div style={{padding:0,border:"none"}}><div className="air-meta">Demand g</div><div className="num" style={{fontSize:17,color:"var(--lime)"}}>{GP_fmt.pct(d.lt.gDemand)}</div></div>
             <div style={{padding:0,border:"none"}}><div className="air-meta">Levers</div><div className="num" style={{fontSize:17}}>6</div></div>
           </div>
-          <div className="btn btn-ghost btn-sm" style={{marginTop:12,paddingLeft:0,color:"var(--pink-2)"}}>Open scenarios {GP_Ico.arrow}</div>
+          <div className="btn btn-sm" style={{marginTop:14,width:"100%",justifyContent:"center",color:"var(--pink-2)",borderColor:"var(--pink-line)"}}>Open scenarios {GP_Ico.arrow}</div>
         </div>}
       </div>
     </div>
