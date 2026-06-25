@@ -63,37 +63,35 @@ const GEO = {
 function normMonth(s) { return String(s).replace("M", "-").slice(0, 7); }
 
 /* ============================================================
-   EUROSTAT — JSON-stat, ALL airports in one call per metric.
-   Omitting rep_airp returns every reporting airport; we decode
-   the flattened value array via the (rep_airp, time) dimensions.
+   EUROSTAT — JSON-stat. A single all-airports pull is rejected
+   with HTTP 413 (ASYNCHRONOUS_RESPONSE), so we (1) enumerate the
+   reporting airports + a recent-volume proxy with a small
+   "lastTimePeriod" call, then (2) pull full series for the busiest
+   airports in batches of rep_airp codes, splitting any batch that
+   still trips the 413 size guard.
    ============================================================ */
-async function eurostatAll(dataset, unit, traMeas) {
-  const base = "https://ec.europa.eu/eurostat/api/dissemination/statistics/1.0/data";
-  const url = `${base}/${dataset}?format=JSON&lang=EN&freq=M&unit=${unit}&tra_meas=${traMeas}&sinceTimePeriod=2015-01`;
-  const res = await fetch(url, { headers: UA });
-  if (!res.ok) {
-    let body = ""; try { body = (await res.text()).slice(0, 200); } catch {}
-    throw new Error(`${dataset} HTTP ${res.status} ${body}`);
-  }
-  const js = await res.json();
+const ES_BASE = "https://ec.europa.eu/eurostat/api/dissemination/statistics/1.0/data";
+
+function esUrl(dataset, q, reps) {
+  const usp = new URLSearchParams({ format: "JSON", lang: "EN", freq: "M", ...q });
+  let url = `${ES_BASE}/${dataset}?${usp.toString()}`;
+  for (const r of reps || []) url += `&rep_airp=${encodeURIComponent(r)}`;
+  return url;
+}
+
+// decode a JSON-stat payload to { icao: { geo, monthly:{ "YYYY-MM": n } } }
+function esDecode(js, dataset) {
   const ids = js.id, size = js.size, value = js.value;
   if (!ids || !size || !value) throw new Error(`${dataset}: malformed JSON-stat`);
-
-  // row-major strides for the flattened value array
   const stride = new Array(ids.length); let s = 1;
   for (let i = ids.length - 1; i >= 0; i--) { stride[i] = s; s *= size[i]; }
-  const di = (name) => ids.indexOf(name);
+  const di = (n) => ids.indexOf(n);
   const repDim = di("rep_airp"), timeDim = di("time");
   if (repDim < 0 || timeDim < 0) throw new Error(`${dataset}: missing rep_airp/time dim`);
-
-  const repIdx = js.dimension.rep_airp.category.index;        // "AT_LOWW" -> pos
-  const timeEntries = Object.entries(js.dimension.time.category.index)
-    .sort((a, b) => a[1] - b[1]);                             // [code,pos] sorted
-
-  const getVal = (flat) => (Array.isArray(value) ? value[flat] : (value[flat] ?? value[String(flat)]));
-
-  // by ICAO (rep_airp = "<geo>_<ICAO>")
-  const out = {};   // icao -> { geo, monthly:{ "YYYY-MM": n } }
+  const repIdx = js.dimension.rep_airp.category.index;
+  const timeEntries = Object.entries(js.dimension.time.category.index).sort((a, b) => a[1] - b[1]);
+  const getVal = (f) => (Array.isArray(value) ? value[f] : (value[f] ?? value[String(f)]));
+  const out = {};
   for (const [code, rpos] of Object.entries(repIdx)) {
     const us = code.indexOf("_");
     if (us < 0) continue;
@@ -101,12 +99,49 @@ async function eurostatAll(dataset, unit, traMeas) {
     if (icao.length !== 4) continue;
     const monthly = {};
     for (const [tcode, tpos] of timeEntries) {
-      const flat = rpos * stride[repDim] + tpos * stride[timeDim];
-      const v = getVal(flat);
+      const v = getVal(rpos * stride[repDim] + tpos * stride[timeDim]);
       if (v != null) monthly[normMonth(tcode)] = Math.round(v);
     }
     if (Object.keys(monthly).length) out[icao] = { geo, monthly };
   }
+  return out;
+}
+
+async function esGet(dataset, q, reps) {
+  const res = await fetch(esUrl(dataset, q, reps), { headers: UA });
+  if (!res.ok) {
+    let body = ""; try { body = (await res.text()).slice(0, 160); } catch {}
+    const e = new Error(`${dataset} HTTP ${res.status} ${body}`); e.code = res.status; throw e;
+  }
+  return esDecode(await res.json(), dataset);
+}
+
+// enumerate all reporting airports + a recent-volume proxy; shrink the
+// time window until Eurostat answers synchronously
+async function esEnumerate() {
+  for (const lastN of [12, 6, 3, 1]) {
+    try { return await esGet("avia_paoa", { unit: "PAS", tra_meas: "PAS_CRD", lastTimePeriod: String(lastN) }); }
+    catch (e) { if (e.code === 413) { console.warn(`  enumerate lastTimePeriod=${lastN} -> 413, shrinking`); continue; } throw e; }
+  }
+  return {};
+}
+
+// full series for a set of rep_airp codes, batched + 413-split
+async function esBatch(dataset, q, reps) {
+  const out = {};
+  async function go(list) {
+    if (!list.length) return;
+    try { Object.assign(out, await esGet(dataset, q, list)); }
+    catch (e) {
+      if (e.code === 413 && list.length > 1) {
+        const mid = list.length >> 1; await go(list.slice(0, mid)); await go(list.slice(mid));
+      } else if (e.code === 413) {
+        console.warn(`    ${dataset} ${list[0]}: 413 even single — skipped`);
+      } else throw e;
+    }
+  }
+  const CHUNK = 25;
+  for (let i = 0; i < reps.length; i += CHUNK) await go(reps.slice(i, i + CHUNK));
   return out;
 }
 
@@ -193,28 +228,34 @@ async function main() {
   const airports = {};
   let live = 0;
 
-  /* ---------- Europe: all airports, one call per metric ---------- */
+  /* ---------- Europe: enumerate, rank, then batch-fetch series ---------- */
+  let enumerated = {};
+  try { enumerated = await esEnumerate(); console.log(`  eurostat: enumerated ${Object.keys(enumerated).length} reporting airports`); }
+  catch (e) { console.warn(`  eurostat enumerate FAILED: ${e.message}`); }
+
+  const euCandidates = [];
+  for (const [icao, rec] of Object.entries(enumerated)) {
+    const iata = icaoToIata[icao];
+    if (!iata || !GEO[rec.geo]) continue;
+    const vol = recent12(rec.monthly);
+    if (vol <= 0) continue;
+    euCandidates.push({ iata, icao, geo: rec.geo, vol });
+  }
+  euCandidates.sort((a, b) => b.vol - a.vol);
+  const keep = euCandidates.slice(0, EU_CAP);
+  console.log(`  eurostat: ${euCandidates.length} mappable airports, keeping busiest ${keep.length}`);
+
+  const repCodes = keep.map((k) => `${k.geo}_${k.icao}`);
   const euData = {};   // metric -> { icao -> { geo, monthly } }
   for (const [metric, ds, unit, tm] of [
     ["pax", "avia_paoa", "PAS", "PAS_CRD"],
     ["atm", "avia_paoa", "FLIGHT", "CAF_PAS"],
     ["cargo", "avia_gooa", "T", "FRM_LD_NLD"],
   ]) {
-    try { euData[metric] = await eurostatAll(ds, unit, tm); console.log(`  eurostat ${metric}: ${Object.keys(euData[metric]).length} airports`); }
+    if (!repCodes.length) { euData[metric] = {}; continue; }
+    try { euData[metric] = await esBatch(ds, { unit, tra_meas: tm, sinceTimePeriod: "2015-01" }, repCodes); console.log(`  eurostat ${metric}: ${Object.keys(euData[metric]).length} airports`); }
     catch (e) { euData[metric] = {}; console.warn(`  eurostat ${metric} FAILED: ${e.message}`); }
   }
-
-  // candidate ICAOs = anything with a passenger series we can map to IATA
-  const euCandidates = [];
-  for (const [icao, rec] of Object.entries(euData.pax)) {
-    const iata = icaoToIata[icao];
-    if (!iata) continue;
-    if (Object.keys(rec.monthly).length < MIN_MONTHS) continue;
-    euCandidates.push({ iata, icao, geo: rec.geo, vol: recent12(rec.monthly) });
-  }
-  euCandidates.sort((a, b) => b.vol - a.vol);
-  const keep = euCandidates.slice(0, EU_CAP);
-  console.log(`  eurostat: ${euCandidates.length} mappable airports, keeping busiest ${keep.length}`);
 
   for (const { iata, icao, geo } of keep) {
     const g = GEO[geo];
@@ -226,7 +267,7 @@ async function main() {
       if (m && Object.keys(m).length >= 12) { series[metric] = m; live++; }
       else { const kept = prevSeries(prev, iata, metric); if (kept) series[metric] = kept; }
     }
-    if (!series.pax) continue;
+    if (!series.pax || Object.keys(series.pax).length < MIN_MONTHS) continue;
     const r = ref[iata] || {};
     const paxKeys = Object.keys(series.pax);
     airports[iata] = {
