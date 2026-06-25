@@ -213,15 +213,19 @@ function ShortTerm({ airport, history }){
               ["Method","Meta Prophet · trend + yearly + holidays"],
               ["Seasonality","Multiplicative yearly (Fourier)"],
               ["Holidays",d.st.holidaysTotal+" public · "+macro.label],
+              ["Shocks","COVID 2020–21 modeled as events"],
               ["Backtest","12-month holdout"],
               ["Accuracy",d.st.mape!=null?("MAPE ±"+d.st.mape+"%"):"—"],
               ["Refresh","Nightly · server-side"],
             ].map((r,i)=>(
-              <div key={i} style={{display:"flex",justifyContent:"space-between",gap:16,padding:"10px 0",borderBottom:i<5?"1px solid var(--line)":"none"}}>
+              <div key={i} style={{display:"flex",justifyContent:"space-between",gap:16,padding:"10px 0",borderBottom:i<6?"1px solid var(--line)":"none"}}>
                 <span style={{color:"var(--faint)",fontSize:13}}>{r[0]}</span>
-                <span style={{fontSize:13,textAlign:"right",fontFamily:i>=3&&i<=4?"var(--mono)":"var(--sans)",color:i>=3&&i<=4?"var(--pink-2)":"var(--dim)"}}>{r[1]}</span>
+                <span style={{fontSize:13,textAlign:"right",fontFamily:i>=4&&i<=5?"var(--mono)":"var(--sans)",color:i>=4&&i<=5?"var(--pink-2)":"var(--dim)"}}>{r[1]}</span>
               </div>
             ))}
+          </div>
+          <div className="method" style={{marginTop:14}}>
+            <b>COVID handling —</b> the 2020–21 collapse is fit as explicit monthly events, so it doesn't distort seasonality or widen the forecast band. No data is dropped — every observed month still trains the model and shows on the chart.
           </div>
           {d.st.holidays.length>0 && <div className="method" style={{marginTop:14}}>
             <b>Top holiday effects —</b> {d.st.holidays.slice(0,4).join(" · ")}.

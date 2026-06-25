@@ -47,6 +47,16 @@ HORIZON = 24            # months forecast (UI offers 12 / 24)
 INTERVAL = 0.80         # prediction interval width -> P10..P90 band
 MIN_MONTHS = 36         # need a few seasons before Prophet is meaningful
 
+HOLIDAY_PRIOR = 5.0     # regularisation for public holidays (multiplicative)
+# COVID is modelled as an explicit event, not deleted: one dummy per month over
+# the acute window so Prophet attributes the collapse/recovery to the event
+# instead of distorting yearly seasonality or inflating the trend-uncertainty
+# fan. The dummies never recur, so the effect is zero across the forecast. All
+# real observations stay in the fit (and on the actuals chart).
+COVID_START = "2020-03"
+COVID_END = "2021-12"
+COVID_PRIOR = 15.0      # let the dip months take large coefficients
+
 # The ISO 3166-1 alpha-2 country (for the holidays package / Prophet) now rides
 # on each airport in activity.json ("country"); this map is only a fallback for
 # any legacy entry that predates that field.
@@ -79,8 +89,24 @@ def monthly_holidays(iso2, years):
         rows[(name, ds)] = True            # dedupe (name, month)
     if not rows:
         return pd.DataFrame(columns=["holiday", "ds"]), []
-    df = pd.DataFrame([{"holiday": n, "ds": ds} for (n, ds) in rows.keys()])
+    df = pd.DataFrame([{"holiday": n, "ds": ds, "prior_scale": HOLIDAY_PRIOR} for (n, ds) in rows.keys()])
     return df, sorted(df["holiday"].unique().tolist())
+
+
+def covid_events(df):
+    """One dummy event per month in the COVID window that the series covers.
+    Returned in Prophet holidays format; absorbs the 2020-21 anomaly without
+    dropping any observation. Empty for airports whose history starts after."""
+    lo, hi = df["ds"].min(), df["ds"].max()
+    start = pd.Timestamp(int(COVID_START[:4]), int(COVID_START[5:7]), 1)
+    end = pd.Timestamp(int(COVID_END[:4]), int(COVID_END[5:7]), 1)
+    months = pd.date_range(max(start, lo), min(end, hi), freq="MS")
+    if len(months) == 0:
+        return pd.DataFrame(columns=["holiday", "ds", "prior_scale"])
+    return pd.DataFrame([
+        {"holiday": f"covid_{ds.year}_{ds.month:02d}", "ds": ds, "prior_scale": COVID_PRIOR}
+        for ds in months
+    ])
 
 
 def series_frame(monthly):
@@ -165,8 +191,14 @@ def forecast_metric(iata, iso2, monthly, horizon):
     end_year = int(df["ds"].max().year) + (horizon // 12) + 2
     hol_df, names = monthly_holidays(iso2, range(start_year, end_year + 1))
 
-    m, fc = fit_predict(df, hol_df, horizon)
-    mape = backtest_mape(df, hol_df)
+    # add COVID dummies to the fit, but keep `names` (public holidays only) so
+    # the UI's holiday metrics aren't polluted by the COVID events.
+    cov_df = covid_events(df)
+    frames = [f for f in (hol_df, cov_df) if len(f)]
+    fit_holidays = pd.concat(frames, ignore_index=True) if frames else hol_df
+
+    m, fc = fit_predict(df, fit_holidays, horizon)
+    mape = backtest_mape(df, fit_holidays)
 
     fut = fc.tail(horizon)
     out = []
@@ -229,7 +261,7 @@ def main():
 
     out = {
         "generatedAt": datetime.now(timezone.utc).isoformat(),
-        "model": "Meta Prophet (additive trend + multiplicative yearly + country holidays)",
+        "model": "Meta Prophet (additive trend + multiplicative yearly + country holidays + COVID 2020-21 events)",
         "library": f"prophet {__import__('prophet').__version__}, holidays {holidays_pkg.__version__}",
         "interval": INTERVAL,
         "horizon": HORIZON,
