@@ -29,8 +29,8 @@ function Onboarding({ onSelect, selected }){
         <div className="eyebrow" style={{marginBottom:12}}>Step 01 · Define gateway</div>
         <h1 style={{fontSize:38, marginBottom:12}}>Which airport are we forecasting?</h1>
         <p style={{color:"var(--dim)", fontSize:16, maxWidth:620}}>
-          Pick any gateway from the <b style={{color:"var(--text)"}}>OpenFlights</b> reference database. We pull its
-          identifiers, geography and runway profile, then assemble an aero-activity history from public sources.
+          Pick any gateway with a live public passenger feed. We pull its
+          identifiers and geography from <b style={{color:"var(--text)"}}>OpenFlights</b>, then assemble an aero-activity history from public sources.
         </p>
       </div>
 
@@ -50,7 +50,7 @@ function Onboarding({ onSelect, selected }){
             </div>
             {selected?.iata===a.iata
               ? <span style={{width:22,height:22,color:"var(--pink)"}}>{Ico.check}</span>
-              : <span className="air-meta">{(a.runwayM/1000).toFixed(1)}km RWY</span>}
+              : <span className="air-meta">{(()=>{const fy=GP_fullYears(GP_buildHistory(a.iata),"pax");return fy.length?GP_fmt.k1(fy[fy.length-1].v)+"/yr":a.region;})()}</span>}
           </div>
         ))}
       </div>
@@ -61,7 +61,7 @@ function Onboarding({ onSelect, selected }){
             <div style={{width:54,height:54,borderRadius:12,background:"var(--pink-soft)",border:"1px solid var(--pink-line)",display:"grid",placeItems:"center",color:"var(--pink-2)",fontFamily:"var(--mono)",fontWeight:700,fontSize:18}}>{selected.iata}</div>
             <div>
               <div style={{fontSize:17,fontWeight:600}}>{selected.name}</div>
-              <div className="air-meta" style={{marginTop:3}}>{selected.icao} · {selected.lat.toFixed(3)}, {selected.lon.toFixed(3)} · {selected.region} · {(()=>{const fy=GP_fullYears(GP_buildHistory(selected.iata),"pax");return fy.length?GP_fmt.k1(fy[fy.length-1].v)+" PAX/yr":"—";})()}</div>
+              <div className="air-meta" style={{marginTop:3}}>{selected.icao} · {selected.lat!=null?selected.lat.toFixed(3):"—"}, {selected.lon!=null?selected.lon.toFixed(3):"—"} · {selected.region} · {(()=>{const fy=GP_fullYears(GP_buildHistory(selected.iata),"pax");return fy.length?GP_fmt.k1(fy[fy.length-1].v)+" PAX/yr":"—";})()}</div>
             </div>
           </div>
           <button className="btn btn-primary btn-lg" onClick={()=>onSelect(selected, true)}>Connect data {Ico.arrow}</button>
@@ -73,7 +73,7 @@ function Onboarding({ onSelect, selected }){
 
 /* ---------- Connect data sources ----------------------------- */
 const SOURCES = [
-  { id:"openflights", abbr:"OF", name:"OpenFlights Airport DB", desc:"Identifiers, geography, runway & timezone reference", rows:"7,698 airports", live:true, wired:true, kind:"openflights" },
+  { id:"openflights", abbr:"OF", name:"OpenFlights Airport DB", desc:"Identifiers, geography & timezone reference", rows:"reference DB", live:true, wired:true, kind:"openflights" },
   { id:"activity",    abbr:"AVIA", name:"Eurostat / StatCan Aviation", desc:"Monthly passengers by airport — the series the forecasts run on", rows:"132 months", live:true, wired:true, kind:"activity" },
   { id:"worldbank",   abbr:"WB", name:"World Bank Open Data", desc:"Population & historical GDP/capita — catchment driver", rows:"Indicators API", live:true, wired:true, kind:"macro" },
 ];

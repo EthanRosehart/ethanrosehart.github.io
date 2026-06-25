@@ -35,25 +35,15 @@ function App(){
 
   const history = useMemoApp(()=> airport ? GP_buildHistory(airport.iata) : null, [airport, actVer]);
 
-  // OpenFlights reference (data/airports.json) — enrich the airport catalogue
-  // with authoritative identifiers/coords. Same-origin, no CORS.
+  // OpenFlights reference (data/airports.json) — enrich the data-driven
+  // catalogue with authoritative identifiers/coords. Same-origin, no CORS.
   useEffectApp(()=>{
     let alive = true;
     fetch("data/airports.json", { cache:"no-store" })
       .then(r => r.ok ? r.json() : null)
       .then(j => {
         if (!alive || !j || !j.airports) return;
-        AIRPORTS.forEach(a => {
-          const r = j.airports[a.iata];
-          if (!r) return;
-          if (r.icao) a.icao = r.icao;
-          if (r.lat != null) a.lat = r.lat;
-          if (r.lon != null) a.lon = r.lon;
-          if (r.elev_ft != null) a.elev = r.elev_ft;
-          if (r.tz) a.tz = r.tz;
-          if (r.name) a.name = r.name;
-          a.ofVerified = true;
-        });
+        GP_setReference(j);                 // rebuilds AIRPORTS with enrichment
         window.GP_OF_META = j; setOfMeta(j); setActVer(v=>v+1);
       })
       .catch(()=>{});
@@ -72,8 +62,13 @@ function App(){
       .then(r => r.ok ? r.json() : null)
       .then(j => {
         if (!alive || !j) return;
-        GP_setActivity(j);
+        GP_setActivity(j);       // also (re)builds the AIRPORTS catalogue
         setActMeta(j);
+        // restore a returning user's saved airport now the catalogue exists
+        if (saved.iata && !airport) {
+          const a = AIRPORTS.find(x => x.iata === saved.iata);
+          if (a) setAirport(a);
+        }
         setActVer(v => v + 1);   // force history to rebuild
       })
       .catch(()=>{});

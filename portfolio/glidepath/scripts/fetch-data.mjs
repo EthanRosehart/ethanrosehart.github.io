@@ -12,19 +12,32 @@
  * No API key required. Run locally with:  node scripts/fetch-data.mjs
  * ============================================================ */
 
-import { writeFile, mkdir } from "node:fs/promises";
+import { writeFile, readFile, mkdir } from "node:fs/promises";
 import { dirname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const OUT = resolve(__dirname, "..", "data", "macro.json");
+const ACTIVITY = resolve(__dirname, "..", "data", "activity.json");
 
-/* ISO3 codes -> friendly names. Keep in sync with MACRO in data.jsx */
+/* ISO3 -> friendly name. The live set is derived from the airports that
+   actually carry data (activity.json); this baseline guarantees coverage
+   even on a cold checkout before the activity feed has run. */
 const COUNTRIES = {
   CAN: "Canada", USA: "United States", GBR: "United Kingdom",
   NLD: "Netherlands", DEU: "Germany", DNK: "Denmark",
   AUT: "Austria", ITA: "Italy", POL: "Poland",
 };
+
+async function deriveCountries() {
+  try {
+    const act = JSON.parse(await readFile(ACTIVITY, "utf8"));
+    for (const a of Object.values(act.airports || {})) {
+      if (a.cc && a.countryName) COUNTRIES[a.cc] = a.countryName;
+    }
+    console.log(`Derived ${Object.keys(COUNTRIES).length} countries from activity.json.`);
+  } catch { console.warn("activity.json not readable — using baseline country list."); }
+}
 
 const IND = {
   gdp:    "NY.GDP.MKTP.KD.ZG",   // real GDP growth (annual %)
@@ -32,11 +45,11 @@ const IND = {
   pop:    "SP.POP.TOTL",         // total population
 };
 
-const codes = Object.keys(COUNTRIES).join(";");
 const API = "https://api.worldbank.org/v2";
 
 async function fetchIndicator(indicator) {
-  const url = `${API}/country/${codes}/indicator/${indicator}?format=json&per_page=2000&date=2010:2025`;
+  const codes = Object.keys(COUNTRIES).join(";");
+  const url = `${API}/country/${codes}/indicator/${indicator}?format=json&per_page=4000&date=2010:2025`;
   const res = await fetch(url, { headers: { "User-Agent": "glidepath-data-bot" } });
   if (!res.ok) throw new Error(`${indicator}: HTTP ${res.status}`);
   const body = await res.json();
@@ -62,6 +75,7 @@ const trailingMean = (series, n = 5) => {
 };
 
 async function main() {
+  await deriveCountries();
   console.log("Fetching World Bank indicators for", Object.keys(COUNTRIES).length, "countries…");
   const [gdp, gdpcap, pop] = await Promise.all([
     fetchIndicator(IND.gdp),
