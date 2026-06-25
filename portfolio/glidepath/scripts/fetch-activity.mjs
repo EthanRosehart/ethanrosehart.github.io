@@ -26,8 +26,10 @@ const __dirname = dirname(fileURLToPath(import.meta.url));
 const OUT = resolve(__dirname, "..", "data", "activity.json");
 
 const AIRPORTS = [
-  ["YYZ","CAN","CYYZ"],["YTZ","CAN","CYTZ"],["YOW","CAN","CYOW"],["YHM","CAN","CYHM"],
-  ["YQB","CAN","CYQB"],["YHZ","CAN","CYHZ"],["YKF","CAN","CYKF"],
+  // Canada — only airports with a real MONTHLY passenger source (StatCan
+  // 23-10-0312 screened passengers, 8 largest). The annual-only airports
+  // (YTZ/YHM/YQB/YKF) have no monthly pax feed and are intentionally omitted.
+  ["YYZ","CAN","CYYZ"],["YOW","CAN","CYOW"],["YHZ","CAN","CYHZ"],
   ["EXT","GBR","EGTE"],["NQY","GBR","EGHQ"],["INV","GBR","EGPE"],["RTM","NLD","EHRD"],
   ["FMM","DEU","EDJA"],["AAR","DNK","EKAH"],["GRZ","AUT","LOWG"],["KLU","AUT","LOWK"],
   ["SZG","AUT","LOWS"],["NAP","ITA","LIRN"],["WRO","POL","EPWR"],
@@ -75,16 +77,16 @@ const euMetric = {
    metric, and build a full memberId coordinate. Cubes:
      23-10-0253 passengers · 23-10-0254 cargo · 23-10-0008 movements
    ============================================================ */
-const STATCAN_PID = { pax: 23100253, cargo: 23100254, atm: 23100008 };
+// 23-10-0312 = screened passengers (monthly, 8 largest airports); 23-10-0008
+// = aircraft movements (monthly). No monthly per-airport cargo exists publicly.
+const STATCAN_PID = { pax: 23100312, atm: 23100008 };
 const STATCAN_NAME = {
-  YYZ: /pearson/i, YTZ: /billy bishop|city centre|toronto.*(island|city)/i, YOW: /ottawa/i,
-  YHM: /hamilton/i, YQB: /qu[ée]bec/i, YHZ: /halifax/i, YKF: /waterloo|kitchener/i,
+  YYZ: /pearson|toronto/i, YOW: /ottawa/i, YHZ: /halifax/i,
 };
-// preferred characteristic member per metric (total throughput, both directions)
+// preferred characteristic member per metric (total throughput where offered)
 const STATCAN_CHAR = {
-  pax:   /enplaned and deplaned|total.*passenger|passengers.*total/i,
-  cargo: /loaded and unloaded|total.*cargo|cargo.*total|freight/i,
-  atm:   /total itinerant|itinerant.*total|total movements|total/i,
+  pax: /screened|passenger|total/i,
+  atm: /total itinerant|itinerant.*total|total movements|total/i,
 };
 const _meta = {};
 async function statcanMeta(pid) {
@@ -137,9 +139,8 @@ async function statcanSeries(pid, coord) {
   return monthly;
 }
 const caMetric = {
-  pax:   async (iata) => statcanSeries(STATCAN_PID.pax,   await statcanCoord(STATCAN_PID.pax,   iata, "pax")),
-  cargo: async (iata) => statcanSeries(STATCAN_PID.cargo, await statcanCoord(STATCAN_PID.cargo, iata, "cargo")),
-  atm:   async (iata) => statcanSeries(STATCAN_PID.atm,   await statcanCoord(STATCAN_PID.atm,   iata, "atm")),
+  pax: async (iata) => statcanSeries(STATCAN_PID.pax, await statcanCoord(STATCAN_PID.pax, iata, "pax")),
+  atm: async (iata) => statcanSeries(STATCAN_PID.atm, await statcanCoord(STATCAN_PID.atm, iata, "atm")),
 };
 
 /* ============================================================ */
@@ -189,7 +190,11 @@ async function main() {
     }
   }
 
-  if (prev?.airports) for (const k of Object.keys(prev.airports)) if (!airports[k]) airports[k] = prev.airports[k];
+  // carry over only airports owned by the US/BTS fetcher; never resurrect a
+  // dropped or seed airport.
+  if (prev?.airports) for (const k of Object.keys(prev.airports)) {
+    if (!airports[k] && prev.airports[k]?.source === "bts") airports[k] = prev.airports[k];
+  }
 
   const out = {
     generatedAt: new Date().toISOString(),
