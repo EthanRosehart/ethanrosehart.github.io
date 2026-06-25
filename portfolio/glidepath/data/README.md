@@ -2,30 +2,56 @@
 
 The app runs as a **static site** (works on GitHub Pages). It never calls
 external APIs from the browser. Instead, a nightly GitHub Action fetches public
-data **server-side** and commits a JSON snapshot that the site serves.
+data **server-side** and commits JSON snapshots that the site serves. There is
+**no synthetic data** — an airport only appears if a public feed carries real
+monthly activity for it.
 
 ```
 ┌──────────────────────────┐     nightly cron (03:17 UTC)
-│ GitHub Action runner      │ ── fetch ──▶ World Bank Indicators API
-│ scripts/fetch-data.mjs    │ ◀── JSON ──   World Bank · Eurostat · StatCan
-│ scripts/fetch-activity.mjs│
-             │ git commit data/macro.json
+│ GitHub Action runner      │ ── fetch ──▶ OpenFlights · Eurostat · StatCan
+│ scripts/*.mjs + *.py      │ ◀── JSON ──   World Bank · (Prophet, server-side)
+             │ git commit data/*.json
              ▼
 ┌──────────────────────────┐
 │ Repo  →  GitHub Pages     │  (auto-redeploy on push)
-└────────────┬─────────────┘
-             │ same-origin fetch("data/macro.json" + "data/activity.json")
+             │ same-origin fetch("data/*.json")
              ▼
 ┌──────────────────────────┐
-│ Browser (index.html)      │  merges live values over built-in baselines;
-│ app.jsx loader            │  falls back to defaults if the file is missing
+│ Browser (index.html)      │  builds its airport catalogue from the snapshots;
+│ app.jsx loader            │  falls back to nothing if a file is missing
 └──────────────────────────┘
 ```
 
+The pipeline runs in this order (see `.github/workflows/refresh-data.yml`):
+`fetch-openflights` → `fetch-activity` → `fetch-bts` → `fetch-data` →
+`build-forecast`. Each step is best-effort and keeps the last good snapshot on
+failure.
+
 ## What's wired
 
+### Airport reference — `data/airports.json` (`scripts/fetch-openflights.mjs`)
+Fetches OpenFlights `airports.dat` (public CSV) and emits the **full** reference
+for every airport with both an IATA and ICAO code. `fetch-activity.mjs` uses it
+to map the ICAO codes the aviation feeds report back to IATA, then **trims** the
+file down to just the airports that carry data, so the browser load stays small.
+
+### Monthly activity — `data/activity.json` (`scripts/fetch-activity.mjs`)
+Real monthly **passengers / movements / cargo** by airport. **This is the series
+the forecasts run on.** The browser builds its entire airport catalogue from this
+file (enriched by `airports.json`); there is no hand-curated airport list.
+
+| Market | Source | Notes |
+|--------|--------|-------|
+| Europe | Eurostat `avia_paoa` (PAS_CRD pax, CAF_PAS flights) + `avia_gooa` (FRM_LD_NLD cargo, tonnes) | A single all-airports pull is rejected with HTTP 413 (async). The script enumerates reporting airports with a small `lastTimePeriod` call, ranks by recent volume, and batch-fetches full series for the busiest ~70 in `rep_airp` chunks, splitting any chunk that still trips the 413 guard. |
+| Canada | StatCan WDS — 23-10-0312 (screened pax) + 23-10-0008 (movements) | The eight CATSA Class-1 airports, resolved by airport name against the cube metadata. |
+| US | BTS T-100 (`scripts/fetch-bts.mjs`) | Not currently wired — the Socrata catalog exposes no monthly segment table. US airports are simply absent (no modeling). |
+
+Eurostat airport codes are `<geo>_<ICAO>` (e.g. `ES_LEMD`, `AT_LOWG`); the geo
+prefix gives the country (`EL`→GR, `UK`→GB, else ISO-3166 alpha-2). The country,
+ISO codes, region and display name ride on each airport in `activity.json`.
+
 ### Macro drivers — `data/macro.json` (`scripts/fetch-data.mjs`)
-Pulls three World Bank indicators for every country in the airport set:
+Pulls three World Bank indicators for every country present in `activity.json`:
 
 | Field    | World Bank indicator   | Reduction                       | Feeds            |
 |----------|------------------------|---------------------------------|------------------|
@@ -33,63 +59,35 @@ Pulls three World Bank indicators for every country in the airport set:
 | `gdpcap` | `NY.GDP.PCAP.KD.ZG`    | trailing 5-yr mean              | GDP/capita lever |
 | `pop`    | `SP.POP.TOTL`          | latest year-over-year % change  | population lever |
 
-These overwrite `MACRO[cc].gdpcap` and `MACRO[cc].pop` in `data.jsx`, which set
-the default scenario for the long-term elasticity model.
+The loader overlays these over the `MACRO` table in `data.jsx`, creating a
+default entry (`GP_ensureMacro`) for any country not already listed, so the
+long-term elasticity lever reflects live macro for every catalogue airport.
 
-### Airport reference — `data/airports.json` (`scripts/fetch-openflights.mjs`)
-Fetches the OpenFlights `airports.dat` (public CSV on GitHub) and filters it to
-the Glidepath set. The app enriches its catalogue (ICAO, lat/lon, elevation,
-timezone) from this authoritative source on load. OpenFlights is a static
-dataset, not a live API — widen the set by adding IATA codes to `WANT` (and an
-`ANCHOR` row in `data.jsx` so the airport can forecast).
+### Short-term forecasts — `data/forecast.json` (`scripts/build-forecast.py`)
+Meta **Prophet** (additive trend + multiplicative yearly seasonality + country
+public holidays, via the `holidays` package) fit **server-side** per airport per
+metric on the real `activity.json` series. The browser renders these directly —
+no forecasting happens client-side. Each airport's ISO-2 country (for the holiday
+calendar) is read from `activity.json`.
 
-### GDP projections — `data/oecd.json` (`scripts/fetch-oecd.mjs`)
-Pulls forward-looking real GDP-growth **projections** from the OECD Economic
-Outlook (SDMX API). These set the **GDP-growth lever default** in the long-term
-model — `defaultScenario` prefers `MACRO[cc].gdpcapProj` (OECD projection) over
-the World Bank historical mean. OECD renames its SDMX dataflow between releases;
-if a run returns nothing, update `DATAFLOW`/`KEY` in the script (it logs what it
-parsed, and keeps the last good snapshot on failure).
-
-### Monthly passengers — `data/activity.json` (`scripts/fetch-activity.mjs`)
-Real monthly passenger counts by airport. **This is the series the forecasts run
-on** — when an airport is `observed`, `buildHistory` in `data.jsx` replaces its
-synthetic passengers with these values, and both the short-term ML and long-term
-elasticity models fit the real data.
-
-| Market           | Source                                            | Coverage              |
-|------------------|---------------------------------------------------|-----------------------|
-| Europe (11 apts) | Eurostat `avia_paoc` (PAS_CRD, monthly)           | live, no key          |
-| Canada (6 apts)  | StatCan WDS — Table 23-10-0253                     | live, coordinate map  |
-| US (4 apts)      | none (no single clean public monthly feed)        | modeled               |
-
-Eurostat airport codes are `<geo>_<ICAO>` (e.g. `UK_EGTE`, `AT_LOWG`). The
-StatCan path resolves each airport via the `STATCAN_COORD` map in the script —
-verify the member ids against the cube metadata if you add airports.
-
-> Income elasticity, tourism and fuel remain model assumptions (no clean single
-> public series). Passengers and macro drivers are the wired feeds.
+> Income elasticity, tourism and fuel remain model assumptions in the long-term
+> lever (no clean single public series). Passengers, movements, cargo and macro
+> drivers are the wired real feeds.
 
 ## Run it locally
 ```bash
-node scripts/fetch-openflights.mjs # airports.json (OpenFlights reference)
+node scripts/fetch-openflights.mjs # airports.json (OpenFlights full reference)
+node scripts/fetch-activity.mjs    # activity.json (Eurostat + StatCan) + trims airports.json
+node scripts/fetch-bts.mjs         # activity.json (US BTS — currently a no-op)
 node scripts/fetch-data.mjs        # macro.json    (World Bank, no key)
-node scripts/fetch-oecd.mjs        # oecd.json     (OECD Economic Outlook)
-node scripts/fetch-activity.mjs    # activity.json (Eurostat + StatCan)
+python scripts/build-forecast.py   # forecast.json (Meta Prophet; pip install prophet holidays pandas)
 ```
-Node 20+. Each rewrites its snapshot under `data/`. Commit the result, or let
-the Action do it. If a feed is down, the activity/OECD scripts keep the last
-good series per airport rather than dropping it.
+Node 20+. Each rewrites its snapshot under `data/`. Commit the result, or let the
+Action do it.
 
 ## Deploy on GitHub Pages
 1. Push this folder to a repo.
 2. Settings → Pages → deploy from branch (root).
 3. Settings → Actions → General → Workflow permissions → **Read and write**
    (so the bot can commit the nightly snapshot).
-4. Actions tab → "Refresh macro data" → **Run workflow** to seed the first pull.
-
-## Add more live feeds later
-US aviation (BTS T-100) is the main unwired series — US airports stay modeled.
-Wire it the same way: add a fetch to a script under `scripts/`, write a file
-under `data/`, and read it in `app.jsx`. The browser contract never changes —
-it only ever reads committed JSON.
+4. Actions tab → "Refresh data" → **Run workflow** to seed the first pull.
