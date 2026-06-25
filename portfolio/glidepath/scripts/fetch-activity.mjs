@@ -63,20 +63,28 @@ async function eurostat(dataset, unit, traMeas, rep) {
   return monthly;
 }
 const euMetric = {
-  pax:   (rep) => eurostat("avia_paoc", "PAS", "PAS_CRD", rep),
-  cargo: (rep) => eurostat("avia_gooc", "T", "FRM_LD_NLD", rep),
+  pax:   (rep) => eurostat("avia_paoa", "PAS", "PAS_CRD", rep),
+  cargo: (rep) => eurostat("avia_gooa", "T", "FRM_LD_NLD", rep),
+  atm:   (rep) => eurostat("avia_paoa", "FLIGHT", "CAF_PAS", rep),
 };
 
 /* ============================================================
    STATISTICS CANADA — WDS REST
+   Resolve the airport member by name across whichever dimension
+   holds airports, choose the right characteristic member per
+   metric, and build a full memberId coordinate. Cubes:
+     23-10-0253 passengers · 23-10-0254 cargo · 23-10-0008 movements
    ============================================================ */
 const STATCAN_PID = { pax: 23100253, cargo: 23100254, atm: 23100008 };
-// proven passenger geography member ids (coordinate dim 1) — no regression.
-const STATCAN_PAX_GEO = { YTZ: 11, YOW: 10, YHZ: 8, YQB: 9, YHM: 6, YKF: 5 };
-// name patterns to resolve members dynamically (YYZ pax + all cargo/movements)
 const STATCAN_NAME = {
   YYZ: /pearson/i, YTZ: /billy bishop|city centre|toronto.*(island|city)/i, YOW: /ottawa/i,
-  YHM: /hamilton/i, YQB: /qu[ée]bec/i, YHZ: /halifax/i, YKF: /waterloo|kitchener|region of waterloo/i,
+  YHM: /hamilton/i, YQB: /qu[ée]bec/i, YHZ: /halifax/i, YKF: /waterloo|kitchener/i,
+};
+// preferred characteristic member per metric (total throughput, both directions)
+const STATCAN_CHAR = {
+  pax:   /enplaned and deplaned|total.*passenger|passengers.*total/i,
+  cargo: /loaded and unloaded|total.*cargo|cargo.*total|freight/i,
+  atm:   /total itinerant|itinerant.*total|total movements|total/i,
 };
 const _meta = {};
 async function statcanMeta(pid) {
@@ -89,18 +97,30 @@ async function statcanMeta(pid) {
   const js = await res.json();
   const obj = js?.[0]?.object;
   if (!obj) throw new Error(`meta ${pid}: ${js?.[0]?.status || "no object"}`);
-  const geo = (obj.dimension || []).find((d) => /geogra|airport/i.test(d.dimensionNameEn || "")) || obj.dimension?.[0];
-  const members = (geo?.member || []).map((m) => ({ id: m.memberId, name: m.memberNameEn || "" }));
-  console.log(`    [meta ${pid}] ${members.length} members; e.g. ${members.slice(0,3).map(m=>`${m.id}:${m.name}`).join(" | ")}`);
-  return (_meta[pid] = members);
+  const dims = (obj.dimension || []).map((d) => ({
+    name: d.dimensionNameEn || "",
+    members: (d.member || []).map((m) => ({ id: m.memberId, name: m.memberNameEn || "" })),
+  }));
+  dims.forEach((d, i) => console.log(`    [meta ${pid}] dim${i} "${d.name}" ${d.members.length}m e.g. ${d.members.slice(0, 4).map((m) => `${m.id}:${m.name}`).join(" | ")}`));
+  return (_meta[pid] = dims);
 }
-async function statcanCoordByName(pid, iata) {
+async function statcanCoord(pid, iata, metric) {
+  const dims = await statcanMeta(pid);
   const re = STATCAN_NAME[iata];
-  if (!re) throw new Error(`no name pattern for ${iata}`);
-  const members = await statcanMeta(pid);
-  const hit = members.find((m) => re.test(m.name));
-  if (!hit) throw new Error(`no member name match in ${pid} (${members.length} members)`);
-  return `${hit.id}.0.0.0.0.0.0.0.0.0`;
+  // find which dimension holds the airport, and its member
+  let geoDim = -1, geoMember = null;
+  dims.forEach((d, i) => { const hit = d.members.find((m) => re.test(m.name)); if (hit) { geoDim = i; geoMember = hit; } });
+  if (!geoMember) throw new Error(`no airport member for ${iata} in ${pid}`);
+  const charRe = STATCAN_CHAR[metric];
+  const parts = dims.map((d, i) => {
+    if (i === geoDim) return geoMember.id;
+    const pref = d.members.find((m) => charRe.test(m.name));
+    return (pref || d.members[0]).id;          // prefer total throughput, else first
+  });
+  while (parts.length < 10) parts.push(0);
+  const coord = parts.join(".");
+  console.log(`    [coord ${pid}/${iata}/${metric}] ${coord} (airport "${geoMember.name}")`);
+  return coord;
 }
 async function statcanSeries(pid, coord) {
   const res = await fetch("https://www150.statcan.gc.ca/t1/wds/rest/getDataFromCubePidCoordAndLatestNPeriods", {
@@ -117,14 +137,9 @@ async function statcanSeries(pid, coord) {
   return monthly;
 }
 const caMetric = {
-  pax: async (iata) => {
-    const coord = STATCAN_PAX_GEO[iata] != null
-      ? `${STATCAN_PAX_GEO[iata]}.0.0.0.0.0.0.0.0.0`
-      : await statcanCoordByName(STATCAN_PID.pax, iata);
-    return statcanSeries(STATCAN_PID.pax, coord);
-  },
-  cargo: async (iata) => statcanSeries(STATCAN_PID.cargo, await statcanCoordByName(STATCAN_PID.cargo, iata)),
-  atm:   async (iata) => statcanSeries(STATCAN_PID.atm,   await statcanCoordByName(STATCAN_PID.atm,   iata)),
+  pax:   async (iata) => statcanSeries(STATCAN_PID.pax,   await statcanCoord(STATCAN_PID.pax,   iata, "pax")),
+  cargo: async (iata) => statcanSeries(STATCAN_PID.cargo, await statcanCoord(STATCAN_PID.cargo, iata, "cargo")),
+  atm:   async (iata) => statcanSeries(STATCAN_PID.atm,   await statcanCoord(STATCAN_PID.atm,   iata, "atm")),
 };
 
 /* ============================================================ */
