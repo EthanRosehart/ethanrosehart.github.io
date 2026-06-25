@@ -44,9 +44,17 @@ jobs:
         run: node portfolio/glidepath/scripts/fetch-oecd.mjs
         continue-on-error: true   # OECD dataflow ids shift between releases
 
-      - name: Fetch monthly passengers (Eurostat + StatCan)
+      - name: Fetch monthly activity — EU + Canada (Eurostat + StatCan)
         run: node portfolio/glidepath/scripts/fetch-activity.mjs
         continue-on-error: true   # a feed outage keeps the last good snapshot
+
+      - name: Fetch monthly activity — US (BTS T-100)
+        run: node portfolio/glidepath/scripts/fetch-bts.mjs
+        continue-on-error: true
+
+      - name: Fetch monthly activity — UK (CAA via data.gov.uk)
+        run: node portfolio/glidepath/scripts/fetch-caa.mjs
+        continue-on-error: true
 
       - name: Set up Python
         uses: actions/setup-python@v5

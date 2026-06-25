@@ -30,9 +30,10 @@ const AIRPORTS = [
   // 23-10-0312 screened passengers, 8 largest). The annual-only airports
   // (YTZ/YHM/YQB/YKF) have no monthly pax feed and are intentionally omitted.
   ["YYZ","CAN","CYYZ"],["YOW","CAN","CYOW"],["YHZ","CAN","CYHZ"],
-  ["EXT","GBR","EGTE"],["NQY","GBR","EGHQ"],["INV","GBR","EGPE"],["RTM","NLD","EHRD"],
-  ["FMM","DEU","EDJA"],["AAR","DNK","EKAH"],["GRZ","AUT","LOWG"],["KLU","AUT","LOWK"],
-  ["SZG","AUT","LOWS"],["NAP","ITA","LIRN"],["WRO","POL","EPWR"],
+  // UK regionals (EXT/NQY/INV) are handled by fetch-caa.mjs — Eurostat data
+  // ends 2020-10 post-Brexit, so they are not fetched here.
+  ["RTM","NLD","EHRD"],["FMM","DEU","EDJA"],["AAR","DNK","EKAH"],["GRZ","AUT","LOWG"],
+  ["KLU","AUT","LOWK"],["SZG","AUT","LOWS"],["NAP","ITA","LIRN"],["WRO","POL","EPWR"],
 ];
 const EU_GEO = { GBR:"UK", NLD:"NL", DEU:"DE", DNK:"DK", AUT:"AT", ITA:"IT", POL:"PL" };
 const UA = { "User-Agent": "glidepath-data-bot" };
