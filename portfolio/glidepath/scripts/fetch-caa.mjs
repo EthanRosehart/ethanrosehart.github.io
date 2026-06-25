@@ -56,18 +56,36 @@ async function probeDatastore(id) {
   return r;
 }
 
+async function probeCsv(id) {
+  // resource_show -> download the CSV file -> log header + sample rows so we
+  // can write a parser from the real schema next iteration.
+  let meta; try { meta = await ckan("resource_show", `id=${id}`); }
+  catch (e) { console.warn(`  [caa] resource_show ${id} failed:`, e.message); return; }
+  console.log(`  [caa] csv resource name="${meta.name}" fmt=${meta.format} url=${meta.url}`);
+  if (!meta.url) return;
+  let text; try { const r = await fetch(meta.url, { headers: UA }); if (!r.ok) throw new Error(`HTTP ${r.status}`); text = await r.text(); }
+  catch (e) { console.warn(`  [caa] csv download failed:`, e.message); return; }
+  const lines = text.split(/\r?\n/);
+  console.log(`  [caa] csv ${lines.length} lines; header: ${lines[0]}`);
+  for (let i = 1; i <= 3 && i < lines.length; i++) console.log(`  [caa] row${i}: ${lines[i].slice(0, 220)}`);
+  // does any row mention our airports?
+  const hit = lines.find((l) => /exeter|newquay|inverness/i.test(l));
+  console.log(hit ? `  [caa] sample match: ${hit.slice(0, 220)}` : "  [caa] no Exeter/Newquay/Inverness rows found in this CSV");
+}
+
 async function main() {
   let data; try { data = JSON.parse(await readFile(OUT, "utf8")); } catch { data = { airports: {} }; }
   data.airports = data.airports || {};
 
   const candidates = await discover();
-  // probe the first couple of datastore-backed candidates to learn schema
-  const ds = candidates.filter((c) => c.datastore).slice(0, 3);
-  if (!ds.length) console.warn("  [caa] no datastore-backed resources found — UK needs a CSV-download parser (next iteration)");
-  for (const c of ds) await probeDatastore(c.id);
+  // probe CSV-file candidates (data.gov.uk CAA has no queryable datastore) to
+  // learn the schema; the "UK Airport Statistics" CSV is the prime candidate.
+  const csvs = candidates.filter((c) => /csv/i.test(c.format || "")).slice(0, 2);
+  if (!csvs.length) console.warn("  [caa] no CSV candidates found");
+  for (const c of csvs) await probeCsv(c.id);
 
-  // NOTE: actual extraction wired once the schema is confirmed from the logs
-  // above. UK airports stay absent until then (no synthetic fallback).
+  // Extraction wired once schema is confirmed from the logs above. UK stays
+  // absent until then (no synthetic fallback).
   await writeFile(OUT, JSON.stringify(data) + "\n", "utf8");
   console.log("CAA discovery done.");
 }
