@@ -277,5 +277,5 @@ Object.assign(window, {
   GP_forecastFor:forecastFor, GP_hasForecast:hasForecast,
   GP_availableMetrics:availableMetrics, GP_liveAirports:liveAirports,
   GP_fmt:fmt, GP_setActivity:setActivity, GP_activityFor:activityFor, GP_setForecast:setForecast,
-  GP_setReference:setReference, GP_rebuildAirports:rebuildAirports,
+  GP_setReference:setReference, GP_rebuildAirports:rebuildAirports, GP_ensureMacro:ensureMacro,
 });

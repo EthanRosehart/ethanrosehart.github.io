@@ -102,8 +102,8 @@ function App(){
       .then(j => {
         if (!alive || !j || !j.countries) return;
         Object.keys(j.countries).forEach(cc => {
-          if (!MACRO[cc]) return;
           const c = j.countries[cc];
+          GP_ensureMacro(cc, c.name);     // create defaults for new countries
           if (c.gdp != null)    MACRO[cc].gdp = c.gdp;
           if (c.gdpcap != null) MACRO[cc].gdpcap = c.gdpcap;
           if (c.pop != null)    MACRO[cc].pop = c.pop;
