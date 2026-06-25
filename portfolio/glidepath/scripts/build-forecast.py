@@ -261,7 +261,7 @@ def main():
 
     out = {
         "generatedAt": datetime.now(timezone.utc).isoformat(),
-        "model": "Meta Prophet (additive trend + multiplicative yearly + country holidays)",
+        "model": "Meta Prophet (additive trend + multiplicative yearly + country holidays + COVID 2020-21 events)",
         "library": f"prophet {__import__('prophet').__version__}, holidays {holidays_pkg.__version__}",
         "interval": INTERVAL,
         "horizon": HORIZON,

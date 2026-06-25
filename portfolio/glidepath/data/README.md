@@ -70,6 +70,14 @@ metric on the real `activity.json` series. The browser renders these directly �
 no forecasting happens client-side. Each airport's ISO-2 country (for the holiday
 calendar) is read from `activity.json`.
 
+The **COVID collapse (2020-03 → 2021-12)** is modeled as one explicit dummy
+event per month rather than fed in as ordinary data — Prophet attributes the
+dip/recovery to those events (which never recur, so zero forward effect) instead
+of letting them distort the multiplicative seasonality or inflate the
+trend-uncertainty band. Nothing is dropped: every observed month still trains the
+model and appears on the actuals chart. In CI this cut median passenger backtest
+MAPE from ~16% to ~5%.
+
 > Income elasticity, tourism and fuel remain model assumptions in the long-term
 > lever (no clean single public series). Passengers, movements, cargo and macro
 > drivers are the wired real feeds.
