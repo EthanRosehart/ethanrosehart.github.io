@@ -56,21 +56,22 @@ async function probeDatastore(id) {
   return r;
 }
 
-async function probeCsv(id) {
-  // resource_show -> download the CSV file -> log header + sample rows so we
-  // can write a parser from the real schema next iteration.
-  let meta; try { meta = await ckan("resource_show", `id=${id}`); }
-  catch (e) { console.warn(`  [caa] resource_show ${id} failed:`, e.message); return; }
-  console.log(`  [caa] csv resource name="${meta.name}" fmt=${meta.format} url=${meta.url}`);
-  if (!meta.url) return;
-  let text; try { const r = await fetch(meta.url, { headers: UA }); if (!r.ok) throw new Error(`HTTP ${r.status}`); text = await r.text(); }
-  catch (e) { console.warn(`  [caa] csv download failed:`, e.message); return; }
+async function probeCsv(c) {
+  // download the CSV directly from the resource url captured in package_search
+  // (resource_show returns 403 on data.gov.uk). Log header + sample rows.
+  console.log(`  [caa] csv ds="${c.dataset}" url=${c.url}`);
+  if (!c.url) return;
+  let text;
+  for (const ua of [UA, { "User-Agent": "Mozilla/5.0 (compatible; glidepath/1.0)" }]) {
+    try { const r = await fetch(c.url, { headers: ua, redirect: "follow" }); if (!r.ok) throw new Error(`HTTP ${r.status}`); text = await r.text(); break; }
+    catch (e) { console.warn(`  [caa] download failed (${e.message})`); }
+  }
+  if (!text) return;
   const lines = text.split(/\r?\n/);
-  console.log(`  [caa] csv ${lines.length} lines; header: ${lines[0]}`);
-  for (let i = 1; i <= 3 && i < lines.length; i++) console.log(`  [caa] row${i}: ${lines[i].slice(0, 220)}`);
-  // does any row mention our airports?
+  console.log(`  [caa] ${lines.length} lines; header: ${lines[0].slice(0, 240)}`);
+  for (let i = 1; i <= 3 && i < lines.length; i++) console.log(`  [caa] row${i}: ${lines[i].slice(0, 240)}`);
   const hit = lines.find((l) => /exeter|newquay|inverness/i.test(l));
-  console.log(hit ? `  [caa] sample match: ${hit.slice(0, 220)}` : "  [caa] no Exeter/Newquay/Inverness rows found in this CSV");
+  console.log(hit ? `  [caa] match: ${hit.slice(0, 240)}` : "  [caa] no Exeter/Newquay/Inverness rows in this CSV");
 }
 
 async function main() {
@@ -78,14 +79,10 @@ async function main() {
   data.airports = data.airports || {};
 
   const candidates = await discover();
-  // probe CSV-file candidates (data.gov.uk CAA has no queryable datastore) to
-  // learn the schema; the "UK Airport Statistics" CSV is the prime candidate.
-  const csvs = candidates.filter((c) => /csv/i.test(c.format || "")).slice(0, 2);
-  if (!csvs.length) console.warn("  [caa] no CSV candidates found");
-  for (const c of csvs) await probeCsv(c.id);
+  const csvs = candidates.filter((c) => /csv/i.test(c.format || "") && c.url).slice(0, 3);
+  if (!csvs.length) console.warn("  [caa] no CSV candidates with a url found");
+  for (const c of csvs) await probeCsv(c);
 
-  // Extraction wired once schema is confirmed from the logs above. UK stays
-  // absent until then (no synthetic fallback).
   await writeFile(OUT, JSON.stringify(data) + "\n", "utf8");
   console.log("CAA discovery done.");
 }

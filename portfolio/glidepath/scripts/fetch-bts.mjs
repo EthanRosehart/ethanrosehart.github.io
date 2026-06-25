@@ -20,12 +20,19 @@ const LB_TO_T = 0.000453592;
 async function jget(url) { const r = await fetch(url, { headers: UA }); if (!r.ok) throw new Error(`HTTP ${r.status}`); return r.json(); }
 
 async function discover() {
-  const cat = `https://api.us.socrata.com/api/catalog/v1?domains=data.bts.gov&only=dataset&limit=40&q=${encodeURIComponent("T-100 segment")}`;
+  const cat = `https://api.us.socrata.com/api/catalog/v1?domains=data.bts.gov&only=dataset&limit=80&q=${encodeURIComponent("T-100 segment")}`;
   let results = [];
-  try { results = (await jget(cat)).results || []; } catch (e) { console.warn("  [bts] catalog failed:", e.message); }
-  const cands = results.map((x) => ({ id: x.resource?.id, name: x.resource?.name })).filter((c) => c.id && /t-?100|segment/i.test(c.name));
-  cands.slice(0, 12).forEach((c) => console.log(`  [bts] cand ${c.id} "${c.name}"`));
-  return cands;
+  try { results = (await jget(cat)).results || []; console.log(`  [bts] catalog returned ${results.length} datasets`); }
+  catch (e) { console.warn("  [bts] catalog failed:", e.message); }
+  const all = results.map((x) => ({ id: x.resource?.id, name: x.resource?.name || "" })).filter((c) => c.id);
+  all.slice(0, 20).forEach((c) => console.log(`  [bts] ds ${c.id} "${c.name}"`));
+  // probe order: known ids first, then anything that looks like T-100/segment, then the rest
+  const known = ["3xj5-daif", "ar8a-asfm", "9eyi-a9zk"];
+  const looks = all.filter((c) => /t-?100|segment|carrier|traffic/i.test(c.name));
+  const seen = new Set();
+  const ordered = [...known.map((id) => ({ id, name: "(known)" })), ...looks, ...all]
+    .filter((c) => (seen.has(c.id) ? false : (seen.add(c.id), true)));
+  return ordered;
 }
 
 function mapCols(keys) {
@@ -41,7 +48,7 @@ function mapCols(keys) {
 }
 
 async function pickDataset(cands) {
-  for (const c of cands) {
+  for (const c of cands.slice(0, 25)) {
     let keys = [];
     try { const rows = await jget(`https://data.bts.gov/resource/${c.id}.json?$limit=1`); keys = Object.keys(rows[0] || {}); }
     catch { continue; }
