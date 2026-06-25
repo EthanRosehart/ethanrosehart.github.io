@@ -100,9 +100,9 @@ function LineChart({ labels, series, band, markerIndex, height=260, yFmt, yFmtRi
         {gl.map((g,i)=> (
           <g key={i}>
             <line x1={padL} x2={w-padR} y1={yL(g)} y2={yL(g)} stroke="var(--line)" strokeWidth="1"/>
-            <text x={padL-10} y={yL(g)+4} textAnchor="end" fontSize="10.5" fill="var(--faint)" fontFamily="var(--mono)">{yf(g)}</text>
+            <text x={padL-10} y={yL(g)+4} textAnchor="end" fontSize="11" fill="var(--faint)" fontFamily="var(--mono)">{yf(g)}</text>
             {hasRight && (
-              <text x={w-padR+8} y={yL(g)+4} textAnchor="start" fontSize="10.5" fill={rcol} fontFamily="var(--mono)">
+              <text x={w-padR+8} y={yL(g)+4} textAnchor="start" fontSize="11" fill={rcol} fontFamily="var(--mono)">
                 {yfR(R.bot + (R.top-R.bot)*i/ticks)}
               </text>
             )}
@@ -112,7 +112,7 @@ function LineChart({ labels, series, band, markerIndex, height=260, yFmt, yFmtRi
         {markerIndex!=null && markerIndex<n && (
           <g>
             <line x1={x(markerIndex)} x2={x(markerIndex)} y1={padT} y2={padT+innerH} stroke="var(--pink-line)" strokeWidth="1" strokeDasharray="3 4"/>
-            <text x={x(markerIndex)+6} y={padT+11} fontSize="9.5" fill="var(--pink-2)" fontFamily="var(--mono)" letterSpacing="0.1em">FORECAST →</text>
+            <text x={x(markerIndex)+6} y={padT+11} fontSize="10" fill="var(--pink-2)" fontFamily="var(--mono)" letterSpacing="0.1em">FORECAST →</text>
           </g>
         )}
         {/* confidence band (left axis) */}
@@ -187,7 +187,7 @@ function BarChart({ labels, series, height=240, stacked=false, yFmt, tipFmt }){
       <svg width={w} height={H} style={{display:"block"}}>
         {gl.map((g,i)=>(<g key={i}>
           <line x1={padL} x2={w-padR} y1={y(g)} y2={y(g)} stroke="var(--line)"/>
-          <text x={padL-10} y={y(g)+4} textAnchor="end" fontSize="10.5" fill="var(--faint)" fontFamily="var(--mono)">{yf(g)}</text>
+          <text x={padL-10} y={y(g)+4} textAnchor="end" fontSize="11" fill="var(--faint)" fontFamily="var(--mono)">{yf(g)}</text>
         </g>))}
         {labels.map((lb,i)=>{
           const gx = padL + i*groupW;
@@ -204,7 +204,7 @@ function BarChart({ labels, series, height=240, stacked=false, yFmt, tipFmt }){
                   return <rect key={si} x={bx} y={y(v)} width={bw*0.86} height={Math.max(0,innerH-(y(v)-padT))} fill={se.color} rx="2"/>;
                 }
               })}
-              <text x={gx+groupW/2} y={H-10} textAnchor="middle" fontSize="10.5" fill="var(--faint)" fontFamily="var(--mono)">{lb}</text>
+              <text x={gx+groupW/2} y={H-10} textAnchor="middle" fontSize="11" fill="var(--faint)" fontFamily="var(--mono)">{lb}</text>
             </g>
           );
         })}

@@ -33,6 +33,7 @@ function LongTerm({ airport, history, scenario, go }){
 
   return (
     <div className="content fade-in">
+      <DataCaveat airport={airport}/>
       <div className="grid g-4" style={{marginBottom:16}}>
         <KPI accent label={lt.endYear+" passengers"} value={GP_fmt.k1(end.pax)} delta={GP_fmt.pct(lt.cagr)+" CAGR"} deltaDir="up" sub={"from "+GP_fmt.k1(start.pax)+" in "+lt.baseYear}/>
         <KPI label="Demand growth" value={GP_fmt.pct(lt.gDemand)} sub="annual, blended drivers" sparkColor="var(--cyan)"/>

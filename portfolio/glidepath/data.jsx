@@ -117,6 +117,18 @@ function activityFor(iata){
 /* airports we can actually show — real passenger data present */
 function liveAirports(){ return AIRPORTS.filter(a => availableMetrics(a.iata).includes("pax")); }
 
+/* human-readable name for a raw activity source key (e.g. "statcan") */
+function sourceLabel(src){
+  const k = (src||"").split(":")[0].toLowerCase();
+  return ({ eurostat:"Eurostat", statcan:"Statistics Canada", bts:"US BTS" })[k]
+    || (k ? k[0].toUpperCase()+k.slice(1) : "public");
+}
+/* short badge code for a source — drives the connect-step source icon */
+function sourceBadge(src){
+  const k = (src||"").split(":")[0].toLowerCase();
+  return ({ eurostat:"AVIA", statcan:"CAN", bts:"BTS" })[k] || "AVIA";
+}
+
 /* ============================================================
    PROPHET FORECASTS  (data/forecast.json, precomputed nightly)
    iata -> metric -> { mape, seasonal12, holidays, forecast[] }
@@ -276,6 +288,7 @@ Object.assign(window, {
   GP_longTerm:longTermForecast, GP_defaultScenario:defaultScenario,
   GP_forecastFor:forecastFor, GP_hasForecast:hasForecast,
   GP_availableMetrics:availableMetrics, GP_liveAirports:liveAirports,
+  GP_sourceLabel:sourceLabel, GP_sourceBadge:sourceBadge,
   GP_fmt:fmt, GP_setActivity:setActivity, GP_activityFor:activityFor, GP_setForecast:setForecast,
   GP_setReference:setReference, GP_rebuildAirports:rebuildAirports, GP_ensureMacro:ensureMacro,
 });

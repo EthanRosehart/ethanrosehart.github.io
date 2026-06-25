@@ -125,9 +125,12 @@ function ConnectData({ airport, onDone, alreadyDone, macroMeta, actMeta, ofMeta 
       <div className="grid" style={{gap:12, marginBottom:24}}>
         {SOURCES.map((s,i)=>{
           const p = progress[i], ok = p>=100;
+          // the aviation feed badge reflects the actual provider for this
+          // gateway — AVIA (Eurostat), CAN (Statistics Canada), BTS (US DOT)
+          const ico = s.kind==="activity" && act ? GP_sourceBadge(act.source) : s.abbr;
           return (
             <div key={s.id} className={"src-row"+(ok?" connected":"")}>
-              <div className="src-ico">{s.abbr}</div>
+              <div className="src-ico">{ico}</div>
               <div style={{flex:1, minWidth:0}}>
                 <div style={{display:"flex", alignItems:"center", gap:10}}>
                   <span style={{fontSize:14.5, fontWeight:600}}>{s.name}</span>
@@ -140,7 +143,7 @@ function ConnectData({ airport, onDone, alreadyDone, macroMeta, actMeta, ofMeta 
                     ? <span>{of.icao} · {of.lat!=null?of.lat.toFixed(3):"—"}, {of.lon!=null?of.lon.toFixed(3):"—"} · verified against {ofMeta?ofMeta.count:""} reference airports</span>
                     : s.kind==="activity" && ok && act
                     ? (act.observed
-                        ? <span>Observed via <b style={{color:"var(--cyan)"}}>{act.source.split(":")[0]}</b> · <b style={{color:"var(--cyan)"}}>{act.months}</b> months of passengers{act.latest?` · to ${act.latest}`:""}</span>
+                        ? <span>Observed via <b style={{color:"var(--cyan)"}}>{GP_sourceLabel(act.source)}</b> · <b style={{color:"var(--cyan)"}}>{act.months}</b> months of passengers{act.latest?` · to ${act.latest}`:""}</span>
                         : <span>No public monthly feed for {airport.iata} — series reconstructed from anchors</span>)
                     : s.desc}
                 </div>
@@ -164,6 +167,8 @@ function ConnectData({ airport, onDone, alreadyDone, macroMeta, actMeta, ofMeta 
         })}
       </div>
 
+      {done && <DataCaveat airport={airport} style={{marginBottom:16}}/>}
+
       <div className="panel panel-pad confirm-bar" style={{display:"flex", alignItems:"center", justifyContent:"space-between", gap:20,
         borderColor: done?"var(--pink-line)":"var(--line)", background: done?"var(--pink-soft)":"var(--bg-1)"}}>
         <div style={{display:"flex",alignItems:"center",gap:14}}>
@@ -173,7 +178,7 @@ function ConnectData({ airport, onDone, alreadyDone, macroMeta, actMeta, ofMeta 
           </span>
           <div>
             <div style={{fontWeight:600, fontSize:15}}>{done ? (act && act.observed ? `Dataset ready — ${act.months} months of observed passengers` : "Dataset ready — 132 months assembled") : "Reconciling feeds…"}</div>
-            <div className="air-meta" style={{marginTop:3}}>{done ? (act && act.observed ? `${act.source.split(":")[0]} passengers drive the forecasts · movements, seats & cargo aligned to ${airport.iata}` : "PAX · ATM · cargo · seats · macro drivers, all aligned to "+airport.iata) : "Cross-checking units, gaps and outliers"}</div>
+            <div className="air-meta" style={{marginTop:3}}>{done ? (act && act.observed ? `${GP_sourceLabel(act.source)} passengers drive the forecasts · movements, seats & cargo aligned to ${airport.iata}` : "PAX · ATM · cargo · seats · macro drivers, all aligned to "+airport.iata) : "Cross-checking units, gaps and outliers"}</div>
           </div>
         </div>
         <button className="btn btn-primary btn-lg" disabled={!done} onClick={onDone}>Build forecast {Ico.arrow}</button>
