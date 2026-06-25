@@ -1,15 +1,28 @@
 #!/usr/bin/env node
 /* ============================================================
- * fetch-activity.mjs — Glidepath monthly-passenger snapshot
+ * fetch-activity.mjs — Glidepath monthly activity snapshot
  *
- * Runs on a GitHub Actions runner (Node 20+), server-side, so no
- * browser CORS limits. Pulls real monthly passenger counts by
- * airport and writes data/activity.json. The app reads that file
- * same-origin and runs its forecasts on the observed series.
+ * Pulls EVERY airport our public sources expose monthly data for —
+ * no hand-curated airport list. Writes the per-metric shape into
+ * data/activity.json:
+ *   airports[IATA] = { observed, source, rep_airp, country(ISO2),
+ *                      cc(ISO3), countryName, region, name, city,
+ *                      icao, lat, lon, months, latest,
+ *                      series:{ pax:{"YYYY-MM":n}, atm:{...}, cargo:{...} },
+ *                      monthly:<alias of series.pax> }
  *
- *   • European airports  → Eurostat  avia_paoc  (no key)
- *   • Canadian airports  → Statistics Canada WDS (Table 23-10-0253)
- *   • US airports        → left modeled (no single clean public feed)
+ *   • Europe → Eurostat avia_paoa (passengers + flights) and avia_gooa
+ *              (freight, tonnes), pulled for ALL reporting airports in a
+ *              single call per metric, then mapped ICAO→IATA via the
+ *              OpenFlights reference (data/airports.json).
+ *   • Canada → StatCan WDS 23-10-0312 (screened passengers, monthly) +
+ *              23-10-0008 (aircraft movements), resolved by airport name.
+ *   • US     → fetch-bts.mjs (separate), merged in.
+ *
+ * Best-effort + per-metric: a failure keeps the last good series and never
+ * injects synthetic data. Airports are kept only when they carry enough
+ * real monthly passenger history; the busiest are capped to keep the
+ * nightly Prophet build bounded.
  *
  * Run locally:  node scripts/fetch-activity.mjs
  * ============================================================ */
@@ -19,137 +32,310 @@ import { dirname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
-const OUT = resolve(__dirname, "..", "data", "activity.json");
+const DATA = resolve(__dirname, "..", "data");
+const OUT = resolve(DATA, "activity.json");
+const REF = resolve(DATA, "airports.json");
+const UA = { "User-Agent": "glidepath-data-bot" };
 
-/* airport set — iata, ISO3, ICAO. Keep in sync with data.jsx */
-const AIRPORTS = [
-  ["YTZ","CAN","CYTZ"],["YOW","CAN","CYOW"],["YHM","CAN","CYHM"],["YQB","CAN","CYQB"],
-  ["YHZ","CAN","CYHZ"],["YKF","CAN","CYKF"],["BUR","USA","KBUR"],["PVU","USA","KPVU"],
-  ["PSP","USA","KPSP"],["BZN","USA","KBZN"],["EXT","GBR","EGTE"],["NQY","GBR","EGHQ"],
-  ["INV","GBR","EGPE"],["RTM","NLD","EHRD"],["FMM","DEU","EDJA"],["AAR","DNK","EKAH"],
-  ["GRZ","AUT","LOWG"],["KLU","AUT","LOWK"],["SZG","AUT","LOWS"],["NAP","ITA","LIRN"],
-  ["WRO","POL","EPWR"],
-];
-const EU_GEO = { GBR:"UK", NLD:"NL", DEU:"DE", DNK:"DK", AUT:"AT", ITA:"IT", POL:"PL" };
+const MIN_MONTHS = 24;   // need a couple of clean seasons to be worth showing
+const EU_CAP = 70;       // keep the busiest N European airports (bounds CI)
 
-/* ---- Eurostat: air passenger transport by reporting airport ----
- * Dataset avia_paoc, measure PAS_CRD (passengers carried, arr+dep),
- * unit PAS. Dissemination API returns JSON-stat. The rep_airp code
- * is "<geo>_<ICAO>", e.g. UK_EGTE (Exeter), AT_LOWG (Graz).        */
-async function fetchEurostat(repAirp) {
-  const base = "https://ec.europa.eu/eurostat/api/dissemination/statistics/1.0/data/avia_paoc";
-  const url = `${base}?format=JSON&lang=EN&freq=M&unit=PAS&tra_meas=PAS_CRD&rep_airp=${repAirp}&sinceTimePeriod=2015-01`;
-  const res = await fetch(url, { headers: { "User-Agent": "glidepath-data-bot" } });
-  if (!res.ok) throw new Error(`eurostat ${repAirp}: HTTP ${res.status}`);
-  const js = await res.json();
-  // JSON-stat: value is keyed by the flat index of the time dimension
-  const timeDim = js.dimension?.time;
-  if (!timeDim) throw new Error(`eurostat ${repAirp}: no time dimension`);
-  const idx = timeDim.category.index;            // { "2015-01": 0, ... }
-  const order = Object.entries(idx).sort((a, b) => a[1] - b[1]).map((e) => e[0]);
-  const monthly = {};
-  for (let i = 0; i < order.length; i++) {
-    const v = js.value[i];
-    if (v == null) continue;
-    monthly[normMonth(order[i])] = Math.round(v);   // Eurostat months are "2015-01" or "2015M01"
-  }
-  return monthly;
+/* Eurostat geo code → { iso2, iso3, name, region }. Eurostat uses EL for
+   Greece and UK for the United Kingdom; everything else matches ISO 3166-1
+   alpha-2. Covers the EU/EFTA/candidate countries that report to avia_paoa. */
+const GEO = {
+  AT:["AT","AUT","Austria"], BE:["BE","BEL","Belgium"], BG:["BG","BGR","Bulgaria"],
+  HR:["HR","HRV","Croatia"], CY:["CY","CYP","Cyprus"], CZ:["CZ","CZE","Czechia"],
+  DK:["DK","DNK","Denmark"], EE:["EE","EST","Estonia"], FI:["FI","FIN","Finland"],
+  FR:["FR","FRA","France"], DE:["DE","DEU","Germany"], EL:["GR","GRC","Greece"],
+  HU:["HU","HUN","Hungary"], IE:["IE","IRL","Ireland"], IT:["IT","ITA","Italy"],
+  LV:["LV","LVA","Latvia"], LT:["LT","LTU","Lithuania"], LU:["LU","LUX","Luxembourg"],
+  MT:["MT","MLT","Malta"], NL:["NL","NLD","Netherlands"], PL:["PL","POL","Poland"],
+  PT:["PT","PRT","Portugal"], RO:["RO","ROU","Romania"], SK:["SK","SVK","Slovakia"],
+  SI:["SI","SVN","Slovenia"], ES:["ES","ESP","Spain"], SE:["SE","SWE","Sweden"],
+  NO:["NO","NOR","Norway"], CH:["CH","CHE","Switzerland"], IS:["IS","ISL","Iceland"],
+  LI:["LI","LIE","Liechtenstein"], UK:["GB","GBR","United Kingdom"],
+  TR:["TR","TUR","Türkiye"], ME:["ME","MNE","Montenegro"], MK:["MK","MKD","North Macedonia"],
+  RS:["RS","SRB","Serbia"], BA:["BA","BIH","Bosnia and Herzegovina"], XK:["XK","XKX","Kosovo"],
+  AL:["AL","ALB","Albania"], MD:["MD","MDA","Moldova"], UA:["UA","UKR","Ukraine"],
+};
+
+function normMonth(s) { return String(s).replace("M", "-").slice(0, 7); }
+
+/* ============================================================
+   EUROSTAT — JSON-stat. A single all-airports pull is rejected
+   with HTTP 413 (ASYNCHRONOUS_RESPONSE), so we (1) enumerate the
+   reporting airports + a recent-volume proxy with a small
+   "lastTimePeriod" call, then (2) pull full series for the busiest
+   airports in batches of rep_airp codes, splitting any batch that
+   still trips the 413 size guard.
+   ============================================================ */
+const ES_BASE = "https://ec.europa.eu/eurostat/api/dissemination/statistics/1.0/data";
+
+function esUrl(dataset, q, reps) {
+  const usp = new URLSearchParams({ format: "JSON", lang: "EN", freq: "M", ...q });
+  let url = `${ES_BASE}/${dataset}?${usp.toString()}`;
+  for (const r of reps || []) url += `&rep_airp=${encodeURIComponent(r)}`;
+  return url;
 }
 
-/* ---- Statistics Canada: Table 23-10-0253 (WDS API) -------------
- * Air passenger traffic at Canadian airports, monthly. We resolve
- * each airport's vector once via the coordinate map below, then pull
- * the full series. Coordinate = member ids along each dimension;
- * here dim1 = geography (airport). Verify ids in the StatCan cube
- * metadata if you extend the airport set.                          */
-const STATCAN_PID = 23100253;
-const STATCAN_COORD = {
-  // iata : coordinate string (airport member id + trailing zeros)
-  YTZ: "11.0.0.0.0.0.0.0.0.0",
-  YOW: "10.0.0.0.0.0.0.0.0.0",
-  YHZ: "8.0.0.0.0.0.0.0.0.0",
-  YQB: "9.0.0.0.0.0.0.0.0.0",
-  YHM: "6.0.0.0.0.0.0.0.0.0",
-  YKF: "5.0.0.0.0.0.0.0.0.0",
+// decode a JSON-stat payload to { icao: { geo, monthly:{ "YYYY-MM": n } } }
+function esDecode(js, dataset) {
+  const ids = js.id, size = js.size, value = js.value;
+  if (!ids || !size || !value) throw new Error(`${dataset}: malformed JSON-stat`);
+  const stride = new Array(ids.length); let s = 1;
+  for (let i = ids.length - 1; i >= 0; i--) { stride[i] = s; s *= size[i]; }
+  const di = (n) => ids.indexOf(n);
+  const repDim = di("rep_airp"), timeDim = di("time");
+  if (repDim < 0 || timeDim < 0) throw new Error(`${dataset}: missing rep_airp/time dim`);
+  const repIdx = js.dimension.rep_airp.category.index;
+  const timeEntries = Object.entries(js.dimension.time.category.index).sort((a, b) => a[1] - b[1]);
+  const getVal = (f) => (Array.isArray(value) ? value[f] : (value[f] ?? value[String(f)]));
+  const out = {};
+  for (const [code, rpos] of Object.entries(repIdx)) {
+    const us = code.indexOf("_");
+    if (us < 0) continue;
+    const geo = code.slice(0, us), icao = code.slice(us + 1);
+    if (icao.length !== 4) continue;
+    const monthly = {};
+    for (const [tcode, tpos] of timeEntries) {
+      const v = getVal(rpos * stride[repDim] + tpos * stride[timeDim]);
+      if (v != null) monthly[normMonth(tcode)] = Math.round(v);
+    }
+    if (Object.keys(monthly).length) out[icao] = { geo, monthly };
+  }
+  return out;
+}
+
+async function esGet(dataset, q, reps) {
+  const res = await fetch(esUrl(dataset, q, reps), { headers: UA });
+  if (!res.ok) {
+    let body = ""; try { body = (await res.text()).slice(0, 160); } catch {}
+    const e = new Error(`${dataset} HTTP ${res.status} ${body}`); e.code = res.status; throw e;
+  }
+  return esDecode(await res.json(), dataset);
+}
+
+// enumerate all reporting airports + a recent-volume proxy; shrink the
+// time window until Eurostat answers synchronously
+async function esEnumerate() {
+  for (const lastN of [12, 6, 3, 1]) {
+    try { return await esGet("avia_paoa", { unit: "PAS", tra_meas: "PAS_CRD", lastTimePeriod: String(lastN) }); }
+    catch (e) { if (e.code === 413) { console.warn(`  enumerate lastTimePeriod=${lastN} -> 413, shrinking`); continue; } throw e; }
+  }
+  return {};
+}
+
+// full series for a set of rep_airp codes, batched + 413-split
+async function esBatch(dataset, q, reps) {
+  const out = {};
+  async function go(list) {
+    if (!list.length) return;
+    try { Object.assign(out, await esGet(dataset, q, list)); }
+    catch (e) {
+      if (e.code === 413 && list.length > 1) {
+        const mid = list.length >> 1; await go(list.slice(0, mid)); await go(list.slice(mid));
+      } else if (e.code === 413) {
+        console.warn(`    ${dataset} ${list[0]}: 413 even single — skipped`);
+      } else throw e;
+    }
+  }
+  const CHUNK = 25;
+  for (let i = 0; i < reps.length; i += CHUNK) await go(reps.slice(i, i + CHUNK));
+  return out;
+}
+
+/* ============================================================
+   STATISTICS CANADA — WDS REST. Resolve each airport member by
+   name, pick the right characteristic per metric, build the full
+   memberId coordinate. 23-10-0312 = screened passengers (monthly),
+   23-10-0008 = aircraft movements (monthly).
+   ============================================================ */
+const STATCAN_PID = { pax: 23100312, atm: 23100008 };
+// the screened-passenger cube covers Canada's eight CATSA Class-1 airports
+const STATCAN = [
+  ["YYZ", /pearson|toronto/i],   ["YVR", /vancouver/i],     ["YUL", /trudeau|montr/i],
+  ["YYC", /calgary/i],           ["YEG", /edmonton/i],      ["YOW", /ottawa/i],
+  ["YWG", /winnipeg/i],          ["YHZ", /halifax/i],
+];
+const STATCAN_CHAR = {
+  pax: /screened|passenger|total/i,
+  atm: /total itinerant|itinerant.*total|total movements|total/i,
 };
-async function fetchStatCan(iata) {
-  const coord = STATCAN_COORD[iata];
-  if (!coord) return null;
-  const res = await fetch("https://www150.statcan.gc.ca/t1/wds/rest/getDataFromCubePidCoordAndLatestNPeriods", {
-    method: "POST",
-    headers: { "Content-Type": "application/json", "User-Agent": "glidepath-data-bot" },
-    body: JSON.stringify([{ productId: STATCAN_PID, coordinate: coord, latestN: 132 }]),
+const _meta = {};
+async function statcanMeta(pid) {
+  if (_meta[pid]) return _meta[pid];
+  const res = await fetch("https://www150.statcan.gc.ca/t1/wds/rest/getCubeMetadata", {
+    method: "POST", headers: { "Content-Type": "application/json", ...UA },
+    body: JSON.stringify([{ productId: pid }]),
   });
-  if (!res.ok) throw new Error(`statcan ${iata}: HTTP ${res.status}`);
+  if (!res.ok) throw new Error(`meta ${pid} HTTP ${res.status}`);
+  const js = await res.json();
+  const obj = js?.[0]?.object;
+  if (!obj) throw new Error(`meta ${pid}: ${js?.[0]?.status || "no object"}`);
+  const dims = (obj.dimension || []).map((d) => ({
+    name: d.dimensionNameEn || "",
+    members: (d.member || []).map((m) => ({ id: m.memberId, name: m.memberNameEn || "" })),
+  }));
+  return (_meta[pid] = dims);
+}
+async function statcanCoord(pid, re, metric) {
+  const dims = await statcanMeta(pid);
+  let geoDim = -1, geoMember = null;
+  dims.forEach((d, i) => { const hit = d.members.find((m) => re.test(m.name)); if (hit) { geoDim = i; geoMember = hit; } });
+  if (!geoMember) throw new Error(`no airport member for ${re} in ${pid}`);
+  const charRe = STATCAN_CHAR[metric];
+  const parts = dims.map((d, i) => {
+    if (i === geoDim) return geoMember.id;
+    const pref = d.members.find((m) => charRe.test(m.name));
+    return (pref || d.members[0]).id;
+  });
+  while (parts.length < 10) parts.push(0);
+  return parts.join(".");
+}
+async function statcanSeries(pid, coord) {
+  const res = await fetch("https://www150.statcan.gc.ca/t1/wds/rest/getDataFromCubePidCoordAndLatestNPeriods", {
+    method: "POST", headers: { "Content-Type": "application/json", ...UA },
+    body: JSON.stringify([{ productId: pid, coordinate: coord, latestN: 144 }]),
+  });
+  if (!res.ok) throw new Error(`data ${pid} HTTP ${res.status}`);
   const js = await res.json();
   const pts = js?.[0]?.object?.vectorDataPoint;
-  if (!pts) throw new Error(`statcan ${iata}: no data points`);
+  if (!pts) throw new Error(`data ${pid}: ${js?.[0]?.status || "no points"}`);
   const monthly = {};
-  for (const p of pts) {
-    if (p.value == null) continue;
-    monthly[normMonth(p.refPer)] = Math.round(p.value);   // refPer "2023-07-01"
-  }
+  for (const p of pts) if (p.value != null) monthly[normMonth(p.refPer)] = Math.round(p.value);
   return monthly;
 }
 
-function normMonth(s) {
-  // accept "2015M01", "2015-01", "2015-01-01" -> "2015-01"
-  const m = String(s).replace("M", "-").slice(0, 7);
-  return m;
+/* ============================================================ */
+async function loadJSON(path) { try { return JSON.parse(await readFile(path, "utf8")); } catch { return null; } }
+function prevSeries(prev, iata, metric) {
+  const a = prev?.airports?.[iata]; if (!a) return null;
+  if (a.series?.[metric] && Object.keys(a.series[metric]).length) return a.series[metric];
+  if (metric === "pax" && a.monthly && Object.keys(a.monthly).length) return a.monthly;
+  return null;
 }
-
-async function loadPrevious() {
-  try { return JSON.parse(await readFile(OUT, "utf8")); } catch { return null; }
-}
+const recent12 = (m) => Object.keys(m).sort().slice(-12).reduce((t, k) => t + (m[k] || 0), 0);
 
 async function main() {
-  const prev = await loadPrevious();
+  const prev = await loadJSON(OUT);
+  const refDoc = await loadJSON(REF);
+  const ref = refDoc?.airports || {};
+  const icaoToIata = {};
+  for (const [iata, r] of Object.entries(ref)) if (r.icao) icaoToIata[r.icao] = iata;
+  console.log(`Loaded ${Object.keys(ref).length} reference airports.`);
+
   const airports = {};
-  let live = 0, kept = 0;
+  let live = 0;
 
-  for (const [iata, cc, icao] of AIRPORTS) {
-    const isEU = !!EU_GEO[cc];
-    const rep = isEU ? `${EU_GEO[cc]}_${icao}` : icao;
-    const source = isEU ? "eurostat:avia_paoc" : cc === "CAN" ? "statcan:23-10-0253" : "modeled";
-    try {
-      let monthly = null;
-      if (isEU) monthly = await fetchEurostat(rep);
-      else if (cc === "CAN") monthly = await fetchStatCan(iata);
+  /* ---------- Europe: enumerate, rank, then batch-fetch series ---------- */
+  let enumerated = {};
+  try { enumerated = await esEnumerate(); console.log(`  eurostat: enumerated ${Object.keys(enumerated).length} reporting airports`); }
+  catch (e) { console.warn(`  eurostat enumerate FAILED: ${e.message}`); }
 
-      if (monthly && Object.keys(monthly).length >= 12) {
-        airports[iata] = { source, observed: true, rep_airp: rep, unit: "passengers carried", months: Object.keys(monthly).length, monthly };
-        live++;
-        console.log(`  ${iata}  ${source}  ${Object.keys(monthly).length} months  (latest ${Object.keys(monthly).sort().pop()})`);
-        continue;
-      }
-      throw new Error("insufficient points");
-    } catch (err) {
-      // keep last good series for this airport if we have one; else mark modeled
-      const before = prev?.airports?.[iata];
-      if (before?.observed) {
-        airports[iata] = before; kept++;
-        console.warn(`  ${iata}  ${source}  FAILED (${err.message}) — kept previous ${before.months}-month snapshot`);
-      } else {
-        airports[iata] = before || { source: "modeled", observed: false, rep_airp: rep, unit: "passengers carried", months: 0, monthly: {} };
-        console.warn(`  ${iata}  ${source}  FAILED (${err.message}) — modeled`);
+  const euCandidates = [];
+  for (const [icao, rec] of Object.entries(enumerated)) {
+    const iata = icaoToIata[icao];
+    if (!iata || !GEO[rec.geo]) continue;
+    const vol = recent12(rec.monthly);
+    if (vol <= 0) continue;
+    euCandidates.push({ iata, icao, geo: rec.geo, vol });
+  }
+  euCandidates.sort((a, b) => b.vol - a.vol);
+  const keep = euCandidates.slice(0, EU_CAP);
+  console.log(`  eurostat: ${euCandidates.length} mappable airports, keeping busiest ${keep.length}`);
+
+  const repCodes = keep.map((k) => `${k.geo}_${k.icao}`);
+  const euData = {};   // metric -> { icao -> { geo, monthly } }
+  for (const [metric, ds, unit, tm] of [
+    ["pax", "avia_paoa", "PAS", "PAS_CRD"],
+    ["atm", "avia_paoa", "FLIGHT", "CAF_PAS"],
+    ["cargo", "avia_gooa", "T", "FRM_LD_NLD"],
+  ]) {
+    if (!repCodes.length) { euData[metric] = {}; continue; }
+    try { euData[metric] = await esBatch(ds, { unit, tra_meas: tm, sinceTimePeriod: "2015-01" }, repCodes); console.log(`  eurostat ${metric}: ${Object.keys(euData[metric]).length} airports`); }
+    catch (e) { euData[metric] = {}; console.warn(`  eurostat ${metric} FAILED: ${e.message}`); }
+  }
+
+  for (const { iata, icao, geo } of keep) {
+    const g = GEO[geo];
+    if (!g) { console.warn(`  ${iata}: unknown Eurostat geo "${geo}" — skipped`); continue; }
+    const [iso2, iso3, cname] = g;
+    const series = {};
+    for (const metric of ["pax", "atm", "cargo"]) {
+      const m = euData[metric]?.[icao]?.monthly;
+      if (m && Object.keys(m).length >= 12) { series[metric] = m; live++; }
+      else { const kept = prevSeries(prev, iata, metric); if (kept) series[metric] = kept; }
+    }
+    if (!series.pax || Object.keys(series.pax).length < MIN_MONTHS) continue;
+    const r = ref[iata] || {};
+    const paxKeys = Object.keys(series.pax);
+    airports[iata] = {
+      observed: true, source: "eurostat", rep_airp: `${geo}_${icao}`,
+      country: iso2, cc: iso3, countryName: cname, region: "Europe",
+      name: r.name || iata, city: r.city || cname, icao, lat: r.lat ?? null, lon: r.lon ?? null,
+      months: paxKeys.length, latest: paxKeys.sort().pop(), series, monthly: series.pax,
+    };
+  }
+  console.log(`  eurostat: wrote ${Object.keys(airports).length} airports`);
+
+  /* ---------- Canada: StatCan screened airports ---------- */
+  let caN = 0;
+  for (const [iata, re] of STATCAN) {
+    const series = {};
+    for (const metric of ["pax", "atm"]) {
+      try {
+        const m = await statcanSeries(STATCAN_PID[metric], await statcanCoord(STATCAN_PID[metric], re, metric));
+        if (Object.keys(m).length >= 12) { series[metric] = m; live++; }
+        else throw new Error(`only ${Object.keys(m).length}mo`);
+      } catch (e) {
+        const kept = prevSeries(prev, iata, metric);
+        if (kept) series[metric] = kept;
+        console.warn(`  ${iata}/${metric} statcan failed (${e.message})${kept ? " — kept previous" : ""}`);
       }
     }
+    if (!series.pax || Object.keys(series.pax).length < MIN_MONTHS) { console.warn(`  ${iata} statcan: insufficient pax — skipped`); continue; }
+    const r = ref[iata] || {};
+    const paxKeys = Object.keys(series.pax);
+    airports[iata] = {
+      observed: true, source: "statcan", rep_airp: r.icao || iata,
+      country: "CA", cc: "CAN", countryName: "Canada", region: "North America",
+      name: r.name || iata, city: r.city || "Canada", icao: r.icao || null, lat: r.lat ?? null, lon: r.lon ?? null,
+      months: paxKeys.length, latest: paxKeys.sort().pop(), series, monthly: series.pax,
+    };
+    caN++;
+    console.log(`  ${iata} statcan: pax ${paxKeys.length}mo atm ${Object.keys(series.atm || {}).length}mo`);
+  }
+  console.log(`  statcan: wrote ${caN} airports`);
+
+  /* ---------- carry over US/BTS airports owned by fetch-bts.mjs ---------- */
+  if (prev?.airports) for (const k of Object.keys(prev.airports)) {
+    if (!airports[k] && prev.airports[k]?.source === "bts") airports[k] = prev.airports[k];
   }
 
   const out = {
     generatedAt: new Date().toISOString(),
-    seed: false,
-    note: "Monthly passengers by airport. Refreshed nightly by .github/workflows/refresh-data.yml. The browser reads this file same-origin; forecasts run on these observed series.",
+    note: "Monthly activity (passengers / movements / cargo) by airport. Refreshed nightly; read same-origin by the browser. No synthetic data.",
     sources: {
-      eurostat: "Eurostat avia_paoc — air passenger transport by reporting airport, monthly (PAS_CRD)",
-      statcan: "Statistics Canada Table 23-10-0253 — air passenger traffic at Canadian airports, monthly",
-      modeled: "No clean public monthly feed in this prototype — reconstructed series",
+      eurostat: "Eurostat avia_paoa (PAS_CRD pax, CAF_PAS flights) + avia_gooa (FRM_LD_NLD cargo, tonnes) — all reporting airports",
+      statcan: "Statistics Canada WDS 23-10-0312 (screened pax), 23-10-0008 (movements)",
+      bts: "US DOT BTS T-100 (fetch-bts.mjs)",
     },
     airports,
   };
-  await mkdir(dirname(OUT), { recursive: true });
+  await mkdir(DATA, { recursive: true });
   await writeFile(OUT, JSON.stringify(out) + "\n", "utf8");
-  console.log(`Wrote ${OUT} — ${live} live, ${kept} kept, ${AIRPORTS.length - live - kept} modeled.`);
+
+  /* trim airports.json to just the catalogue, so the browser load stays small */
+  if (refDoc) {
+    const trimmed = {};
+    for (const iata of Object.keys(airports)) if (ref[iata]) trimmed[iata] = ref[iata];
+    refDoc.airports = trimmed; refDoc.count = Object.keys(trimmed).length;
+    refDoc.note = "Airport reference trimmed to the airports that carry data (full set is rebuilt nightly by fetch-openflights.mjs).";
+    await writeFile(REF, JSON.stringify(refDoc) + "\n", "utf8");
+  }
+
+  console.log(`Wrote ${OUT} — ${Object.keys(airports).length} airports, ${live} live metric-series.`);
 }
 
 main().catch((err) => { console.error("Activity snapshot failed:", err.message); process.exit(1); });

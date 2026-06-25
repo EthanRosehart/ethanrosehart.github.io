@@ -9,36 +9,19 @@
    babel modules.
    ============================================================ */
 
-/* ---- curated airport reference (OpenFlights schema) -------- */
-/* fields mirror the OpenFlights airports.dat columns; enriched at
-   runtime from data/airports.json (authoritative identifiers).    */
-const AIRPORTS = [
-  { iata:"YTZ", icao:"CYTZ", name:"Billy Bishop Toronto City", city:"Toronto", country:"Canada", cc:"CAN", lat:43.6275, lon:-79.3962, elev:252, tz:"America/Toronto", runwayM:1216, gates:11, region:"North America" },
-  { iata:"YOW", icao:"CYOW", name:"Ottawa Macdonald–Cartier Intl", city:"Ottawa", country:"Canada", cc:"CAN", lat:45.3225, lon:-75.6692, elev:374, tz:"America/Toronto", runwayM:3048, gates:24, region:"North America" },
-  { iata:"YHM", icao:"CYHM", name:"John C. Munro Hamilton Intl", city:"Hamilton", country:"Canada", cc:"CAN", lat:43.1736, lon:-79.9350, elev:780, tz:"America/Toronto", runwayM:3048, gates:6, region:"North America" },
-  { iata:"YQB", icao:"CYQB", name:"Québec City Jean Lesage Intl", city:"Québec", country:"Canada", cc:"CAN", lat:46.7911, lon:-71.3933, elev:244, tz:"America/Toronto", runwayM:2743, gates:14, region:"North America" },
-  { iata:"YHZ", icao:"CYHZ", name:"Halifax Stanfield Intl", city:"Halifax", country:"Canada", cc:"CAN", lat:44.8808, lon:-63.5086, elev:477, tz:"America/Halifax", runwayM:3200, gates:25, region:"North America" },
-  { iata:"YKF", icao:"CYKF", name:"Region of Waterloo Intl", city:"Kitchener", country:"Canada", cc:"CAN", lat:43.4608, lon:-80.3786, elev:1055, tz:"America/Toronto", runwayM:2149, gates:3, region:"North America" },
-  { iata:"BUR", icao:"KBUR", name:"Hollywood Burbank", city:"Burbank", country:"United States", cc:"USA", lat:34.2007, lon:-118.3590, elev:778, tz:"America/Los_Angeles", runwayM:1965, gates:14, region:"North America" },
-  { iata:"PVU", icao:"KPVU", name:"Provo Municipal", city:"Provo", country:"United States", cc:"USA", lat:40.2192, lon:-111.7233, elev:4497, tz:"America/Denver", runwayM:2591, gates:8, region:"North America" },
-  { iata:"PSP", icao:"KPSP", name:"Palm Springs Intl", city:"Palm Springs", country:"United States", cc:"USA", lat:33.8297, lon:-116.5067, elev:477, tz:"America/Los_Angeles", runwayM:3045, gates:18, region:"North America" },
-  { iata:"BZN", icao:"KBZN", name:"Bozeman Yellowstone Intl", city:"Bozeman", country:"United States", cc:"USA", lat:45.7775, lon:-111.1531, elev:4473, tz:"America/Denver", runwayM:2743, gates:10, region:"North America" },
-  { iata:"EXT", icao:"EGTE", name:"Exeter", city:"Exeter", country:"United Kingdom", cc:"GBR", lat:50.7344, lon:-3.4139, elev:102, tz:"Europe/London", runwayM:2083, gates:6, region:"Europe" },
-  { iata:"NQY", icao:"EGHQ", name:"Cornwall Newquay", city:"Newquay", country:"United Kingdom", cc:"GBR", lat:50.4406, lon:-4.9954, elev:390, tz:"Europe/London", runwayM:2744, gates:4, region:"Europe" },
-  { iata:"INV", icao:"EGPE", name:"Inverness", city:"Inverness", country:"United Kingdom", cc:"GBR", lat:57.5425, lon:-4.0475, elev:31, tz:"Europe/London", runwayM:1885, gates:5, region:"Europe" },
-  { iata:"RTM", icao:"EHRD", name:"Rotterdam The Hague", city:"Rotterdam", country:"Netherlands", cc:"NLD", lat:51.9569, lon:4.4372, elev:-15, tz:"Europe/Amsterdam", runwayM:2200, gates:7, region:"Europe" },
-  { iata:"FMM", icao:"EDJA", name:"Memmingen", city:"Memmingen", country:"Germany", cc:"DEU", lat:47.9888, lon:10.2395, elev:2077, tz:"Europe/Berlin", runwayM:2980, gates:6, region:"Europe" },
-  { iata:"AAR", icao:"EKAH", name:"Aarhus", city:"Aarhus", country:"Denmark", cc:"DNK", lat:56.3000, lon:10.6190, elev:82, tz:"Europe/Copenhagen", runwayM:2776, gates:4, region:"Europe" },
-  { iata:"GRZ", icao:"LOWG", name:"Graz", city:"Graz", country:"Austria", cc:"AUT", lat:46.9911, lon:15.4396, elev:1115, tz:"Europe/Vienna", runwayM:3000, gates:7, region:"Europe" },
-  { iata:"KLU", icao:"LOWK", name:"Klagenfurt", city:"Klagenfurt", country:"Austria", cc:"AUT", lat:46.6425, lon:14.3377, elev:1470, tz:"Europe/Vienna", runwayM:2720, gates:5, region:"Europe" },
-  { iata:"SZG", icao:"LOWS", name:"Salzburg W.A. Mozart", city:"Salzburg", country:"Austria", cc:"AUT", lat:47.7933, lon:13.0043, elev:1411, tz:"Europe/Vienna", runwayM:2750, gates:9, region:"Europe" },
-  { iata:"NAP", icao:"LIRN", name:"Naples Intl", city:"Naples", country:"Italy", cc:"ITA", lat:40.8860, lon:14.2908, elev:294, tz:"Europe/Rome", runwayM:2628, gates:12, region:"Europe" },
-  { iata:"WRO", icao:"EPWR", name:"Wrocław Copernicus", city:"Wrocław", country:"Poland", cc:"POL", lat:51.1027, lon:16.8858, elev:404, tz:"Europe/Warsaw", runwayM:2520, gates:8, region:"Europe" },
-];
+/* ---- airport catalogue (built at runtime, not hand-curated) ---
+   AIRPORTS is filled from data/activity.json — every airport our
+   public feeds actually carry monthly data for — and enriched with
+   the OpenFlights reference (data/airports.json). It stays the same
+   array object (mutated in place) so the other babel modules that
+   captured it lexically keep seeing the live list.                 */
+const AIRPORTS = [];
+let REFERENCE = {};                       // iata -> OpenFlights record
 
 /* ---- macro baselines (OECD / IMF / World Bank style) -------- */
 /* trend real GDP growth, GDP/cap, income (PAX) elasticity by mkt;
-   live World Bank / OECD figures merged over these at runtime.     */
+   live World Bank figures merged over these at runtime. Countries
+   not listed here get MACRO_DEFAULT, filled in as airports load.   */
 const MACRO = {
   CAN: { gdp:1.9, gdpcap:1.0, pop:1.1, elasticity:1.7, tourism:1.2, label:"Canada" },
   USA: { gdp:2.1, gdpcap:1.4, pop:0.6, elasticity:1.5, tourism:1.0, label:"United States" },
@@ -50,6 +33,11 @@ const MACRO = {
   ITA: { gdp:0.9, gdpcap:0.8, pop:-0.1, elasticity:1.8, tourism:2.4, label:"Italy" },
   POL: { gdp:3.1, gdpcap:3.0, pop:-0.2, elasticity:1.9, tourism:1.8, label:"Poland" },
 };
+const MACRO_DEFAULT = { gdp:1.6, gdpcap:1.2, pop:0.4, elasticity:1.6, tourism:1.4 };
+function ensureMacro(cc, label){
+  if (cc && !MACRO[cc]) MACRO[cc] = { ...MACRO_DEFAULT, label: label || cc };
+  return MACRO[cc];
+}
 
 const MONTHS = ["Jan","Feb","Mar","Apr","May","Jun","Jul","Aug","Sep","Oct","Nov","Dec"];
 const METRIC_KEYS = ["pax","atm","cargo"];
@@ -73,6 +61,44 @@ function setActivity(json){
   });
   ACTIVITY_META = json;
   window.GP_ACTIVITY_META = json;
+  rebuildAirports();
+}
+
+/* OpenFlights reference (data/airports.json) — optional enrichment of the
+   catalogue with authoritative identifiers/coords/timezone. */
+function setReference(json){
+  REFERENCE = (json && json.airports) || {};
+  rebuildAirports();
+}
+
+/* Rebuild AIRPORTS from the activity snapshot (the airports that carry real
+   data), enriched by the OpenFlights reference. Mutates the array in place. */
+function rebuildAirports(){
+  const meta = ACTIVITY_META && ACTIVITY_META.airports;
+  if (!meta) return;
+  AIRPORTS.length = 0;
+  Object.keys(meta).forEach(iata => {
+    const a = meta[iata];
+    if (!a || !a.observed) return;
+    const r = REFERENCE[iata] || {};
+    const cc = a.cc || r.cc || "";
+    ensureMacro(cc, a.countryName || r.country);
+    AIRPORTS.push({
+      iata,
+      icao: a.icao || r.icao || "",
+      name: a.name || r.name || iata,
+      city: a.city || r.city || "",
+      country: a.countryName || r.country || "",
+      cc,
+      lat: (a.lat != null ? a.lat : (r.lat != null ? r.lat : null)),
+      lon: (a.lon != null ? a.lon : (r.lon != null ? r.lon : null)),
+      elev: (r.elev_ft != null ? r.elev_ft : null),
+      tz: r.tz || null,
+      region: a.region || "—",
+    });
+  });
+  AIRPORTS.sort((x, y) => (x.region === y.region ? x.name.localeCompare(y.name) : x.region.localeCompare(y.region)));
+  window.GP_AIRPORTS = AIRPORTS;
 }
 function availableMetrics(iata){
   const s = OBSERVED[iata]; if (!s) return [];
@@ -151,7 +177,8 @@ function fullYears(history, key){ return annualize(history, key).filter(r => r.n
    own elasticity. Only metrics with real data are projected.
    ============================================================ */
 function defaultScenario(iata){
-  const m = MACRO[AIRPORTS.find(x=>x.iata===iata).cc];
+  const a = AIRPORTS.find(x=>x.iata===iata);
+  const m = (a && MACRO[a.cc]) || MACRO_DEFAULT;
   return {
     gdp: (m.gdpcapProj != null ? m.gdpcapProj : m.gdpcap),
     elasticity: m.elasticity,
@@ -250,4 +277,5 @@ Object.assign(window, {
   GP_forecastFor:forecastFor, GP_hasForecast:hasForecast,
   GP_availableMetrics:availableMetrics, GP_liveAirports:liveAirports,
   GP_fmt:fmt, GP_setActivity:setActivity, GP_activityFor:activityFor, GP_setForecast:setForecast,
+  GP_setReference:setReference, GP_rebuildAirports:rebuildAirports, GP_ensureMacro:ensureMacro,
 });

@@ -35,52 +35,24 @@ function App(){
 
   const history = useMemoApp(()=> airport ? GP_buildHistory(airport.iata) : null, [airport, actVer]);
 
-  // OpenFlights reference (data/airports.json) — enrich the airport catalogue
-  // with authoritative identifiers/coords. Same-origin, no CORS.
+  // OpenFlights reference (data/airports.json) — enrich the data-driven
+  // catalogue with authoritative identifiers/coords. Same-origin, no CORS.
   useEffectApp(()=>{
     let alive = true;
     fetch("data/airports.json", { cache:"no-store" })
       .then(r => r.ok ? r.json() : null)
       .then(j => {
         if (!alive || !j || !j.airports) return;
-        AIRPORTS.forEach(a => {
-          const r = j.airports[a.iata];
-          if (!r) return;
-          if (r.icao) a.icao = r.icao;
-          if (r.lat != null) a.lat = r.lat;
-          if (r.lon != null) a.lon = r.lon;
-          if (r.elev_ft != null) a.elev = r.elev_ft;
-          if (r.tz) a.tz = r.tz;
-          if (r.name) a.name = r.name;
-          a.ofVerified = true;
-        });
+        GP_setReference(j);                 // rebuilds AIRPORTS with enrichment
         window.GP_OF_META = j; setOfMeta(j); setActVer(v=>v+1);
       })
       .catch(()=>{});
     return ()=>{ alive = false; };
   },[]);
 
-  // OECD Economic Outlook (data/oecd.json) — forward GDP-growth projections set
-  // the GDP lever default (preferred over World Bank historical). No CORS.
-  useEffectApp(()=>{
-    let alive = true;
-    fetch("data/oecd.json", { cache:"no-store" })
-      .then(r => r.ok ? r.json() : null)
-      .then(j => {
-        if (!alive || !j || !j.countries) return;
-        Object.keys(j.countries).forEach(cc => {
-          if (!MACRO[cc]) return;
-          const c = j.countries[cc];
-          if (c.gdpcapProj != null) MACRO[cc].gdpcapProj = c.gdpcapProj;
-          if (c.gdpProj != null)    MACRO[cc].gdpProj = c.gdpProj;
-          MACRO[cc].oecdHorizon = c.horizon;
-        });
-        window.GP_OECD_META = j; setOecdMeta(j);
-        if (!connected && airport) setScenario(GP_defaultScenario(airport.iata));
-      })
-      .catch(()=>{});
-    return ()=>{ alive = false; };
-  },[]);
+  // OECD Economic Outlook removed: its SDMX endpoint returns HTTP 500 and the
+  // GDP-growth lever default falls back to the real World Bank GDP/capita
+  // figure (data/macro.json), so no projection layer is needed.
 
   // Load the committed monthly activity snapshot (data/activity.json) — the
   // real observed series the whole app renders. Same-origin, no CORS.
@@ -90,8 +62,13 @@ function App(){
       .then(r => r.ok ? r.json() : null)
       .then(j => {
         if (!alive || !j) return;
-        GP_setActivity(j);
+        GP_setActivity(j);       // also (re)builds the AIRPORTS catalogue
         setActMeta(j);
+        // restore a returning user's saved airport now the catalogue exists
+        if (saved.iata && !airport) {
+          const a = AIRPORTS.find(x => x.iata === saved.iata);
+          if (a) setAirport(a);
+        }
         setActVer(v => v + 1);   // force history to rebuild
       })
       .catch(()=>{});
@@ -125,8 +102,8 @@ function App(){
       .then(j => {
         if (!alive || !j || !j.countries) return;
         Object.keys(j.countries).forEach(cc => {
-          if (!MACRO[cc]) return;
           const c = j.countries[cc];
+          GP_ensureMacro(cc, c.name);     // create defaults for new countries
           if (c.gdp != null)    MACRO[cc].gdp = c.gdp;
           if (c.gdpcap != null) MACRO[cc].gdpcap = c.gdpcap;
           if (c.pop != null)    MACRO[cc].pop = c.pop;
@@ -229,7 +206,7 @@ function App(){
             <span className="topbar-chips" style={{display:"flex",alignItems:"center",gap:12}}>
               {macroMeta && <span className="chip" title={"World Bank snapshot · "+(macroMeta.source||"")}><span className="dot dot-ok"></span>WB snapshot {new Date(macroMeta.generatedAt).toLocaleDateString("en-CA")}</span>}
               {airport && <span className="chip chip-pink"><span className="dot dot-pink"></span>{airport.iata} · {airport.icao}</span>}
-              {connected && <span className="chip chip-ok"><span className="dot dot-ok"></span>4 sources live</span>}
+              {connected && <span className="chip chip-ok"><span className="dot dot-ok"></span>3 sources live</span>}
             </span>
             {connected && screen!=="export" && <button className="btn btn-primary btn-sm" onClick={()=>{ setScreen("export"); setNavOpen(false); }}>Export</button>}
           </div>

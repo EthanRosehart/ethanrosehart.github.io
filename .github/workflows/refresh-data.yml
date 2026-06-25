@@ -4,10 +4,10 @@ name: Refresh data
 # portfolio/glidepath/data/*.json. GitHub Pages redeploys automatically, so
 # the Glidepath app always serves last night's numbers — fetched server-side
 # here, never from the visitor's browser.
-#   macro.json     — World Bank population & historical GDP/capita
-#   activity.json  — Eurostat / StatCan monthly passengers by airport
-#   oecd.json      — OECD Economic Outlook GDP-growth projections
 #   airports.json  — OpenFlights authoritative airport reference
+#   activity.json  — Eurostat / StatCan monthly pax / movements / cargo by airport
+#   macro.json     — World Bank population & historical GDP/capita
+#   forecast.json  — Meta Prophet short-term forecasts (built from activity.json)
 
 on:
   schedule:
@@ -37,22 +37,22 @@ jobs:
         run: node portfolio/glidepath/scripts/fetch-openflights.mjs
         continue-on-error: true
 
-      - name: Fetch macro snapshot from World Bank
-        run: node portfolio/glidepath/scripts/fetch-data.mjs
-
-      - name: Fetch GDP projections (OECD Economic Outlook)
-        run: node portfolio/glidepath/scripts/fetch-oecd.mjs
-        continue-on-error: true   # OECD dataflow ids shift between releases
-
-      - name: Fetch monthly passengers (Eurostat + StatCan)
+      - name: Fetch monthly activity — Europe + Canada (Eurostat + StatCan)
         run: node portfolio/glidepath/scripts/fetch-activity.mjs
         continue-on-error: true   # a feed outage keeps the last good snapshot
+
+      - name: Fetch monthly activity — US (BTS T-100)
+        run: node portfolio/glidepath/scripts/fetch-bts.mjs
+        continue-on-error: true
+
+      - name: Fetch macro snapshot from World Bank
+        run: node portfolio/glidepath/scripts/fetch-data.mjs
+        continue-on-error: true   # macro covers whatever countries activity found
 
       - name: Set up Python
         uses: actions/setup-python@v5
         with:
           python-version: "3.11"
-          cache: pip
 
       - name: Install forecasting deps (Prophet + holidays)
         run: pip install prophet holidays pandas

@@ -47,15 +47,13 @@ HORIZON = 24            # months forecast (UI offers 12 / 24)
 INTERVAL = 0.80         # prediction interval width -> P10..P90 band
 MIN_MONTHS = 36         # need a few seasons before Prophet is meaningful
 
-# IATA -> ISO 3166-1 alpha-2 (for the holidays package / Prophet). Keep in sync
-# with the airport catalogue in data.jsx.
+# The ISO 3166-1 alpha-2 country (for the holidays package / Prophet) now rides
+# on each airport in activity.json ("country"); this map is only a fallback for
+# any legacy entry that predates that field.
 COUNTRY = {
-    "YTZ": "CA", "YOW": "CA", "YHM": "CA", "YQB": "CA", "YHZ": "CA", "YKF": "CA",
+    "YYZ": "CA", "YOW": "CA", "YHZ": "CA", "YVR": "CA", "YUL": "CA",
+    "YYC": "CA", "YEG": "CA", "YWG": "CA",
     "BUR": "US", "PVU": "US", "PSP": "US", "BZN": "US",
-    "EXT": "GB", "NQY": "GB", "INV": "GB",
-    "RTM": "NL", "FMM": "DE", "AAR": "DK",
-    "GRZ": "AT", "KLU": "AT", "SZG": "AT",
-    "NAP": "IT", "WRO": "PL",
 }
 
 # Metrics we may find in the data. Seats is intentionally absent — there is no
@@ -201,7 +199,7 @@ def main():
     airports_out = {}
     n_series = 0
     for iata, a in airports_in.items():
-        iso2 = COUNTRY.get(iata)
+        iso2 = a.get("country") or COUNTRY.get(iata)
         if not iso2 or not a.get("observed"):
             continue
         metrics = {}
