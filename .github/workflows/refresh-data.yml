@@ -40,10 +40,6 @@ jobs:
       - name: Fetch macro snapshot from World Bank
         run: node portfolio/glidepath/scripts/fetch-data.mjs
 
-      - name: Fetch GDP projections (OECD Economic Outlook)
-        run: node portfolio/glidepath/scripts/fetch-oecd.mjs
-        continue-on-error: true   # OECD dataflow ids shift between releases
-
       - name: Fetch monthly activity — EU + Canada (Eurostat + StatCan)
         run: node portfolio/glidepath/scripts/fetch-activity.mjs
         continue-on-error: true   # a feed outage keeps the last good snapshot

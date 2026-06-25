@@ -76,7 +76,6 @@ const SOURCES = [
   { id:"openflights", abbr:"OF", name:"OpenFlights Airport DB", desc:"Identifiers, geography, runway & timezone reference", rows:"7,698 airports", live:true, wired:true, kind:"openflights" },
   { id:"activity",    abbr:"AVIA", name:"Eurostat / StatCan Aviation", desc:"Monthly passengers by airport — the series the forecasts run on", rows:"132 months", live:true, wired:true, kind:"activity" },
   { id:"worldbank",   abbr:"WB", name:"World Bank Open Data", desc:"Population & historical GDP/capita — catchment driver", rows:"Indicators API", live:true, wired:true, kind:"macro" },
-  { id:"oecd",        abbr:"OECD", name:"OECD Economic Outlook", desc:"Forward GDP-growth projections — sets the income lever default", rows:"projections", live:true, wired:true, kind:"oecd" },
 ];
 
 function ConnectData({ airport, onDone, alreadyDone, macroMeta, actMeta, oecdMeta, ofMeta }){

@@ -20,9 +20,9 @@ const LB_TO_T = 0.000453592;
 async function jget(url) { const r = await fetch(url, { headers: UA }); if (!r.ok) throw new Error(`HTTP ${r.status}`); return r.json(); }
 
 async function discover() {
-  // query data.bts.gov's OWN Socrata catalog (the federated api.us.socrata.com
-  // returns 0 for this domain)
-  const cat = `https://data.bts.gov/api/catalog/v1?only=dataset&limit=100&q=${encodeURIComponent("T-100")}`;
+  // constrain to the BTS domain (the catalog federates across all Socrata
+  // domains otherwise, returning unrelated datasets)
+  const cat = `https://data.bts.gov/api/catalog/v1?domains=data.bts.gov&search_context=data.bts.gov&only=dataset&limit=100&q=${encodeURIComponent("T-100")}`;
   let results = [];
   try { results = (await jget(cat)).results || []; console.log(`  [bts] catalog returned ${results.length} datasets`); }
   catch (e) { console.warn("  [bts] catalog failed:", e.message); }

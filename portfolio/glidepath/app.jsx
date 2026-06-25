@@ -60,27 +60,9 @@ function App(){
     return ()=>{ alive = false; };
   },[]);
 
-  // OECD Economic Outlook (data/oecd.json) — forward GDP-growth projections set
-  // the GDP lever default (preferred over World Bank historical). No CORS.
-  useEffectApp(()=>{
-    let alive = true;
-    fetch("data/oecd.json", { cache:"no-store" })
-      .then(r => r.ok ? r.json() : null)
-      .then(j => {
-        if (!alive || !j || !j.countries) return;
-        Object.keys(j.countries).forEach(cc => {
-          if (!MACRO[cc]) return;
-          const c = j.countries[cc];
-          if (c.gdpcapProj != null) MACRO[cc].gdpcapProj = c.gdpcapProj;
-          if (c.gdpProj != null)    MACRO[cc].gdpProj = c.gdpProj;
-          MACRO[cc].oecdHorizon = c.horizon;
-        });
-        window.GP_OECD_META = j; setOecdMeta(j);
-        if (!connected && airport) setScenario(GP_defaultScenario(airport.iata));
-      })
-      .catch(()=>{});
-    return ()=>{ alive = false; };
-  },[]);
+  // OECD Economic Outlook removed: its SDMX endpoint returns HTTP 500 and the
+  // GDP-growth lever default falls back to the real World Bank GDP/capita
+  // figure (data/macro.json), so no projection layer is needed.
 
   // Load the committed monthly activity snapshot (data/activity.json) — the
   // real observed series the whole app renders. Same-origin, no CORS.
@@ -229,7 +211,7 @@ function App(){
             <span className="topbar-chips" style={{display:"flex",alignItems:"center",gap:12}}>
               {macroMeta && <span className="chip" title={"World Bank snapshot · "+(macroMeta.source||"")}><span className="dot dot-ok"></span>WB snapshot {new Date(macroMeta.generatedAt).toLocaleDateString("en-CA")}</span>}
               {airport && <span className="chip chip-pink"><span className="dot dot-pink"></span>{airport.iata} · {airport.icao}</span>}
-              {connected && <span className="chip chip-ok"><span className="dot dot-ok"></span>4 sources live</span>}
+              {connected && <span className="chip chip-ok"><span className="dot dot-ok"></span>3 sources live</span>}
             </span>
             {connected && screen!=="export" && <button className="btn btn-primary btn-sm" onClick={()=>{ setScreen("export"); setNavOpen(false); }}>Export</button>}
           </div>
