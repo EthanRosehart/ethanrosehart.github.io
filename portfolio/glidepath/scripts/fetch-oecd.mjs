@@ -33,15 +33,20 @@ const codes = Object.keys(NAMES);
    and real GDP per capita growth. Verify the dataflow on release changes:
    https://data-explorer.oecd.org → Economic Outlook → share → SDMX query. */
 const BASE = "https://sdmx.oecd.org/public/rest/data";
-const DATAFLOW = "OECD.ECO.MAD,DSD_EO@DF_EO,";   // Economic Outlook dataflow
+// agency,dataflow with NO trailing version -> SDMX serves the latest release.
+// (A trailing comma / empty version makes OECD return HTTP 500.)
+const DATAFLOW = "OECD.ECO.MAD,DSD_EO@DF_EO";    // Economic Outlook dataflow
 const startPeriod = new Date().getFullYear();     // current year's projection onward
 
 async function fetchMeasure(measure) {
-  // key: <REF_AREA>.<MEASURE>.<FREQ> — dot-joined country list
+  // key: <REF_AREA>.<MEASURE>.<FREQ> — plus-joined country list
   const key = `${codes.join("+")}.${measure}.A`;
   const url = `${BASE}/${DATAFLOW}/${key}?startPeriod=${startPeriod}&dimensionAtObservation=AllDimensions&format=jsondata`;
   const res = await fetch(url, { headers: { Accept: "application/vnd.sdmx.data+json", "User-Agent": "glidepath-data-bot" } });
-  if (!res.ok) throw new Error(`oecd ${measure}: HTTP ${res.status}`);
+  if (!res.ok) {
+    let body = ""; try { body = (await res.text()).slice(0, 180); } catch {}
+    throw new Error(`oecd ${measure}: HTTP ${res.status} ${url} ${body}`);
+  }
   const js = await res.json();
   const ds = js?.data?.dataSets?.[0];
   const dims = js?.data?.structure?.dimensions?.observation;
