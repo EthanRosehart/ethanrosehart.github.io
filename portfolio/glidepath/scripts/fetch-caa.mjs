@@ -1,14 +1,20 @@
 #!/usr/bin/env node
 /* ============================================================
- * fetch-caa.mjs — UK monthly activity (CAA via data.gov.uk CKAN)
+ * fetch-caa.mjs — UK monthly activity (CAA airport data)
  *
- * UK airports left Eurostat after Brexit (data ends 2020-10), so the
- * 3 UK regionals (Exeter/Newquay/Inverness) need the CAA airport
- * statistics published on data.gov.uk. This first pass DISCOVERS the
- * right dataset/resource (logging candidate resources, datastore
- * status, fields and a sample row) and, if a queryable datastore
- * resource is found, attempts to pull monthly passengers/movements.
- * Merges any results into data/activity.json. Best-effort + verbose.
+ * UK airports left Eurostat after Brexit. The CAA publishes monthly
+ * airport statistics as CSV on caa.co.uk (one set of tables per
+ * month). data.gov.uk only carries dead aspx links, so we go to the
+ * CAA monthly pages directly, find the Table 10 (terminal
+ * passengers) / Table 03 (air-transport movements) CSV links, and
+ * parse the rows for our major UK airports.
+ *
+ * This pass PROBES: it fetches a couple of recent monthly pages with
+ * a browser UA and logs HTTP status + any .csv links found, so the
+ * parser can be wired from the real page/file structure. Best-effort;
+ * UK stays absent until extraction is confirmed (no synthetic).
+ *
+ * Run locally:  node scripts/fetch-caa.mjs
  * ============================================================ */
 import { writeFile, readFile } from "node:fs/promises";
 import { dirname, resolve } from "node:path";
@@ -16,75 +22,50 @@ import { fileURLToPath } from "node:url";
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const OUT = resolve(__dirname, "..", "data", "activity.json");
-const CKAN = "https://data.gov.uk/api/3/action";
-const UA = { "User-Agent": "glidepath-data-bot" };
-const UK = { EXT: /exeter/i, NQY: /newquay|cornwall/i, INV: /inverness/i };
+// major UK airports that appear in CAA airport data (swap for the Brexit-
+// orphaned regionals). name patterns match the CAA "Reporting airport" column.
+const UK = { BRS: /bristol/i, EDI: /edinburgh/i, BHX: /birmingham/i };
+const BROWSER = { "User-Agent": "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124 Safari/537.36", "Accept": "text/html,application/xhtml+xml" };
+const MONTHS = ["january","february","march","april","may","june","july","august","september","october","november","december"];
 
-async function ckan(action, qs) {
-  const res = await fetch(`${CKAN}/${action}?${qs}`, { headers: UA });
-  if (!res.ok) throw new Error(`${action} HTTP ${res.status}`);
-  const js = await res.json();
-  if (!js.success) throw new Error(`${action} not success`);
-  return js.result;
-}
-
-async function discover() {
-  // search CAA datasets that look like airport activity/statistics
-  const r = await ckan("package_search", "q=airport+statistics+CAA&rows=30").catch((e) => { console.warn("  [caa] search failed:", e.message); return null; });
-  if (!r) return [];
-  console.log(`  [caa] ${r.count} datasets matched; scanning top ${r.results.length}`);
-  const candidates = [];
-  for (const d of r.results) {
-    const org = d.organization?.name || "";
-    for (const res of d.resources || []) {
-      const hay = `${d.title} ${res.name} ${res.description || ""}`;
-      if (!/airport|punctual|aircraft|passenger/i.test(hay)) continue;
-      const cand = { dataset: d.title, org, name: res.name, format: res.format, datastore: !!res.datastore_active, id: res.id, url: res.url };
-      candidates.push(cand);
-    }
+function monthPages(n) {
+  // most-recent n monthly pages, e.g. .../uk-airport-data-2025/october-2025/
+  const out = [];
+  const now = new Date();
+  let y = now.getFullYear(), m = now.getMonth(); // 0-based
+  for (let i = 0; i < n; i++) {
+    m--; if (m < 0) { m = 11; y--; }
+    out.push(`https://www.caa.co.uk/data-and-analysis/uk-aviation-market/airports/uk-airport-data/uk-airport-data-${y}/${MONTHS[m]}-${y}/`);
   }
-  candidates.slice(0, 25).forEach((c) => console.log(`  [caa] cand ds="${c.dataset}" res="${c.name}" fmt=${c.format} datastore=${c.datastore} id=${c.id}`));
-  return candidates;
+  return out;
 }
 
-async function probeDatastore(id) {
-  // log fields + a sample row so we learn the schema
-  const r = await ckan("datastore_search", `resource_id=${id}&limit=3`).catch((e) => { console.warn(`  [caa] datastore ${id} failed:`, e.message); return null; });
-  if (!r) return null;
-  console.log(`  [caa] datastore ${id} fields:`, (r.fields || []).map((f) => f.id).join(", "));
-  if (r.records && r.records[0]) console.log(`  [caa] sample:`, JSON.stringify(r.records[0]).slice(0, 300));
-  return r;
-}
-
-async function probeCsv(c) {
-  // download the CSV directly from the resource url captured in package_search
-  // (resource_show returns 403 on data.gov.uk). Log header + sample rows.
-  console.log(`  [caa] csv ds="${c.dataset}" url=${c.url}`);
-  if (!c.url) return;
-  let text;
-  for (const ua of [UA, { "User-Agent": "Mozilla/5.0 (compatible; glidepath/1.0)" }]) {
-    try { const r = await fetch(c.url, { headers: ua, redirect: "follow" }); if (!r.ok) throw new Error(`HTTP ${r.status}`); text = await r.text(); break; }
-    catch (e) { console.warn(`  [caa] download failed (${e.message})`); }
-  }
-  if (!text) return;
-  const lines = text.split(/\r?\n/);
-  console.log(`  [caa] ${lines.length} lines; header: ${lines[0].slice(0, 240)}`);
-  for (let i = 1; i <= 3 && i < lines.length; i++) console.log(`  [caa] row${i}: ${lines[i].slice(0, 240)}`);
-  const hit = lines.find((l) => /exeter|newquay|inverness/i.test(l));
-  console.log(hit ? `  [caa] match: ${hit.slice(0, 240)}` : "  [caa] no Exeter/Newquay/Inverness rows in this CSV");
+async function probe(url) {
+  let res;
+  try { res = await fetch(url, { headers: BROWSER, redirect: "follow" }); }
+  catch (e) { console.warn(`  [caa] ${url} fetch error: ${e.message}`); return; }
+  console.log(`  [caa] ${url} -> HTTP ${res.status}`);
+  if (!res.ok) return;
+  const html = await res.text();
+  // collect .csv links + nearby text labels
+  const links = [...html.matchAll(/href="([^"]+\.csv[^"]*)"/gi)].map((m) => m[1]);
+  console.log(`  [caa] found ${links.length} csv links`);
+  links.slice(0, 12).forEach((l) => console.log(`  [caa] csv: ${l}`));
+  // also log any link whose surrounding text mentions Table 10 / passengers
+  const tableLinks = [...html.matchAll(/<a[^>]+href="([^"]+)"[^>]*>([^<]*(?:Table\s*10|Table\s*03|passenger|movement)[^<]*)<\/a>/gi)]
+    .slice(0, 12).map((m) => `${m[2].trim()} -> ${m[1]}`);
+  tableLinks.forEach((t) => console.log(`  [caa] table-link: ${t}`));
 }
 
 async function main() {
   let data; try { data = JSON.parse(await readFile(OUT, "utf8")); } catch { data = { airports: {} }; }
   data.airports = data.airports || {};
 
-  const candidates = await discover();
-  const csvs = candidates.filter((c) => /csv/i.test(c.format || "") && c.url).slice(0, 3);
-  if (!csvs.length) console.warn("  [caa] no CSV candidates with a url found");
-  for (const c of csvs) await probeCsv(c);
+  for (const url of monthPages(2)) await probe(url);
 
+  // extraction wired once the page/CSV structure is confirmed from the logs.
   await writeFile(OUT, JSON.stringify(data) + "\n", "utf8");
-  console.log("CAA discovery done.");
+  console.log("CAA probe done.");
 }
 
 main().catch((e) => { console.error("CAA failed:", e.message); process.exit(1); });
