@@ -43,7 +43,7 @@ file (enriched by `airports.json`); there is no hand-curated airport list.
 | Market | Source | Notes |
 |--------|--------|-------|
 | Europe | Eurostat `avia_paoa` (PAS_CRD pax, CAF_PAS flights) + `avia_gooa` (FRM_LD_NLD cargo, tonnes) | A single all-airports pull is rejected with HTTP 413 (async). The script enumerates reporting airports with a small `lastTimePeriod` call, ranks by recent volume, and batch-fetches full series for the busiest ~70 in `rep_airp` chunks, splitting any chunk that still trips the 413 guard. |
-| Canada | StatCan WDS — 23-10-0312 (screened pax) + 23-10-0008 (movements) | The eight CATSA Class-1 airports, resolved by airport name against the cube metadata. |
+| Canada | StatCan WDS — 23-10-0312 (screened pax) + 23-10-0296 (aircraft movements, with 23-10-0008 as fallback) | The eight CATSA Class-1 airports, resolved by airport name against the cube metadata. StatCan stopped updating the older movements cube 23-10-0008 after 2022-09, so the current cube 23-10-0296 ("NAV CANADA services and other selected airports") is tried first. |
 | US | BTS T-100 (`scripts/fetch-bts.mjs`) | Not currently wired — the Socrata catalog exposes no monthly segment table. US airports are simply absent (no modeling). |
 
 Eurostat airport codes are `<geo>_<ICAO>` (e.g. `ES_LEMD`, `AT_LOWG`); the geo
