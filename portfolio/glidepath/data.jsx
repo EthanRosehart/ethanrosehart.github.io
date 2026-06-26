@@ -55,9 +55,9 @@ const OBSERVED = {};
    pipeline fills paxSeg when available. Absent → the model runs on totals only. */
 const SEGMENTS = {};
 const PAX_SEGMENTS = [
-  { k:"domestic",     label:"Domestic" },
-  { k:"transborder",  label:"Transborder" },
-  { k:"international", label:"International" },
+  { k:"domestic",     label:"Domestic",      color:"var(--cyan)" },
+  { k:"transborder",  label:"Transborder",   color:"var(--lime)" },
+  { k:"international", label:"International",  color:"var(--violet)" },
 ];
 let ACTIVITY_META = null;
 function setActivity(json){
@@ -327,6 +327,7 @@ function longTermForecast(iata, history, scenario){
   const cagr = Math.pow(rows[rows.length-1].pax/annualPax, 1/s.horizon) - 1;
   return { rows, months, baseYear, endYear:baseYear+s.horizon, hasAtm, hasCargo,
     hasSeg, segKeys, segLabels: segKeys.map(k => (PAX_SEGMENTS.find(p=>p.k===k)||{}).label || k),
+    segColors: segKeys.map(k => (PAX_SEGMENTS.find(p=>p.k===k)||{}).color || "var(--cyan)"),
     gDemand:gDemand*100, cagr:cagr*100,
     breakdown:[
       { k:"Income × elasticity", v:gIncome, c:"var(--pink)" },

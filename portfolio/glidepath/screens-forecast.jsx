@@ -120,19 +120,43 @@ function Overview({ airport, history, scenario, go }){
           </div>
         </div>
 
-        <div className="panel panel-pad">
-          <SectionHead kicker="Demand seasonality" title="Share of an average month"/>
-          {d.st
-            ? <>
-                <BarChart labels={MONTHS} height={210} yFmt={v=>v.toFixed(2)+"×"}
-                  tipFmt={v=>(v>=1?"+":"")+Math.round((v-1)*100)+"% vs avg month"}
-                  series={[{ name:"Demand", color:"var(--cyan)", values:d.st.seasIdx }]}/>
-                <div className="method" style={{marginTop:10}}>
-                  <b>Peak —</b> {MONTHS[d.st.seasIdx.indexOf(Math.max(...d.st.seasIdx))]} runs
-                  {" "}{(Math.max(...d.st.seasIdx)/Math.min(...d.st.seasIdx)).toFixed(2)}× the quietest month.
+        <div style={{display:"flex",flexDirection:"column",gap:16}}>
+          <div className="panel panel-pad">
+            <SectionHead kicker="Demand seasonality" title="Share of an average month"/>
+            {d.st
+              ? <>
+                  <BarChart labels={MONTHS} height={210} yFmt={v=>v.toFixed(2)+"×"}
+                    tipFmt={v=>(v>=1?"+":"")+Math.round((v-1)*100)+"% vs avg month"}
+                    series={[{ name:"Demand", color:"var(--cyan)", values:d.st.seasIdx }]}/>
+                  <div className="method" style={{marginTop:10}}>
+                    <b>Peak —</b> {MONTHS[d.st.seasIdx.indexOf(Math.max(...d.st.seasIdx))]} runs
+                    {" "}{(Math.max(...d.st.seasIdx)/Math.min(...d.st.seasIdx)).toFixed(2)}× the quietest month.
+                  </div>
+                </>
+              : <div className="air-meta">No forecast yet for this gateway.</div>}
+          </div>
+
+          {d.lt && d.lt.hasSeg && (()=>{
+            const seg = d.lt.rows[0].seg;
+            const tot = d.lt.segKeys.reduce((t,k)=>t+seg[k],0) || 1;
+            return (
+              <div className="panel panel-pad">
+                <SectionHead kicker={"Passenger mix · "+d.lt.baseYear} title="Sector distribution"/>
+                <div style={{display:"flex",gap:18,alignItems:"center",flexWrap:"wrap"}}>
+                  <Donut size={140} thickness={24}
+                    items={d.lt.segKeys.map((k,i)=>({ label:d.lt.segLabels[i], value:seg[k], color:d.lt.segColors[i] }))}/>
+                  <div style={{flex:"1 1 150px",minWidth:140}}>
+                    {d.lt.segKeys.map((k,i)=>(
+                      <div key={k} className="legend-item" style={{justifyContent:"space-between",marginBottom:10}}>
+                        <span><span className="legend-swatch" style={{background:d.lt.segColors[i]}}></span>{d.lt.segLabels[i]}</span>
+                        <span className="num" style={{color:"var(--text)"}}>{Math.round(seg[k]/tot*100)}% · {GP_fmt.k1(seg[k])}</span>
+                      </div>
+                    ))}
+                  </div>
                 </div>
-              </>
-            : <div className="air-meta">No forecast yet for this gateway.</div>}
+              </div>
+            );
+          })()}
         </div>
       </div>
 

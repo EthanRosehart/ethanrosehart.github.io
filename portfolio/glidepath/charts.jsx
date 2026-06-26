@@ -166,7 +166,7 @@ function LineChart({ labels, series, band, markerIndex, height=260, yFmt, yFmtRi
 }
 
 /* ---------- BarChart (grouped) ------------------------------- */
-function BarChart({ labels, series, height=240, stacked=false, yFmt, tipFmt }){
+function BarChart({ labels, series, height=240, stacked=false, yFmt, tipFmt, labelFmt }){
   const wrapRef = useRef(null);
   const [w,setW] = useState(680);
   const [hover,setHover] = useState(null);
@@ -200,8 +200,13 @@ function BarChart({ labels, series, height=240, stacked=false, yFmt, tipFmt }){
                 const v=se.values[i]||0;
                 if (stacked){ const yy=y(acc+v), hh=y(acc)-y(acc+v); acc+=v;
                   return <rect key={si} x={gx+groupW*0.25} y={yy} width={bw} height={Math.max(0,hh)} fill={se.color} rx="2"/>;
-                } else { const bx=gx+groupW*0.19+si*bw; 
-                  return <rect key={si} x={bx} y={y(v)} width={bw*0.86} height={Math.max(0,innerH-(y(v)-padT))} fill={se.color} rx="2"/>;
+                } else { const bx=gx+groupW*0.19+si*bw;
+                  return (
+                    <g key={si}>
+                      <rect x={bx} y={y(v)} width={bw*0.86} height={Math.max(0,innerH-(y(v)-padT))} fill={se.color} rx="2"/>
+                      {labelFmt && v>0 && <text x={bx+bw*0.86/2} y={y(v)-5} textAnchor="middle" fontSize="10.5" fontWeight="700" fontFamily="var(--mono)" fill="var(--dim)">{labelFmt(v)}</text>}
+                    </g>
+                  );
                 }
               })}
               <text x={gx+groupW/2} y={H-10} textAnchor="middle" fontSize="11" fill="var(--faint)" fontFamily="var(--mono)">{lb}</text>
@@ -225,19 +230,33 @@ function BarChart({ labels, series, height=240, stacked=false, yFmt, tipFmt }){
 }
 
 /* ---------- Donut -------------------------------------------- */
-function Donut({ items, size=150, thickness=20 }){
-  const total = items.reduce((s,i)=>s+i.value,0);
+/* items: [{ label, value, color }]. showPct prints the share inside each slice
+   that's big enough to read; center is optional middle text. */
+function Donut({ items, size=150, thickness=22, showPct=true, center }){
+  const total = items.reduce((s,i)=>s+i.value,0) || 1;
   const r=(size-thickness)/2, cx=size/2, cy=size/2, C=2*Math.PI*r;
-  let off=0;
+  let off=0, acc=0;
   return (
-    <svg width={size} height={size} style={{transform:"rotate(-90deg)"}}>
-      <circle cx={cx} cy={cy} r={r} fill="none" stroke="var(--bg-3)" strokeWidth={thickness}/>
-      {items.map((it,i)=>{
-        const frac=it.value/total, len=frac*C;
-        const el=<circle key={i} cx={cx} cy={cy} r={r} fill="none" stroke={it.color} strokeWidth={thickness}
-          strokeDasharray={`${len} ${C-len}`} strokeDashoffset={-off} strokeLinecap="butt"/>;
-        off+=len; return el;
+    <svg width={size} height={size} style={{display:"block"}}>
+      <g transform={`rotate(-90 ${cx} ${cy})`}>
+        <circle cx={cx} cy={cy} r={r} fill="none" stroke="var(--bg-3)" strokeWidth={thickness}/>
+        {items.map((it,i)=>{
+          const frac=it.value/total, len=frac*C;
+          const el=<circle key={i} cx={cx} cy={cy} r={r} fill="none" stroke={it.color} strokeWidth={thickness}
+            strokeDasharray={`${len} ${C-len}`} strokeDashoffset={-off} strokeLinecap="butt"/>;
+          off+=len; return el;
+        })}
+      </g>
+      {showPct && items.map((it,i)=>{
+        const frac=it.value/total, mid=acc+frac/2; acc+=frac;
+        if (frac < 0.07) return null;                     // too thin to label legibly
+        const ang=(-90 + mid*360) * Math.PI/180;
+        const x=cx + r*Math.cos(ang), y=cy + r*Math.sin(ang);
+        return <text key={i} x={x} y={y} textAnchor="middle" dominantBaseline="central"
+          fontSize="11.5" fontWeight="700" fontFamily="var(--mono)" fill="#0e1015">{Math.round(frac*100)}%</text>;
       })}
+      {center!=null && <text x={cx} y={cy} textAnchor="middle" dominantBaseline="central"
+        fontSize="12" fontFamily="var(--mono)" fill="var(--dim)">{center}</text>}
     </svg>
   );
 }
