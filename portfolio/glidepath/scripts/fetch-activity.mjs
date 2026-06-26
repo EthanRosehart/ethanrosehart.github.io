@@ -148,10 +148,19 @@ async function esBatch(dataset, q, reps) {
 /* ============================================================
    STATISTICS CANADA — WDS REST. Resolve each airport member by
    name, pick the right characteristic per metric, build the full
-   memberId coordinate. 23-10-0312 = screened passengers (monthly),
-   23-10-0008 = aircraft movements (monthly).
+   memberId coordinate. 23-10-0312 = screened passengers (monthly).
+
+   Movements: 23-10-0296 ("Aircraft movements, by class of operation,
+   airports with NAV CANADA services and other selected airports,
+   monthly") is the live cube — StatCan stopped updating the older
+   23-10-0008 after 2022-09 (program reorg), which is why movements
+   used to flat-line two years behind passengers. We try the current
+   cube first and keep the retired one as a fallback so a structural
+   change at StatCan degrades to the last good series, never to a gap.
    ============================================================ */
-const STATCAN_PID = { pax: 23100312, atm: 23100008 };
+const STATCAN_PID = { pax: 23100312, atm: 23100296 };
+// movements cubes in priority order (current first, retired fallback)
+const STATCAN_ATM_PIDS = [23100296, 23100008];
 // the screened-passenger cube covers Canada's eight CATSA Class-1 airports
 const STATCAN = [
   ["YYZ", /pearson|toronto/i],   ["YVR", /vancouver/i],     ["YUL", /trudeau|montr/i],
@@ -182,7 +191,15 @@ async function statcanMeta(pid) {
 async function statcanCoord(pid, re, metric) {
   const dims = await statcanMeta(pid);
   let geoDim = -1, geoMember = null;
-  dims.forEach((d, i) => { const hit = d.members.find((m) => re.test(m.name)); if (hit) { geoDim = i; geoMember = hit; } });
+  // The movements cube (23-10-0296) lists many airports, so a city-name match
+  // can be ambiguous (e.g. "Calgary International" vs "Calgary/Springbank",
+  // "Toronto/Pearson" vs "Billy Bishop Toronto City"). When several members
+  // match, prefer the International/CATSA gateway we actually want. The pax
+  // cube only carries the eight CATSA airports, so this never changes it.
+  dims.forEach((d, i) => {
+    const hits = d.members.filter((m) => re.test(m.name));
+    if (hits.length) { geoDim = i; geoMember = hits.find((m) => /international/i.test(m.name)) || hits[0]; }
+  });
   if (!geoMember) throw new Error(`no airport member for ${re} in ${pid}`);
   const charRe = STATCAN_CHAR[metric];
   const parts = dims.map((d, i) => {
@@ -284,14 +301,21 @@ async function main() {
   for (const [iata, re] of STATCAN) {
     const series = {};
     for (const metric of ["pax", "atm"]) {
-      try {
-        const m = await statcanSeries(STATCAN_PID[metric], await statcanCoord(STATCAN_PID[metric], re, metric));
-        if (Object.keys(m).length >= 12) { series[metric] = m; live++; }
-        else throw new Error(`only ${Object.keys(m).length}mo`);
-      } catch (e) {
+      // movements fall through current → retired cube; pax has a single cube
+      const pids = metric === "atm" ? STATCAN_ATM_PIDS : [STATCAN_PID[metric]];
+      let got = null, lastErr = null;
+      for (const pid of pids) {
+        try {
+          const m = await statcanSeries(pid, await statcanCoord(pid, re, metric));
+          if (Object.keys(m).length >= 12) { got = m; if (pid !== pids[0]) console.warn(`  ${iata}/${metric} statcan: used fallback cube ${pid}`); break; }
+          lastErr = new Error(`only ${Object.keys(m).length}mo`);
+        } catch (e) { lastErr = e; }
+      }
+      if (got) { series[metric] = got; live++; }
+      else {
         const kept = prevSeries(prev, iata, metric);
         if (kept) series[metric] = kept;
-        console.warn(`  ${iata}/${metric} statcan failed (${e.message})${kept ? " — kept previous" : ""}`);
+        console.warn(`  ${iata}/${metric} statcan failed (${lastErr ? lastErr.message : "no data"})${kept ? " — kept previous" : ""}`);
       }
     }
     if (!series.pax || Object.keys(series.pax).length < MIN_MONTHS) { console.warn(`  ${iata} statcan: insufficient pax — skipped`); continue; }
@@ -318,7 +342,7 @@ async function main() {
     note: "Monthly activity (passengers / movements / cargo) by airport. Refreshed nightly; read same-origin by the browser. No synthetic data.",
     sources: {
       eurostat: "Eurostat avia_paoa (PAS_CRD pax, CAF_PAS flights) + avia_gooa (FRM_LD_NLD cargo, tonnes) — all reporting airports",
-      statcan: "Statistics Canada WDS 23-10-0312 (screened pax), 23-10-0008 (movements)",
+      statcan: "Statistics Canada WDS 23-10-0312 (screened pax), 23-10-0296 (aircraft movements; 23-10-0008 fallback)",
       bts: "US DOT BTS T-100 (fetch-bts.mjs)",
     },
     airports,

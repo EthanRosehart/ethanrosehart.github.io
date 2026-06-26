@@ -198,6 +198,8 @@ function defaultScenario(iata){
     tourism: 0,
     fuel: 0,
     lcc: 0,
+    cargo: 0,    // freight-specific growth shift (on top of the pax-linked trend)
+    gauge: 0,    // aircraft up-gauging — movements grow slower than passengers
     horizon: 10,
   };
 }
@@ -217,7 +219,6 @@ function longTermForecast(iata, history, scenario){
   const annualCargo = cargoYears.length ? cargoYears[cargoYears.length-1].v : null;
   const hasAtm = annualAtm != null && baseMonths.every(r => r.atm != null);
   const hasCargo = annualCargo != null;
-  const atmPerPax = hasAtm ? annualAtm / annualPax : null;
 
   const gIncome  = s.gdp * s.elasticity;
   const gPop     = s.pop;
@@ -225,11 +226,16 @@ function longTermForecast(iata, history, scenario){
   const gLCC     = s.lcc;
   const yieldDrag = -s.fuel * 0.18;
   const gDemand = (gIncome + gPop + gTourism + gLCC + yieldDrag) / 100;
-  const gCargo  = gDemand * 0.6 + 0.005;
+  // cargo rides the demand trend at a damped beta, plus a freight-specific shift
+  const gCargo  = gDemand * 0.6 + 0.005 + (s.cargo || 0) / 100;
+  // movements track passengers, less an up-gauging drag (bigger/fuller aircraft
+  // carry the same passengers in fewer flights). gauge=0 ⇒ proportional to pax.
+  const gMovements = gDemand - (s.gauge || 0) / 100;
 
-  const basePax = {}, baseCargo = {};
-  baseMonths.forEach(r => { basePax[r.m] = r.pax; if (r.cargo != null) baseCargo[r.m] = r.cargo; });
+  const basePax = {}, baseCargo = {}, baseAtm = {};
+  baseMonths.forEach(r => { basePax[r.m] = r.pax; if (r.cargo != null) baseCargo[r.m] = r.cargo; if (r.atm != null) baseAtm[r.m] = r.atm; });
   const cargoMonthAvg = hasCargo ? annualCargo / 12 : null;
+  const atmMonthAvg   = hasAtm   ? annualAtm / 12   : null;
 
   const months = [];
   let yy = baseYear, mm = 11;
@@ -240,7 +246,7 @@ function longTermForecast(iata, history, scenario){
     const pax = (basePax[mm] != null ? basePax[mm] : annualPax/12) * Math.pow(1+gDemand, yf);
     const rec = { y:yy, m:mm, date:`${yy}-${String(mm+1).padStart(2,"0")}`,
       label:`${MONTHS[mm]} ${String(yy).slice(2)}`, pax:Math.round(pax) };
-    if (hasAtm)   rec.atm   = Math.round(pax * atmPerPax);
+    if (hasAtm)   rec.atm   = Math.round((baseAtm[mm]   != null ? baseAtm[mm]   : atmMonthAvg)   * Math.pow(1+gMovements, yf));
     if (hasCargo) rec.cargo = Math.round((baseCargo[mm] != null ? baseCargo[mm] : cargoMonthAvg) * Math.pow(1+gCargo, yf));
     months.push(rec);
   }

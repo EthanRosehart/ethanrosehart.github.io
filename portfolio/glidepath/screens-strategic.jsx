@@ -122,6 +122,14 @@ const LEVERS = [
   { k:"lcc",        name:"LCC / new-route stimulation", unit:"%/yr", min:0, max:5, step:0.25, desc:"Demand uplift from low-cost entry or route development incentives." },
 ];
 
+/* metric-specific levers — only shown when the gateway carries that series */
+const SHAPE_LEVERS = {
+  atm:   { k:"gauge", name:"Aircraft up-gauging", unit:"%/yr", min:0, max:3, step:0.1, metric:"atm",
+           desc:"Larger, fuller aircraft carry the same passengers in fewer flights — trims movement growth below passenger growth." },
+  cargo: { k:"cargo", name:"Air cargo growth shift", unit:"%/yr", min:-4, max:6, step:0.25, metric:"cargo",
+           desc:"Freight-specific tailwind/headwind on top of the passenger-linked cargo trend (e-commerce, bellyhold capacity, trade)." },
+};
+
 const PRESETS = {
   base:    { label:"Macro baseline", desc:"World Bank central case", icon:"◆" },
   bull:    { label:"Upside", desc:"Strong economy + LCC entry", icon:"▲", set:{ gdp:+0.8, tourism:2.5, lcc:1.5, fuel:-3 } },
@@ -138,6 +146,19 @@ function Scenario({ airport, history, scenario, setScenario }){
     return { lt, baseLt, labels };
   },[airport, history, scenario, base]);
 
+  // metric the impact chart + KPIs focus on; extra metrics appear only when the
+  // gateway actually carries movements / cargo
+  const metricDefs = [{ k:"pax", label:"Passengers" },
+    ...(d.lt && d.lt.hasAtm   ? [{ k:"atm",   label:"Movements" }] : []),
+    ...(d.lt && d.lt.hasCargo ? [{ k:"cargo", label:"Cargo" }]     : [])];
+  const [metric, setMetric] = React.useState("pax");
+  const m = metricDefs.some(x=>x.k===metric) ? metric : "pax";
+
+  // levers: the demand drivers always, plus shape levers for present metrics
+  const levers = [...LEVERS,
+    ...(d.lt && d.lt.hasAtm   ? [SHAPE_LEVERS.atm]   : []),
+    ...(d.lt && d.lt.hasCargo ? [SHAPE_LEVERS.cargo] : [])];
+
   const setLever = (k,v)=> setScenario({ ...scenario, [k]: v });
   const applyPreset = (id)=>{
     if (id==="base") return setScenario({ ...base });
@@ -149,7 +170,11 @@ function Scenario({ airport, history, scenario, setScenario }){
 
   if (!d.lt || !d.baseLt) return <div className="content fade-in"><div className="panel panel-pad"><div className="air-meta">Not enough complete years of data to build scenarios yet.</div></div></div>;
   const end = d.lt.rows[d.lt.rows.length-1], baseEnd = d.baseLt.rows[d.baseLt.rows.length-1];
-  const diffPax = end.pax - baseEnd.pax;
+  const fmtM = (v)=> m==="cargo" ? GP_fmt.t(v) : (m==="pax" ? GP_fmt.k1(v) : GP_fmt.k(v));
+  const endM = end[m] ?? 0, baseEndM = baseEnd[m] ?? 0, diffM = endM - baseEndM;
+  const yrs = d.lt.endYear - d.lt.baseYear;
+  const cagrM = (d.lt.rows[0][m] && endM) ? (Math.pow(endM/d.lt.rows[0][m], 1/yrs)-1)*100 : 0;
+  const mLabel = (metricDefs.find(x=>x.k===m)||{}).label || "Passengers";
   const activePreset = (()=>{
     const eq=(o)=>Object.keys(o).every(k=>Math.abs((scenario[k]??0)-(o[k]??0))<0.001);
     if (eq(base)) return "base";
@@ -172,7 +197,7 @@ function Scenario({ airport, history, scenario, setScenario }){
             ))}
           </div>
           <div style={{marginTop:6}}>
-            {LEVERS.map(l=>{
+            {levers.map(l=>{
               const v = scenario[l.k] ?? 0, bv = base[l.k] ?? 0;
               const changed = Math.abs(v-bv)>0.001;
               return (
@@ -193,22 +218,27 @@ function Scenario({ airport, history, scenario, setScenario }){
         {/* right: live impact */}
         <div style={{display:"flex",flexDirection:"column",gap:16}}>
           <div className="grid g-3">
-            <KPI accent label={d.lt.endYear+" PAX · scenario"} value={GP_fmt.k1(end.pax)}
-              delta={(diffPax>=0?"+":"")+GP_fmt.k1(Math.abs(diffPax))+" vs base"} deltaDir={diffPax>=0?"up":"down"} sub="passengers"/>
-            <KPI label="PAX CAGR" value={GP_fmt.pct(d.lt.cagr)} sub={d.lt.baseYear+"→"+d.lt.endYear} sparkColor="var(--cyan)"/>
-            <KPI label="Cumulative Δ" value={(diffPax>=0?"+":"–")+GP_fmt.k1(Math.abs(end.pax-baseEnd.pax))} sub={"vs baseline · "+d.lt.endYear} />
+            <KPI accent label={d.lt.endYear+" "+mLabel.toLowerCase()+" · scenario"} value={fmtM(endM)}
+              delta={(diffM>=0?"+":"")+fmtM(Math.abs(diffM))+" vs base"} deltaDir={diffM>=0?"up":"down"} sub={mLabel.toLowerCase()}/>
+            <KPI label={mLabel+" CAGR"} value={GP_fmt.pct(cagrM)} sub={d.lt.baseYear+"→"+d.lt.endYear} sparkColor="var(--cyan)"/>
+            <KPI label="vs baseline" value={GP_fmt.pct(baseEndM?(endM/baseEndM-1)*100:0)} deltaDir={diffM>=0?"up":"down"} sub={d.lt.endYear+" "+mLabel.toLowerCase()} />
           </div>
 
           <div className="panel panel-pad">
             <SectionHead kicker="Live impact" title="Scenario vs baseline"
-              right={<div className="chart-legend">
-                <span className="legend-item"><span className="legend-line" style={{borderColor:"var(--pink)"}}></span>Scenario</span>
-                <span className="legend-item"><span className="legend-line" style={{borderColor:"var(--faint)",borderStyle:"dashed"}}></span>Baseline</span>
+              right={<div style={{display:"flex",gap:12,alignItems:"center",flexWrap:"wrap"}}>
+                {metricDefs.length>1 && <div className="seg">{metricDefs.map(x=><button key={x.k} className={m===x.k?"on":""} onClick={()=>setMetric(x.k)}>{x.label}</button>)}</div>}
+                <div className="chart-legend">
+                  <span className="legend-item"><span className="legend-line" style={{borderColor:"var(--pink)"}}></span>Scenario</span>
+                  <span className="legend-item"><span className="legend-line" style={{borderColor:"var(--faint)",borderStyle:"dashed"}}></span>Baseline</span>
+                </div>
               </div>}/>
             <LineChart labels={d.labels} height={270} markerIndex={0}
+              yFmt={m==="cargo"?(v=>GP_fmt.k(v)):undefined}
+              valueFmt={m==="cargo"?(v=>GP_fmt.int(v)+" t"):undefined}
               series={[
-                { name:"Baseline", color:"var(--faint)", values:d.baseLt.months.map(r=>r.pax), dash:"5 4", width:1.8 },
-                { name:"Scenario", color:"var(--pink)", values:d.lt.months.map(r=>r.pax), fill:true, glow:true, width:2.8 },
+                { name:"Baseline", color:"var(--faint)", values:d.baseLt.months.map(r=>r[m]), dash:"5 4", width:1.8 },
+                { name:"Scenario", color:"var(--pink)", values:d.lt.months.map(r=>r[m]), fill:true, glow:true, width:2.8 },
               ]}/>
           </div>
 
@@ -219,7 +249,7 @@ function Scenario({ airport, history, scenario, setScenario }){
               series={[{ name:"Contribution", color:"var(--pink)", values:d.lt.breakdown.map(b=>Math.max(0,b.v)) }]}/>
             <div className="method" style={{marginTop:6}}>
               <b>Model —</b> <span className="formula">g = GDPpc·ε + pop + 0.5·tourism + lcc − 0.18·fuel</span>. Passengers
-              compound at g on the observed base-year seasonal shape; movements (where published) are held proportional to passengers.
+              compound at g on the observed base-year seasonal shape. Movements track passengers less any up-gauging drag; cargo rides a damped share of g plus its own growth shift.
             </div>
           </div>
         </div>
@@ -264,8 +294,12 @@ function ExportView({ airport, history, scenario }){
   const hasAtm = d.lt.hasAtm, hasCargo = d.lt.hasCargo;
   const st12 = d.st ? d.st.forecast.slice(0,12) : [];
 
-  /* the scenario assumptions, paired with their lever metadata */
-  const assumptions = LEVERS.map(l=>({ name:l.name, value:(scenario[l.k] ?? 0), unit:l.unit }));
+  /* the scenario assumptions, paired with their lever metadata (include the
+     movements / cargo shape levers only when the gateway carries that series) */
+  const allLevers = [...LEVERS,
+    ...(hasAtm   ? [SHAPE_LEVERS.atm]   : []),
+    ...(hasCargo ? [SHAPE_LEVERS.cargo] : [])];
+  const assumptions = allLevers.map(l=>({ name:l.name, value:(scenario[l.k] ?? 0), unit:l.unit }));
   const stamp = new Date().toLocaleDateString("en-CA");
   const fileBase = `glidepath_${airport.iata}_${new Date().toISOString().slice(0,10)}`;
 
