@@ -31,6 +31,23 @@ function SectionHead({ kicker, title, right }){
   );
 }
 
+/* Low-confidence data disclaimer. Statistics Canada gives us CATSA
+   screened-passenger counts as a stand-in for enplaned passengers — a proxy
+   that under-counts true throughput and reads low even as an enplanement
+   estimate — so we flag it wherever those numbers are shown. */
+function DataCaveat({ airport, style }){
+  const src = (GP_activityFor(airport.iata)||{}).source;
+  if (src !== "statcan") return null;
+  return (
+    <div className="caveat fade-in" style={{marginBottom:16, ...style}}>
+      <b>Data caveat —</b> {airport.iata}&rsquo;s passenger series is Statistics Canada <em>screened-passenger</em> counts
+      (CATSA security screenings) used as a proxy for enplaned passengers. They under-count true throughput — missing
+      connecting, US-precleared and unscreened travellers — and tend to read low even as an enplanement estimate. Treat
+      these figures as a rough indicator of trend and seasonality, not exact passenger volumes.
+    </div>
+  );
+}
+
 /* ---------- OVERVIEW ----------------------------------------- */
 function Overview({ airport, history, scenario, go }){
   const macro = MACRO[airport.cc];
@@ -58,6 +75,7 @@ function Overview({ airport, history, scenario, go }){
 
   return (
     <div className="content fade-in">
+      <DataCaveat airport={airport}/>
       <div className="grid g-4" style={{marginBottom:16}}>
         <KPI accent label={"PAX · "+baseYear} value={GP_fmt.k1(d.last)}
           delta={d.prev?GP_fmt.pct((d.last/d.prev-1)*100):null} deltaDir={d.last>=d.prev?"up":"down"} sub={"vs "+(baseYear-1)}
@@ -96,7 +114,7 @@ function Overview({ airport, history, scenario, go }){
             </div>
           )}
           <div className="method" style={{marginTop:14}}>
-            <b>Source —</b> real monthly filings ({(GP_activityFor(airport.iata).source||"public").split(":")[0]}),
+            <b>Source —</b> real monthly filings ({GP_sourceLabel(GP_activityFor(airport.iata).source)}),
             reconciled to complete calendar years{(d.hasAtm||d.hasCargo)?` — passengers${d.hasAtm?", aircraft movements":""}${d.hasCargo?" and cargo tonnage":""} tracked side by side`:""}.
             Indexed to {macro.label} macro drivers for the strategic outlook.
           </div>
@@ -188,6 +206,7 @@ function ShortTerm({ airport, history }){
 
   return (
     <div className="content fade-in">
+      <DataCaveat airport={airport}/>
       <div className="grid g-4" style={{marginBottom:16}}>
         <KPI accent label="Model MAPE" value={d.st.mape!=null?("±"+d.st.mape+"%"):"—"} sub="12-mo holdout backtest" deltaDir="up" delta={d.st.mape!=null&&d.st.mape<7?"strong fit":"usable"}/>
         <KPI label="Next 12 months" value={unit(next12sum)} delta={ly?GP_fmt.pct((next12sum/ly-1)*100):null} deltaDir={next12sum>=ly?"up":"down"} sub="vs trailing year"/>
@@ -215,7 +234,7 @@ function ShortTerm({ airport, history }){
             { name:"Prophet", color:"var(--pink)", values:d.fitted, dash:"6 4", width:2.6, glow:true },
           ]}/>
         <div style={{display:"flex",gap:18,marginTop:12,flexWrap:"wrap",alignItems:"center"}}>
-          <span className="legend-item"><span className="legend-line" style={{borderColor:"var(--text)"}}></span>Actual ({(GP_activityFor(airport.iata).source||"public").split(":")[0]})</span>
+          <span className="legend-item"><span className="legend-line" style={{borderColor:"var(--text)"}}></span>Actual ({GP_sourceLabel(GP_activityFor(airport.iata).source)})</span>
           <span className="legend-item"><span className="legend-line" style={{borderColor:"var(--pink)",borderStyle:"dashed"}}></span>Prophet forecast</span>
           <span className="legend-item"><span className="legend-swatch" style={{background:"var(--pink)",opacity:.3}}></span>{Math.round((GP_FORECAST_META?.interval||0.8)*100)}% interval (P10–P90)</span>
         </div>
@@ -273,4 +292,4 @@ function ShortTerm({ airport, history }){
   );
 }
 
-Object.assign(window, { Overview, ShortTerm, KPI:KPI, SectionHead });
+Object.assign(window, { Overview, ShortTerm, KPI:KPI, SectionHead, DataCaveat });
