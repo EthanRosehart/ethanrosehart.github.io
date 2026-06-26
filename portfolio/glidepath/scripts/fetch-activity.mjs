@@ -171,6 +171,13 @@ const STATCAN_CHAR = {
   pax: /screened|passenger|total/i,
   atm: /total itinerant|itinerant.*total|total movements|total/i,
 };
+// passenger sectors published by the screened-pax cube (23-10-0312): used to
+// populate the per-segment composition that drives the shape builder
+const STATCAN_SEG = {
+  domestic:      /^domestic$|domestic sector|domestic/i,
+  transborder:   /transborder/i,
+  international: /^international$|other international|international sector/i,
+};
 const _meta = {};
 async function statcanMeta(pid) {
   if (_meta[pid]) return _meta[pid];
@@ -188,7 +195,7 @@ async function statcanMeta(pid) {
   }));
   return (_meta[pid] = dims);
 }
-async function statcanCoord(pid, re, metric) {
+async function statcanCoord(pid, re, metric, charOverride) {
   const dims = await statcanMeta(pid);
   let geoDim = -1, geoMember = null;
   // The movements cube (23-10-0296) lists many airports, so a city-name match
@@ -201,7 +208,7 @@ async function statcanCoord(pid, re, metric) {
     if (hits.length) { geoDim = i; geoMember = hits.find((m) => /international/i.test(m.name)) || hits[0]; }
   });
   if (!geoMember) throw new Error(`no airport member for ${re} in ${pid}`);
-  const charRe = STATCAN_CHAR[metric];
+  const charRe = charOverride || STATCAN_CHAR[metric];
   const parts = dims.map((d, i) => {
     if (i === geoDim) return geoMember.id;
     const pref = d.members.find((m) => charRe.test(m.name));
@@ -274,6 +281,16 @@ async function main() {
     catch (e) { euData[metric] = {}; console.warn(`  eurostat ${metric} FAILED: ${e.message}`); }
   }
 
+  // passenger composition by transport coverage — NAT (domestic) / INTL
+  // (international). The plain pax pull above leaves tra_cov at its default
+  // (total) coverage; these two add the split that feeds the shape builder.
+  const euSeg = {};   // segKey -> { icao -> { geo, monthly } }
+  for (const [segKey, cov] of [["domestic", "NAT"], ["international", "INTL"]]) {
+    if (!repCodes.length) { euSeg[segKey] = {}; continue; }
+    try { euSeg[segKey] = await esBatch("avia_paoa", { unit: "PAS", tra_meas: "PAS_CRD", tra_cov: cov, sinceTimePeriod: "2015-01" }, repCodes); console.log(`  eurostat seg ${segKey}: ${Object.keys(euSeg[segKey]).length} airports`); }
+    catch (e) { euSeg[segKey] = {}; console.warn(`  eurostat seg ${segKey} FAILED: ${e.message}`); }
+  }
+
   for (const { iata, icao, geo } of keep) {
     const g = GEO[geo];
     if (!g) { console.warn(`  ${iata}: unknown Eurostat geo "${geo}" — skipped`); continue; }
@@ -285,6 +302,11 @@ async function main() {
       else { const kept = prevSeries(prev, iata, metric); if (kept) series[metric] = kept; }
     }
     if (!series.pax || Object.keys(series.pax).length < MIN_MONTHS) continue;
+    const paxSeg = {};
+    for (const sk of ["domestic", "international"]) {
+      const ms = euSeg[sk]?.[icao]?.monthly;
+      if (ms && Object.keys(ms).length >= 12) paxSeg[sk] = ms;
+    }
     const r = ref[iata] || {};
     const paxKeys = Object.keys(series.pax);
     airports[iata] = {
@@ -292,6 +314,7 @@ async function main() {
       country: iso2, cc: iso3, countryName: cname, region: "Europe",
       name: r.name || iata, city: r.city || cname, icao, lat: r.lat ?? null, lon: r.lon ?? null,
       months: paxKeys.length, latest: paxKeys.sort().pop(), series, monthly: series.pax,
+      ...(Object.keys(paxSeg).length >= 2 ? { paxSeg } : {}),
     };
   }
   console.log(`  eurostat: wrote ${Object.keys(airports).length} airports`);
@@ -319,6 +342,16 @@ async function main() {
       }
     }
     if (!series.pax || Object.keys(series.pax).length < MIN_MONTHS) { console.warn(`  ${iata} statcan: insufficient pax — skipped`); continue; }
+
+    // passenger composition by sector (domestic / transborder / international)
+    const paxSeg = {};
+    for (const [segKey, segRe] of Object.entries(STATCAN_SEG)) {
+      try {
+        const m = await statcanSeries(STATCAN_PID.pax, await statcanCoord(STATCAN_PID.pax, re, "pax", segRe));
+        if (Object.keys(m).length >= 12) paxSeg[segKey] = m;
+      } catch { /* sector absent for this airport — skip */ }
+    }
+
     const r = ref[iata] || {};
     const paxKeys = Object.keys(series.pax);
     airports[iata] = {
@@ -326,9 +359,10 @@ async function main() {
       country: "CA", cc: "CAN", countryName: "Canada", region: "North America",
       name: r.name || iata, city: r.city || "Canada", icao: r.icao || null, lat: r.lat ?? null, lon: r.lon ?? null,
       months: paxKeys.length, latest: paxKeys.sort().pop(), series, monthly: series.pax,
+      ...(Object.keys(paxSeg).length >= 2 ? { paxSeg } : {}),
     };
     caN++;
-    console.log(`  ${iata} statcan: pax ${paxKeys.length}mo atm ${Object.keys(series.atm || {}).length}mo`);
+    console.log(`  ${iata} statcan: pax ${paxKeys.length}mo atm ${Object.keys(series.atm || {}).length}mo seg ${Object.keys(paxSeg).join("/")||"none"}`);
   }
   console.log(`  statcan: wrote ${caN} airports`);
 
@@ -341,8 +375,8 @@ async function main() {
     generatedAt: new Date().toISOString(),
     note: "Monthly activity (passengers / movements / cargo) by airport. Refreshed nightly; read same-origin by the browser. No synthetic data.",
     sources: {
-      eurostat: "Eurostat avia_paoa (PAS_CRD pax, CAF_PAS flights) + avia_gooa (FRM_LD_NLD cargo, tonnes) — all reporting airports",
-      statcan: "Statistics Canada WDS 23-10-0312 (screened pax), 23-10-0296 (aircraft movements; 23-10-0008 fallback)",
+      eurostat: "Eurostat avia_paoa (PAS_CRD pax + NAT/INTL split, CAF_PAS flights) + avia_gooa (FRM_LD_NLD cargo, tonnes) — all reporting airports",
+      statcan: "Statistics Canada WDS 23-10-0312 (screened pax, by domestic/transborder/international sector), 23-10-0296 (aircraft movements; 23-10-0008 fallback)",
       bts: "US DOT BTS T-100 (fetch-bts.mjs)",
     },
     airports,

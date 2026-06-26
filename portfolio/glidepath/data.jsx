@@ -49,19 +49,38 @@ const METRIC_KEYS = ["pax","atm","cargo"];
    passengers-only "monthly" shape.
    ============================================================ */
 const OBSERVED = {};
+/* optional passenger composition by travel segment, iata -> { domestic:{"YYYY-MM":n},
+   transborder:{...}, international:{...} }. Eurostat (national / international) and
+   StatCan (domestic / transborder / international) both publish this split; the
+   pipeline fills paxSeg when available. Absent → the model runs on totals only. */
+const SEGMENTS = {};
+const PAX_SEGMENTS = [
+  { k:"domestic",     label:"Domestic" },
+  { k:"transborder",  label:"Transborder" },
+  { k:"international", label:"International" },
+];
 let ACTIVITY_META = null;
 function setActivity(json){
   for (const k in OBSERVED) delete OBSERVED[k];
+  for (const k in SEGMENTS) delete SEGMENTS[k];
   if (!json || !json.airports) return;
   Object.keys(json.airports).forEach(iata => {
     const a = json.airports[iata];
     if (!a || !a.observed) return;
     if (a.series && typeof a.series === "object") OBSERVED[iata] = a.series;
     else if (a.monthly) OBSERVED[iata] = { pax: a.monthly };
+    if (a.paxSeg && typeof a.paxSeg === "object") SEGMENTS[iata] = a.paxSeg;
   });
   ACTIVITY_META = json;
   window.GP_ACTIVITY_META = json;
   rebuildAirports();
+}
+
+/* segment keys that actually carry monthly data for an airport, in canonical
+   order. Used to drive the shape-builder levers and segment view. */
+function segmentsFor(iata){
+  const s = SEGMENTS[iata]; if (!s) return [];
+  return PAX_SEGMENTS.filter(seg => s[seg.k] && Object.keys(s[seg.k]).length);
 }
 
 /* OpenFlights reference (data/airports.json) — optional enrichment of the
@@ -200,6 +219,9 @@ function defaultScenario(iata){
     lcc: 0,
     cargo: 0,    // freight-specific growth shift (on top of the pax-linked trend)
     gauge: 0,    // aircraft up-gauging — movements grow slower than passengers
+    seg_domestic: 0,      // per-segment demand shift (%/yr), only bite when the
+    seg_transborder: 0,   // gateway publishes that passenger segment
+    seg_international: 0,
     horizon: 10,
   };
 }
@@ -237,31 +259,74 @@ function longTermForecast(iata, history, scenario){
   const cargoMonthAvg = hasCargo ? annualCargo / 12 : null;
   const atmMonthAvg   = hasAtm   ? annualAtm / 12   : null;
 
+  /* ---- optional passenger segment composition ----
+     If the gateway publishes domestic/transborder/international splits with a
+     complete base year, project each segment on its own shift and let the total
+     fall out as their sum. Segments are scaled to the observed total each base
+     month so the baseline reconciles exactly with the headline pax series. */
+  const segStore = SEGMENTS[iata];
+  let segKeys = [];
+  const segBase = {};               // k -> { mm: scaled base-year monthly }
+  if (segStore) {
+    for (const seg of PAX_SEGMENTS) {
+      const ser = segStore[seg.k]; if (!ser) continue;
+      const mvals = {}; let ok = true;
+      for (let mm=0; mm<12; mm++){
+        const key = `${baseYear}-${String(mm+1).padStart(2,"0")}`;
+        if (ser[key] == null) { ok = false; break; }
+        mvals[mm] = ser[key];
+      }
+      if (ok) { segKeys.push(seg.k); segBase[seg.k] = mvals; }
+    }
+    if (segKeys.length < 2) segKeys = [];   // need a real split to be worth it
+  }
+  const hasSeg = segKeys.length > 0;
+  if (hasSeg) {
+    for (let mm=0; mm<12; mm++){
+      const sum = segKeys.reduce((t,k)=>t+(segBase[k][mm]||0),0);
+      const factor = (sum>0 && basePax[mm]!=null) ? basePax[mm]/sum : 1;
+      segKeys.forEach(k => segBase[k][mm] *= factor);
+    }
+  }
+  const gSeg = {};
+  segKeys.forEach(k => gSeg[k] = gDemand + (s["seg_"+k] || 0) / 100);
+
   const months = [];
   let yy = baseYear, mm = 11;
   const total = s.horizon * 12;
   for (let k=1; k<=total; k++){
     mm++; if (mm>11){ mm=0; yy++; }
     const yf = k/12;
-    const pax = (basePax[mm] != null ? basePax[mm] : annualPax/12) * Math.pow(1+gDemand, yf);
+    let pax, segRec = null;
+    if (hasSeg){
+      segRec = {}; pax = 0;
+      for (const sk of segKeys){ const v = (segBase[sk][mm]||0) * Math.pow(1+gSeg[sk], yf); segRec[sk] = Math.round(v); pax += v; }
+    } else {
+      pax = (basePax[mm] != null ? basePax[mm] : annualPax/12) * Math.pow(1+gDemand, yf);
+    }
     const rec = { y:yy, m:mm, date:`${yy}-${String(mm+1).padStart(2,"0")}`,
       label:`${MONTHS[mm]} ${String(yy).slice(2)}`, pax:Math.round(pax) };
+    if (segRec)   rec.seg   = segRec;
     if (hasAtm)   rec.atm   = Math.round((baseAtm[mm]   != null ? baseAtm[mm]   : atmMonthAvg)   * Math.pow(1+gMovements, yf));
     if (hasCargo) rec.cargo = Math.round((baseCargo[mm] != null ? baseCargo[mm] : cargoMonthAvg) * Math.pow(1+gCargo, yf));
     months.push(rec);
   }
 
+  const segAnnual = (ms) => { const o = {}; segKeys.forEach(k => o[k] = ms.reduce((t,r)=>t+((r.seg&&r.seg[k])||0),0)); return o; };
   const rows = [{ y:baseYear, pax:annualPax, base:true,
-    ...(hasAtm?{atm:annualAtm}:{}), ...(hasCargo?{cargo:annualCargo}:{}) }];
+    ...(hasAtm?{atm:annualAtm}:{}), ...(hasCargo?{cargo:annualCargo}:{}),
+    ...(hasSeg?{seg: (()=>{ const o={}; segKeys.forEach(k=>o[k]=Math.round(Object.values(segBase[k]).reduce((t,v)=>t+v,0))); return o; })()}:{}) }];
   for (let i=1; i<=s.horizon; i++){
     const yr = baseYear+i, ms = months.filter(r => r.y===yr);
     const row = { y:yr, pax: ms.reduce((t,r)=>t+r.pax,0) };
     if (hasAtm)   row.atm   = ms.reduce((t,r)=>t+(r.atm||0),0);
     if (hasCargo) row.cargo = ms.reduce((t,r)=>t+(r.cargo||0),0);
+    if (hasSeg)   row.seg   = segAnnual(ms);
     rows.push(row);
   }
   const cagr = Math.pow(rows[rows.length-1].pax/annualPax, 1/s.horizon) - 1;
   return { rows, months, baseYear, endYear:baseYear+s.horizon, hasAtm, hasCargo,
+    hasSeg, segKeys, segLabels: segKeys.map(k => (PAX_SEGMENTS.find(p=>p.k===k)||{}).label || k),
     gDemand:gDemand*100, cagr:cagr*100,
     breakdown:[
       { k:"Income × elasticity", v:gIncome, c:"var(--pink)" },
@@ -295,6 +360,7 @@ Object.assign(window, {
   GP_forecastFor:forecastFor, GP_hasForecast:hasForecast,
   GP_availableMetrics:availableMetrics, GP_liveAirports:liveAirports,
   GP_sourceLabel:sourceLabel, GP_sourceBadge:sourceBadge,
+  GP_segmentsFor:segmentsFor, GP_PAX_SEGMENTS:PAX_SEGMENTS,
   GP_fmt:fmt, GP_setActivity:setActivity, GP_activityFor:activityFor, GP_setForecast:setForecast,
   GP_setReference:setReference, GP_rebuildAirports:rebuildAirports, GP_ensureMacro:ensureMacro,
 });
