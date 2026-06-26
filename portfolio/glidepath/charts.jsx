@@ -23,7 +23,7 @@ function niceMax(v){
    markerIndex: index where forecast begins (draws a divider)
    height, yFmt (left axis), yFmtRight (right axis), valueFmt
 */
-function LineChart({ labels, series, band, markerIndex, height=260, yFmt, yFmtRight, valueFmt, padL=52 }){
+function LineChart({ labels, series, band, markerIndex, height=260, yFmt, yFmtRight, valueFmt, padL=52, spans }){
   const wrapRef = useRef(null);
   const [w, setW] = useState(720);
   const [hover, setHover] = useState(null);
@@ -97,6 +97,13 @@ function LineChart({ labels, series, band, markerIndex, height=260, yFmt, yFmtRi
             </linearGradient>
           ))}
         </defs>
+        {spans && spans.map((sp,i)=>(
+          <g key={"sp"+i}>
+            <rect x={x(sp.from)} y={padT} width={Math.max(0, x(sp.to)-x(sp.from))} height={innerH} fill={sp.color||"var(--bad)"} fillOpacity="0.10"/>
+            <line x1={x(sp.from)} x2={x(sp.from)} y1={padT} y2={padT+innerH} stroke={sp.color||"var(--bad)"} strokeOpacity="0.55" strokeWidth="1" strokeDasharray="2 3"/>
+            {sp.label && <text x={x(sp.from)+4} y={padT+10} fontSize="9.5" fontFamily="var(--mono)" fill={sp.color||"var(--bad)"}>{sp.label}</text>}
+          </g>
+        ))}
         {gl.map((g,i)=> (
           <g key={i}>
             <line x1={padL} x2={w-padR} y1={yL(g)} y2={yL(g)} stroke="var(--line)" strokeWidth="1"/>

@@ -222,7 +222,8 @@ function defaultScenario(iata){
     seg_domestic: 0,      // per-segment demand shift (%/yr), only bite when the
     seg_transborder: 0,   // gateway publishes that passenger segment
     seg_international: 0,
-    horizon: 10,
+    events: [],           // discrete time-bound shocks (e.g. a pandemic)
+    horizon: 25,
   };
 }
 
@@ -291,6 +292,26 @@ function longTermForecast(iata, history, scenario){
   const gSeg = {};
   segKeys.forEach(k => gSeg[k] = gDemand + (s["seg_"+k] || 0) / 100);
 
+  /* ---- discrete shock events (e.g. a pandemic) ----
+     Each event applies a multiplicative shock to every metric over a window:
+     an acute phase at the peak impact, then a linear glide back to baseline
+     over the recovery months. Overlapping events compound. */
+  const events = Array.isArray(s.events) ? s.events.filter(e => e && e.start) : [];
+  function eventMul(y, m){
+    if (!events.length) return 1;
+    let f = 1;
+    const idx = y*12 + m;
+    for (const ev of events){
+      const p = String(ev.start).split("-"); const sy = +p[0], sm = +(p[1]||1);
+      const d = idx - (sy*12 + (sm-1));
+      if (d < 0) continue;
+      const peak = (+ev.peak||0)/100, hold = Math.max(0,Math.round(+ev.hold||0)), rec = Math.max(0,Math.round(+ev.recovery||0));
+      if (d < hold)            f *= (1 + peak);
+      else if (rec>0 && d < hold+rec) f *= (1 + peak*(1 - (d-hold+1)/rec));
+    }
+    return f;
+  }
+
   const months = [];
   let yy = baseYear, mm = 11;
   const total = s.horizon * 12;
@@ -309,6 +330,13 @@ function longTermForecast(iata, history, scenario){
     if (segRec)   rec.seg   = segRec;
     if (hasAtm)   rec.atm   = Math.round((baseAtm[mm]   != null ? baseAtm[mm]   : atmMonthAvg)   * Math.pow(1+gMovements, yf));
     if (hasCargo) rec.cargo = Math.round((baseCargo[mm] != null ? baseCargo[mm] : cargoMonthAvg) * Math.pow(1+gCargo, yf));
+    const ef = eventMul(yy, mm);
+    if (ef !== 1){
+      rec.pax = Math.round(rec.pax * ef);
+      if (rec.atm   != null) rec.atm   = Math.round(rec.atm   * ef);
+      if (rec.cargo != null) rec.cargo = Math.round(rec.cargo * ef);
+      if (rec.seg) for (const sk in rec.seg) rec.seg[sk] = Math.round(rec.seg[sk] * ef);
+    }
     months.push(rec);
   }
 
