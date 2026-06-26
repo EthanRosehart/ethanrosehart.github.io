@@ -292,24 +292,25 @@ function longTermForecast(iata, history, scenario){
   const gSeg = {};
   segKeys.forEach(k => gSeg[k] = gDemand + (s["seg_"+k] || 0) / 100);
 
-  /* ---- discrete shock events (e.g. a pandemic) ----
-     Each event applies a multiplicative shock to every metric over a window:
-     an acute phase at the peak impact, then a linear glide back to baseline
-     over the recovery months. Overlapping events compound. */
+  /* ---- discrete shock events (e.g. a pandemic, a route collapse) ----
+     Each event applies a multiplicative shock over a window: peak impact held
+     for `length` months, then either a linear glide back to baseline over
+     `recovery` months (full recovery) or — if `permanent` — the shifted level
+     persists and the rest of the forecast re-baselines off it. An event can hit
+     all traffic (`target:"all"`) or a single passenger segment, which reshapes
+     the mix. Overlapping events compound. */
   const events = Array.isArray(s.events) ? s.events.filter(e => e && e.start) : [];
-  function eventMul(y, m){
-    if (!events.length) return 1;
-    let f = 1;
-    const idx = y*12 + m;
-    for (const ev of events){
-      const p = String(ev.start).split("-"); const sy = +p[0], sm = +(p[1]||1);
-      const d = idx - (sy*12 + (sm-1));
-      if (d < 0) continue;
-      const peak = (+ev.peak||0)/100, hold = Math.max(0,Math.round(+ev.hold||0)), rec = Math.max(0,Math.round(+ev.recovery||0));
-      if (d < hold)            f *= (1 + peak);
-      else if (rec>0 && d < hold+rec) f *= (1 + peak*(1 - (d-hold+1)/rec));
-    }
-    return f;
+  function eventFactor(ev, y, m){
+    const p = String(ev.start).split("-"); const sy = +p[0], sm = +(p[1]||1);
+    const d = (y*12 + m) - (sy*12 + (sm-1));
+    if (d < 0) return 1;
+    const peak = (+ev.peak||0)/100;
+    const len = Math.max(0, Math.round(+(ev.length != null ? ev.length : ev.hold) || 0));
+    if (d < len) return 1 + peak;
+    if (ev.permanent) return 1 + peak;
+    const rec = Math.max(0, Math.round(+ev.recovery || 0));
+    if (rec > 0 && d < len + rec) return 1 + peak * (1 - (d - len + 1) / rec);
+    return 1;
   }
 
   const months = [];
@@ -330,12 +331,25 @@ function longTermForecast(iata, history, scenario){
     if (segRec)   rec.seg   = segRec;
     if (hasAtm)   rec.atm   = Math.round((baseAtm[mm]   != null ? baseAtm[mm]   : atmMonthAvg)   * Math.pow(1+gMovements, yf));
     if (hasCargo) rec.cargo = Math.round((baseCargo[mm] != null ? baseCargo[mm] : cargoMonthAvg) * Math.pow(1+gCargo, yf));
-    const ef = eventMul(yy, mm);
-    if (ef !== 1){
-      rec.pax = Math.round(rec.pax * ef);
-      if (rec.atm   != null) rec.atm   = Math.round(rec.atm   * ef);
-      if (rec.cargo != null) rec.cargo = Math.round(rec.cargo * ef);
-      if (rec.seg) for (const sk in rec.seg) rec.seg[sk] = Math.round(rec.seg[sk] * ef);
+    if (events.length){
+      let touched = false;
+      for (const ev of events){
+        const f = eventFactor(ev, yy, mm); if (f === 1) continue;
+        touched = true;
+        const tgt = ev.target || "all";
+        if (rec.seg && tgt !== "all" && rec.seg[tgt] != null){ rec.seg[tgt] *= f; }   // reshape one segment
+        else {                                                                         // all traffic
+          if (rec.seg) for (const k in rec.seg) rec.seg[k] *= f; else rec.pax *= f;
+          if (rec.atm   != null) rec.atm   *= f;
+          if (rec.cargo != null) rec.cargo *= f;
+        }
+      }
+      if (touched){
+        if (rec.seg){ for (const k in rec.seg) rec.seg[k] = Math.round(rec.seg[k]); rec.pax = Object.values(rec.seg).reduce((t,v)=>t+v,0); }
+        else rec.pax = Math.round(rec.pax);
+        if (rec.atm   != null) rec.atm   = Math.round(rec.atm);
+        if (rec.cargo != null) rec.cargo = Math.round(rec.cargo);
+      }
     }
     months.push(rec);
   }

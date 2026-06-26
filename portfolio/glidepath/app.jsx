@@ -10,13 +10,15 @@ const NAV = [
   { id:"overview", label:"Overview",       group:"Forecast", icon:<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><rect x="3" y="3" width="7" height="9" rx="1"/><rect x="14" y="3" width="7" height="5" rx="1"/><rect x="14" y="12" width="7" height="9" rx="1"/><rect x="3" y="16" width="7" height="5" rx="1"/></svg> },
   { id:"short",    label:"Short-term (Prophet)",group:"Forecast", icon:<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><path d="M3 17l5-5 4 3 8-9"/><path d="M21 6v5h-5"/></svg> },
   { id:"long",     label:"Long-term",group:"Forecast", icon:<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><path d="M3 3v18h18"/><path d="M7 14l4-4 3 3 5-6"/></svg> },
-  { id:"scenario", label:"Shape builder",group:"Forecast", icon:<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><circle cx="6" cy="8" r="2"/><path d="M6 10v6M6 4v2"/><circle cx="14" cy="14" r="2"/><path d="M14 4v8M14 16v4"/><circle cx="20" cy="7" r="0"/></svg> },
+  { id:"scenario", label:"Baseline assumptions",group:"Forecast", icon:<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><circle cx="6" cy="8" r="2"/><path d="M6 10v6M6 4v2"/><circle cx="14" cy="14" r="2"/><path d="M14 4v8M14 16v4"/><circle cx="20" cy="7" r="0"/></svg> },
+  { id:"events",   label:"Event simulator",group:"Forecast", icon:<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><path d="M13 2L4 14h7l-1 8 9-12h-7l1-8z"/></svg> },
   { id:"export",   label:"Export",         group:"Deliver", icon:<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><path d="M12 3v12m0-12l-4 4m4-4l4 4"/><path d="M4 17v2a2 2 0 002 2h12a2 2 0 002-2v-2"/></svg> },
 ];
 const TITLES = {
   select:["Setup","Select your gateway"], connect:["Setup","Connect public data"],
   overview:["Forecast","Gateway overview"], short:["Forecast","Short-term tactical forecast"],
-  long:["Forecast","Long-term strategic forecast"], scenario:["Forecast","Shape builder"],
+  long:["Forecast","Long-term strategic forecast"], scenario:["Forecast","Baseline assumptions"],
+  events:["Forecast","Event simulator"],
   export:["Deliver","Export & report"],
 };
 
@@ -217,6 +219,7 @@ function App(){
         {screen==="short"    && airport && connected && <ShortTerm airport={airport} history={history}/>}
         {screen==="long"     && airport && connected && scenario && <LongTerm airport={airport} history={history} scenario={scenario} go={go}/>}
         {screen==="scenario" && airport && connected && scenario && <Scenario airport={airport} history={history} scenario={scenario} setScenario={setScenario}/>}
+        {screen==="events"   && airport && connected && scenario && <EventSim airport={airport} history={history} scenario={scenario} setScenario={setScenario}/>}
         {screen==="export"   && airport && connected && scenario && <ExportView airport={airport} history={history} scenario={scenario}/>}
       </main>
     </div>
