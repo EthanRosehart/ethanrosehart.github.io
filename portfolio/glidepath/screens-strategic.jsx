@@ -129,6 +129,7 @@ const SHAPE_LEVERS = {
   cargo: { k:"cargo", name:"Air cargo growth shift", unit:"%/yr", min:-4, max:6, step:0.25, metric:"cargo",
            desc:"Freight-specific tailwind/headwind on top of the passenger-linked cargo trend (e-commerce, bellyhold capacity, trade)." },
 };
+const SEG_COLORS = ["var(--cyan)", "var(--lime)", "var(--violet)"];
 
 const PRESETS = {
   base:    { label:"Macro baseline", desc:"World Bank central case", icon:"◆" },
@@ -154,10 +155,18 @@ function Scenario({ airport, history, scenario, setScenario }){
   const [metric, setMetric] = React.useState("pax");
   const m = metricDefs.some(x=>x.k===metric) ? metric : "pax";
 
-  // levers: the demand drivers always, plus shape levers for present metrics
+  // per-segment demand levers (only when the gateway publishes the split)
+  const segLevers = (d.lt && d.lt.hasSeg) ? d.lt.segKeys.map((k,i)=>({
+    k:"seg_"+k, name:d.lt.segLabels[i]+" demand shift", unit:"%/yr", min:-4, max:6, step:0.25, seg:true,
+    desc:"Grow "+d.lt.segLabels[i].toLowerCase()+" passengers faster or slower than the blended trend.",
+  })) : [];
+
+  // levers: the demand drivers always, plus shape levers for present metrics,
+  // plus per-segment levers where the passenger split is published
   const levers = [...LEVERS,
     ...(d.lt && d.lt.hasAtm   ? [SHAPE_LEVERS.atm]   : []),
-    ...(d.lt && d.lt.hasCargo ? [SHAPE_LEVERS.cargo] : [])];
+    ...(d.lt && d.lt.hasCargo ? [SHAPE_LEVERS.cargo] : []),
+    ...segLevers];
 
   const setLever = (k,v)=> setScenario({ ...scenario, [k]: v });
   const applyPreset = (id)=>{
@@ -187,7 +196,7 @@ function Scenario({ airport, history, scenario, setScenario }){
       <div className="grid" style={{gridTemplateColumns:"1fr 1.5fr", alignItems:"start"}}>
         {/* left: levers */}
         <div className="panel panel-pad lever-panel" style={{position:"sticky",top:18}}>
-          <SectionHead kicker="Assumptions" title="Scenario levers"/>
+          <SectionHead kicker="Assumptions" title="Shape levers"/>
           <div style={{display:"flex",gap:7,flexWrap:"wrap",marginBottom:8}}>
             {Object.keys(PRESETS).map(id=>(
               <button key={id} className={"btn btn-sm"+(activePreset===id?" btn-primary":"")} style={{flex:"1 1 auto",justifyContent:"center",flexDirection:"column",gap:2,padding:"9px 8px"}} onClick={()=>applyPreset(id)}>
@@ -241,6 +250,24 @@ function Scenario({ airport, history, scenario, setScenario }){
                 { name:"Scenario", color:"var(--pink)", values:d.lt.months.map(r=>r[m]), fill:true, glow:true, width:2.8 },
               ]}/>
           </div>
+
+          {d.lt.hasSeg && (
+            <div className="panel panel-pad">
+              <SectionHead kicker="Passenger mix" title="How the shape shifts"
+                right={<div className="chart-legend">
+                  {d.lt.segKeys.map((k,i)=><span className="legend-item" key={k}><span className="legend-swatch" style={{background:SEG_COLORS[i%SEG_COLORS.length]}}></span>{d.lt.segLabels[i]}</span>)}
+                </div>}/>
+              <BarChart labels={[String(d.lt.baseYear), String(d.lt.endYear)]} height={180} stacked yFmt={v=>GP_fmt.k(v)}
+                series={d.lt.segKeys.map((k,i)=>({ name:d.lt.segLabels[i], color:SEG_COLORS[i%SEG_COLORS.length], values:[d.lt.rows[0].seg[k], end.seg[k]] }))}/>
+              <div className="method" style={{marginTop:6}}>
+                <b>Mix shift —</b> share of passengers, {d.lt.baseYear} → {d.lt.endYear}: {d.lt.segKeys.map((k,i)=>{
+                  const b=d.lt.rows[0].seg, e=end.seg;
+                  const bt=d.lt.segKeys.reduce((t,kk)=>t+b[kk],0)||1, et=d.lt.segKeys.reduce((t,kk)=>t+e[kk],0)||1;
+                  return d.lt.segLabels[i]+" "+Math.round(b[k]/bt*100)+"%→"+Math.round(e[k]/et*100)+"%";
+                }).join(" · ")}.
+              </div>
+            </div>
+          )}
 
           <div className="panel panel-pad">
             <SectionHead kicker="Decomposition" title="Driver contribution to annual growth"/>
@@ -296,9 +323,11 @@ function ExportView({ airport, history, scenario }){
 
   /* the scenario assumptions, paired with their lever metadata (include the
      movements / cargo shape levers only when the gateway carries that series) */
+  const segLevers = d.lt.hasSeg ? d.lt.segKeys.map((k,i)=>({ k:"seg_"+k, name:d.lt.segLabels[i]+" demand shift", unit:"%/yr" })) : [];
   const allLevers = [...LEVERS,
     ...(hasAtm   ? [SHAPE_LEVERS.atm]   : []),
-    ...(hasCargo ? [SHAPE_LEVERS.cargo] : [])];
+    ...(hasCargo ? [SHAPE_LEVERS.cargo] : []),
+    ...segLevers];
   const assumptions = allLevers.map(l=>({ name:l.name, value:(scenario[l.k] ?? 0), unit:l.unit }));
   const stamp = new Date().toLocaleDateString("en-CA");
   const fileBase = `glidepath_${airport.iata}_${new Date().toISOString().slice(0,10)}`;
