@@ -129,7 +129,6 @@ const SHAPE_LEVERS = {
   cargo: { k:"cargo", name:"Air cargo growth shift", unit:"%/yr", min:-4, max:6, step:0.25, metric:"cargo",
            desc:"Freight-specific tailwind/headwind on top of the passenger-linked cargo trend (e-commerce, bellyhold capacity, trade)." },
 };
-const SEG_COLORS = ["var(--cyan)", "var(--lime)", "var(--violet)"];
 
 const PRESETS = {
   base:    { label:"Macro baseline", desc:"World Bank central case", icon:"◆" },
@@ -251,28 +250,47 @@ function Scenario({ airport, history, scenario, setScenario }){
               ]}/>
           </div>
 
-          {d.lt.hasSeg && (
+          {d.lt.hasSeg && (()=>{
+            const bSeg=d.lt.rows[0].seg, eSeg=end.seg;
+            const bt=d.lt.segKeys.reduce((t,k)=>t+bSeg[k],0)||1, et=d.lt.segKeys.reduce((t,k)=>t+eSeg[k],0)||1;
+            const donutItems=(seg)=>d.lt.segKeys.map((k,i)=>({ label:d.lt.segLabels[i], value:seg[k], color:d.lt.segColors[i] }));
+            const shifted=d.lt.segKeys.some(k=>Math.abs(bSeg[k]/bt - eSeg[k]/et) >= 0.005);
+            return (
             <div className="panel panel-pad">
               <SectionHead kicker="Passenger mix" title="How the shape shifts"
-                right={<div className="chart-legend">
-                  {d.lt.segKeys.map((k,i)=><span className="legend-item" key={k}><span className="legend-swatch" style={{background:SEG_COLORS[i%SEG_COLORS.length]}}></span>{d.lt.segLabels[i]}</span>)}
-                </div>}/>
-              <BarChart labels={[String(d.lt.baseYear), String(d.lt.endYear)]} height={180} stacked yFmt={v=>GP_fmt.k(v)}
-                series={d.lt.segKeys.map((k,i)=>({ name:d.lt.segLabels[i], color:SEG_COLORS[i%SEG_COLORS.length], values:[d.lt.rows[0].seg[k], end.seg[k]] }))}/>
-              <div className="method" style={{marginTop:6}}>
-                <b>Mix shift —</b> share of passengers, {d.lt.baseYear} → {d.lt.endYear}: {d.lt.segKeys.map((k,i)=>{
-                  const b=d.lt.rows[0].seg, e=end.seg;
-                  const bt=d.lt.segKeys.reduce((t,kk)=>t+b[kk],0)||1, et=d.lt.segKeys.reduce((t,kk)=>t+e[kk],0)||1;
-                  return d.lt.segLabels[i]+" "+Math.round(b[k]/bt*100)+"%→"+Math.round(e[k]/et*100)+"%";
-                }).join(" · ")}.
+                right={<span className="chip">{shifted?"mix changes":"mix unchanged"}</span>}/>
+              <div style={{display:"flex",gap:8,alignItems:"center",justifyContent:"center",flexWrap:"wrap"}}>
+                <div style={{textAlign:"center"}}>
+                  <Donut items={donutItems(bSeg)} size={134} thickness={26}/>
+                  <div className="air-meta" style={{marginTop:6}}>Base · {d.lt.baseYear}</div>
+                </div>
+                <div style={{textAlign:"center"}}>
+                  <Donut items={donutItems(eSeg)} size={134} thickness={26}/>
+                  <div className="air-meta" style={{marginTop:6}}>Scenario · {d.lt.endYear}</div>
+                </div>
+                <div style={{flex:"1 1 190px",minWidth:170}}>
+                  {d.lt.segKeys.map((k,i)=>{
+                    const bp=Math.round(bSeg[k]/bt*100), ep=Math.round(eSeg[k]/et*100), dp=ep-bp;
+                    return (
+                      <div key={k} className="legend-item" style={{justifyContent:"space-between",marginBottom:10}}>
+                        <span><span className="legend-swatch" style={{background:d.lt.segColors[i]}}></span>{d.lt.segLabels[i]}</span>
+                        <span className="num" style={{color:"var(--text)"}}>{bp}%→{ep}%{dp!==0 && <span style={{color:dp>0?"var(--ok)":"var(--bad)",marginLeft:5}}>{dp>0?"+":""}{dp}pt</span>}</span>
+                      </div>
+                    );
+                  })}
+                </div>
+              </div>
+              <div className="method" style={{marginTop:8}}>
+                <b>Shape —</b> passenger mix at {d.lt.baseYear} vs the scenario in {d.lt.endYear}. The split only moves when you flex a segment lever{shifted?"":" — currently the two rings match"}.
               </div>
             </div>
-          )}
+            );
+          })()}
 
           <div className="panel panel-pad">
             <SectionHead kicker="Decomposition" title="Driver contribution to annual growth"/>
-            <BarChart labels={d.lt.breakdown.map(b=>b.k.split(" ")[0])} height={170} yFmt={v=>v.toFixed(1)+"%"}
-              tipFmt={v=>v.toFixed(2)+"%/yr"}
+            <BarChart labels={d.lt.breakdown.map(b=>b.k.split(" ")[0])} height={180} yFmt={v=>v.toFixed(1)+"%"}
+              tipFmt={v=>v.toFixed(2)+"%/yr"} labelFmt={v=>v.toFixed(1)+"%"}
               series={[{ name:"Contribution", color:"var(--pink)", values:d.lt.breakdown.map(b=>Math.max(0,b.v)) }]}/>
             <div className="method" style={{marginTop:6}}>
               <b>Model —</b> <span className="formula">g = GDPpc·ε + pop + 0.5·tourism + lcc − 0.18·fuel</span>. Passengers
