@@ -140,8 +140,10 @@ const PRESETS = {
 function Scenario({ airport, history, scenario, setScenario }){
   const base = useMemoS(()=>GP_defaultScenario(airport.iata),[airport]);
   const d = useMemoS(()=>{
-    const lt = GP_longTerm(airport.iata, history, scenario);
-    const baseLt = GP_longTerm(airport.iata, history, base);
+    // this page is the lever baseline — show the assumptions without shock
+    // events (those live on their own page); compare against the macro default
+    const lt = GP_longTerm(airport.iata, history, { ...scenario, events: [] });
+    const baseLt = GP_longTerm(airport.iata, history, { ...base, horizon: scenario.horizon || base.horizon });
     const labels = lt ? lt.months.map(r=>r.label) : [];
     return { lt, baseLt, labels };
   },[airport, history, scenario, base]);
@@ -177,16 +179,6 @@ function Scenario({ airport, history, scenario, setScenario }){
   };
   const setHorizon = (h)=> setScenario({ ...scenario, horizon: h });
 
-  // shock events (e.g. a pandemic) over the forecast window
-  const events = scenario.events || [];
-  const setEvents = (evs)=> setScenario({ ...scenario, events: evs });
-  const addEvent = (preset)=>{
-    const by = d.lt ? d.lt.baseYear : new Date().getFullYear();
-    setEvents([...events, { id:Date.now(), label:"Shock "+(events.length+1), start:`${by+2}-03`, peak:-30, hold:3, recovery:12, ...(preset||{}) }]);
-  };
-  const updEvent = (id,patch)=> setEvents(events.map(e=> e.id===id ? {...e,...patch} : e));
-  const rmEvent = (id)=> setEvents(events.filter(e=> e.id!==id));
-
   if (!d.lt || !d.baseLt) return <div className="content fade-in"><div className="panel panel-pad"><div className="air-meta">Not enough complete years of data to build scenarios yet.</div></div></div>;
   const end = d.lt.rows[d.lt.rows.length-1], baseEnd = d.baseLt.rows[d.baseLt.rows.length-1];
   const fmtM = (v)=> m==="cargo" ? GP_fmt.t(v) : (m==="pax" ? GP_fmt.k1(v) : GP_fmt.k(v));
@@ -200,14 +192,6 @@ function Scenario({ airport, history, scenario, setScenario }){
     for (const id of Object.keys(PRESETS)){ if(id==="base") continue; const t={...base}; Object.keys(PRESETS[id].set).forEach(k=>t[k]=(base[k]??0)+PRESETS[id].set[k]); if(eq(t)) return id; }
     return null;
   })();
-  // shaded event windows for the impact chart
-  const eventSpans = events.map(ev=>{
-    const si = d.lt.months.findIndex(r=> r.date >= ev.start);
-    if (si < 0) return null;
-    const span = (Math.round(+ev.hold||0) + Math.round(+ev.recovery||0)) || 1;
-    return { from:si, to:Math.min(d.lt.months.length-1, si+span), color:"var(--bad)", label:ev.label };
-  }).filter(Boolean);
-  const yearOpts = []; for (let yy=d.lt.baseYear+1; yy<=d.lt.endYear; yy++) yearOpts.push(yy);
 
   return (
     <div className="content fade-in">
@@ -266,59 +250,13 @@ function Scenario({ airport, history, scenario, setScenario }){
                   <span className="legend-item"><span className="legend-line" style={{borderColor:"var(--faint)",borderStyle:"dashed"}}></span>Baseline</span>
                 </div>
               </div>}/>
-            <LineChart labels={d.labels} height={270} markerIndex={0} spans={eventSpans}
+            <LineChart labels={d.labels} height={270}
               yFmt={m==="cargo"?(v=>GP_fmt.k(v)):undefined}
               valueFmt={m==="cargo"?(v=>GP_fmt.int(v)+" t"):undefined}
               series={[
                 { name:"Baseline", color:"var(--faint)", values:d.baseLt.months.map(r=>r[m]), dash:"5 4", width:1.8 },
                 { name:"Scenario", color:"var(--pink)", values:d.lt.months.map(r=>r[m]), fill:true, glow:true, width:2.8 },
               ]}/>
-          </div>
-
-          <div className="panel panel-pad">
-            <SectionHead kicker="Micro adjustments" title="Event simulator"
-              right={<div style={{display:"flex",gap:7}}>
-                <button className="btn btn-sm" onClick={()=>addEvent({ label:"Pandemic shock", peak:-75, hold:6, recovery:24 })}>+ Pandemic</button>
-                <button className="btn btn-sm" onClick={()=>addEvent()}>+ Event</button>
-              </div>}/>
-            {events.length===0
-              ? <div className="air-meta">Add time-bound shocks — a pandemic, a fuel crisis, a one-off mega-event — to dent or lift demand over a set window. Each glides back to the trend over its recovery period; stack as many as you like.</div>
-              : <div style={{display:"flex",flexDirection:"column",gap:12}}>
-                  {events.map((ev,ix)=>{
-                    const [ey,em] = String(ev.start).split("-").map(Number);
-                    return (
-                      <div key={ev.id} style={{border:"1px solid var(--line-2)",borderRadius:"var(--r-sm)",padding:"12px 14px"}}>
-                        <div style={{display:"flex",alignItems:"center",gap:10,marginBottom:10}}>
-                          <span className="dot" style={{background:"var(--bad)"}}></span>
-                          <input value={ev.label} onChange={e=>updEvent(ev.id,{label:e.target.value})}
-                            style={{flex:1,minWidth:0,background:"transparent",border:"none",borderBottom:"1px solid var(--line)",color:"var(--text)",fontFamily:"var(--sans)",fontSize:14,fontWeight:600,padding:"2px 0",outline:"none"}}/>
-                          <select value={em} onChange={e=>updEvent(ev.id,{start:`${ey}-${String(+e.target.value).padStart(2,"0")}`})} className="seg-select">
-                            {MONTHS.map((mo,mi)=><option key={mi} value={mi+1}>{mo}</option>)}
-                          </select>
-                          <select value={ey} onChange={e=>updEvent(ev.id,{start:`${+e.target.value}-${String(em).padStart(2,"0")}`})} className="seg-select">
-                            {yearOpts.map(y=><option key={y} value={y}>{y}</option>)}
-                          </select>
-                          <button className="icon-btn" title="Remove event" onClick={()=>rmEvent(ev.id)} style={{width:28,height:28,flex:"none"}}>
-                            <svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" strokeWidth="2"><path d="M6 6l12 12M18 6L6 18"/></svg>
-                          </button>
-                        </div>
-                        {[
-                          { k:"peak", label:"Peak impact", unit:"%", min:-100, max:50, step:1 },
-                          { k:"hold", label:"Acute months", unit:"mo", min:0, max:24, step:1 },
-                          { k:"recovery", label:"Recovery", unit:"mo", min:0, max:60, step:1 },
-                        ].map(c=>(
-                          <div key={c.k} style={{marginBottom:c.k==="recovery"?0:8}}>
-                            <div className="lever-head" style={{marginBottom:6}}>
-                              <span className="lever-desc" style={{margin:0}}>{c.label}</span>
-                              <span className="lever-val" style={{fontSize:13}}>{(ev[c.k]>0&&c.k==="peak"?"+":"")+(ev[c.k]??0)}{c.unit}</span>
-                            </div>
-                            <input type="range" min={c.min} max={c.max} step={c.step} value={ev[c.k]??0} onChange={e=>updEvent(ev.id,{[c.k]:+e.target.value})}/>
-                          </div>
-                        ))}
-                      </div>
-                    );
-                  })}
-                </div>}
           </div>
 
           {d.lt.hasSeg && (()=>{
@@ -369,6 +307,139 @@ function Scenario({ airport, history, scenario, setScenario }){
             </div>
           </div>
         </div>
+      </div>
+    </div>
+  );
+}
+
+/* ---------- EVENT SIMULATOR ---------------------------------- */
+/* A dedicated page for time-bound shocks, separate from the lever baseline.
+   Each event is a window with a peak impact that either recovers fully or
+   permanently re-baselines the forecast, and can hit all traffic or a single
+   passenger sector (e.g. a transborder collapse reshaping the mix). */
+function EventSim({ airport, history, scenario, setScenario }){
+  const d = useMemoS(()=>{
+    const lt = GP_longTerm(airport.iata, history, scenario);                       // with events
+    const baseLt = GP_longTerm(airport.iata, history, { ...scenario, events: [] }); // same levers, no shocks
+    const labels = lt ? lt.months.map(r=>r.label) : [];
+    return { lt, baseLt, labels };
+  },[airport, history, scenario]);
+
+  const metricDefs = [{ k:"pax", label:"Passengers" },
+    ...(d.lt && d.lt.hasAtm   ? [{ k:"atm",   label:"Movements" }] : []),
+    ...(d.lt && d.lt.hasCargo ? [{ k:"cargo", label:"Cargo" }]     : [])];
+  const [metric, setMetric] = React.useState("pax");
+  const m = metricDefs.some(x=>x.k===metric) ? metric : "pax";
+
+  const events = scenario.events || [];
+  const setEvents = (evs)=> setScenario({ ...scenario, events: evs });
+  const by = d.lt ? d.lt.baseYear : new Date().getFullYear();
+  const addEvent = (preset)=> setEvents([...events, { id:Date.now()+Math.floor(Math.random()*1e4), label:"Shock "+(events.length+1), start:`${by+2}-03`, peak:-30, length:6, recovery:18, permanent:false, target:"all", ...(preset||{}) }]);
+  const updEvent = (id,patch)=> setEvents(events.map(e=> e.id===id ? {...e,...patch} : e));
+  const rmEvent = (id)=> setEvents(events.filter(e=> e.id!==id));
+
+  if (!d.lt) return <div className="content fade-in"><div className="panel panel-pad"><div className="air-meta">Not enough complete years of data to simulate events yet.</div></div></div>;
+
+  const end = d.lt.rows[d.lt.rows.length-1], baseEnd = d.baseLt.rows[d.baseLt.rows.length-1];
+  const fmtM = (v)=> m==="cargo" ? GP_fmt.t(v) : (m==="pax" ? GP_fmt.k1(v) : GP_fmt.k(v));
+  const trough = d.lt.months.reduce((a,r)=> (r[m]??Infinity)<(a[m]??Infinity)?r:a, d.lt.months[0]);
+  const endDelta = (end[m]??0) - (baseEnd[m]??0);
+  const targetOpts = [{ k:"all", label:"All traffic" }, ...(d.lt.hasSeg ? d.lt.segKeys.map((k,i)=>({ k, label:d.lt.segLabels[i] })) : [])];
+  const yearOpts = []; for (let yy=by+1; yy<=d.lt.endYear; yy++) yearOpts.push(yy);
+  const eventSpans = events.map(ev=>{
+    const si = d.lt.months.findIndex(r=> r.date >= ev.start); if (si < 0) return null;
+    const len = Math.round(+(ev.length!=null?ev.length:ev.hold)||0);
+    const span = (len + (ev.permanent ? 6 : Math.round(+ev.recovery||0))) || 1;
+    return { from:si, to:Math.min(d.lt.months.length-1, si+span), color:"var(--bad)", label:ev.label };
+  }).filter(Boolean);
+
+  return (
+    <div className="content fade-in">
+      <div className="grid g-3" style={{marginBottom:16}}>
+        <KPI accent label={d.lt.endYear+" "+(metricDefs.find(x=>x.k===m)||{}).label.toLowerCase()+" · with events"} value={fmtM(end[m]??0)}
+          delta={(endDelta>=0?"+":"")+fmtM(Math.abs(endDelta))+" vs no-shock"} deltaDir={endDelta>=0?"up":"down"} sub="end of horizon"/>
+        <KPI label="Deepest month" value={fmtM(trough[m]??0)} sub={trough.label} sparkColor="var(--bad)"/>
+        <KPI label="Events stacked" value={String(events.length)} sub="active shocks"/>
+      </div>
+
+      <div className="panel panel-pad" style={{marginBottom:16}}>
+        <SectionHead kicker="Event impact" title="Forecast with shocks"
+          right={<div style={{display:"flex",gap:12,alignItems:"center",flexWrap:"wrap"}}>
+            {metricDefs.length>1 && <div className="seg">{metricDefs.map(x=><button key={x.k} className={m===x.k?"on":""} onClick={()=>setMetric(x.k)}>{x.label}</button>)}</div>}
+            <div className="chart-legend">
+              <span className="legend-item"><span className="legend-line" style={{borderColor:"var(--pink)"}}></span>With events</span>
+              <span className="legend-item"><span className="legend-line" style={{borderColor:"var(--faint)",borderStyle:"dashed"}}></span>No shocks</span>
+            </div>
+          </div>}/>
+        <LineChart labels={d.labels} height={300} spans={eventSpans}
+          yFmt={m==="cargo"?(v=>GP_fmt.k(v)):undefined}
+          valueFmt={m==="cargo"?(v=>GP_fmt.int(v)+" t"):undefined}
+          series={[
+            { name:"No shocks", color:"var(--faint)", values:d.baseLt.months.map(r=>r[m]), dash:"5 4", width:1.8 },
+            { name:"With events", color:"var(--pink)", values:d.lt.months.map(r=>r[m]), fill:true, glow:true, width:2.8 },
+          ]}/>
+      </div>
+
+      <div className="panel panel-pad">
+        <SectionHead kicker="Micro adjustments" title="Shock events"
+          right={<div style={{display:"flex",gap:7,flexWrap:"wrap"}}>
+            <button className="btn btn-sm" onClick={()=>addEvent({ label:"Pandemic shock", peak:-75, length:6, recovery:24, permanent:false, target:"all" })}>+ Pandemic</button>
+            {d.lt.hasSeg && <button className="btn btn-sm" onClick={()=>addEvent({ label:"Trade dispute", peak:-35, length:9, recovery:0, permanent:true, target:(d.lt.segKeys.includes("transborder")?"transborder":d.lt.segKeys[d.lt.segKeys.length-1]) })}>+ Sector shock</button>}
+            <button className="btn btn-sm btn-primary" onClick={()=>addEvent()}>+ Event</button>
+          </div>}/>
+        {events.length===0
+          ? <div className="air-meta">No events yet. Add time-bound shocks — a pandemic, a fuel crisis, a route collapse — that dent or lift demand over a window you set. Each can hit all traffic or a single sector (say a transborder dip that reshapes the mix), recover fully, or <b style={{color:"var(--dim)"}}>permanently re-baseline</b> the rest of the forecast. Stack as many as you like.</div>
+          : <div style={{display:"flex",flexDirection:"column",gap:12}}>
+              {events.map(ev=>{
+                const [ey,em] = String(ev.start).split("-").map(Number);
+                const len = ev.length!=null ? ev.length : (ev.hold||0);
+                const tgtLabel = (targetOpts.find(o=>o.k===(ev.target||"all"))||{}).label || "All traffic";
+                return (
+                  <div key={ev.id} style={{border:"1px solid var(--line-2)",borderRadius:"var(--r-sm)",padding:"14px 16px"}}>
+                    <div style={{display:"flex",alignItems:"center",gap:10,marginBottom:12,flexWrap:"wrap"}}>
+                      <span className="dot" style={{background:"var(--bad)"}}></span>
+                      <input value={ev.label} onChange={e=>updEvent(ev.id,{label:e.target.value})}
+                        style={{flex:"1 1 140px",minWidth:0,background:"transparent",border:"none",borderBottom:"1px solid var(--line)",color:"var(--text)",fontFamily:"var(--sans)",fontSize:15,fontWeight:600,padding:"2px 0",outline:"none"}}/>
+                      <span className="air-meta">starts</span>
+                      <select value={em} onChange={e=>updEvent(ev.id,{start:`${ey}-${String(+e.target.value).padStart(2,"0")}`})} className="seg-select">{MONTHS.map((mo,mi)=><option key={mi} value={mi+1}>{mo}</option>)}</select>
+                      <select value={ey} onChange={e=>updEvent(ev.id,{start:`${+e.target.value}-${String(em).padStart(2,"0")}`})} className="seg-select">{yearOpts.map(y=><option key={y} value={y}>{y}</option>)}</select>
+                      <button className="icon-btn" title="Remove event" onClick={()=>rmEvent(ev.id)} style={{width:28,height:28,flex:"none"}}><svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" strokeWidth="2"><path d="M6 6l12 12M18 6L6 18"/></svg></button>
+                    </div>
+                    <div style={{display:"flex",gap:18,alignItems:"center",flexWrap:"wrap",marginBottom:12}}>
+                      <div style={{display:"flex",alignItems:"center",gap:8}}>
+                        <span className="lever-desc" style={{margin:0}}>Affects</span>
+                        <select value={ev.target||"all"} onChange={e=>updEvent(ev.id,{target:e.target.value})} className="seg-select">{targetOpts.map(o=><option key={o.k} value={o.k}>{o.label}</option>)}</select>
+                      </div>
+                      <label style={{display:"flex",alignItems:"center",gap:7,cursor:"pointer",fontSize:13,color:"var(--dim)"}}>
+                        <input type="checkbox" checked={!!ev.permanent} onChange={e=>updEvent(ev.id,{permanent:e.target.checked})}/>
+                        Permanent (re-baseline)
+                      </label>
+                    </div>
+                    {[
+                      { k:"peak", label:"Peak impact", unit:"%", min:-100, max:50, step:1 },
+                      { k:"length", label:"Length at peak", unit:" mo", min:0, max:36, step:1 },
+                      ...(ev.permanent ? [] : [{ k:"recovery", label:"Recovery", unit:" mo", min:0, max:60, step:1 }]),
+                    ].map(c=>{
+                      const val = c.k==="length" ? len : (ev[c.k]??0);
+                      return (
+                        <div key={c.k} style={{marginBottom:8}}>
+                          <div className="lever-head" style={{marginBottom:6}}>
+                            <span className="lever-desc" style={{margin:0}}>{c.label}</span>
+                            <span className="lever-val" style={{fontSize:13}}>{(val>0&&c.k==="peak"?"+":"")+val}{c.unit}</span>
+                          </div>
+                          <input type="range" min={c.min} max={c.max} step={c.step} value={val} onChange={e=>updEvent(ev.id,{[c.k]:+e.target.value})}/>
+                        </div>
+                      );
+                    })}
+                    <div className="lever-desc" style={{marginTop:2}}>
+                      {ev.permanent
+                        ? `Permanent ${ev.peak>0?"+":""}${ev.peak}% shift to ${tgtLabel.toLowerCase()} — the rest of the forecast re-baselines off it.`
+                        : `${ev.peak>0?"+":""}${ev.peak}% on ${tgtLabel.toLowerCase()} for ${len}mo, gliding back over ${ev.recovery||0}mo.`}
+                    </div>
+                  </div>
+                );
+              })}
+            </div>}
       </div>
     </div>
   );
@@ -687,4 +758,4 @@ Eurostat / StatCan / US BTS (monthly passengers, movements, cargo) &middot; Meta
   );
 }
 
-Object.assign(window, { LongTerm, Scenario, ExportView });
+Object.assign(window, { LongTerm, Scenario, EventSim, ExportView });

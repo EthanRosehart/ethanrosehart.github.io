@@ -183,13 +183,13 @@ function Overview({ airport, history, scenario, go }){
         </div>}
         {d.lt && <div className="panel panel-pad" style={{cursor:"pointer"}} onClick={()=>go("scenario")}>
           <div className="eyebrow" style={{marginBottom:10}}>What-if · Levers</div>
-          <div style={{fontSize:17,fontWeight:600,marginBottom:6}}>Shape builder</div>
-          <p style={{fontSize:13,color:"var(--dim)",marginBottom:14}}>Flex GDP, fuel, route stimulation, cargo, fleet{d.lt.hasSeg?" & passenger mix":""} — watch {endYear} move live.</p>
+          <div style={{fontSize:17,fontWeight:600,marginBottom:6}}>Baseline assumptions</div>
+          <p style={{fontSize:13,color:"var(--dim)",marginBottom:14}}>Flex GDP, fuel, route stimulation, cargo, fleet{d.lt.hasSeg?" & passenger mix":""} — watch {endYear} move live. Add shocks in the event simulator.</p>
           <div className="stat-strip" style={{border:"none",gap:14}}>
             <div style={{padding:0,border:"none"}}><div className="air-meta">Demand g</div><div className="num" style={{fontSize:17,color:"var(--lime)"}}>{GP_fmt.pct(d.lt.gDemand)}</div></div>
             <div style={{padding:0,border:"none"}}><div className="air-meta">Levers</div><div className="num" style={{fontSize:17}}>{6+(d.lt.hasAtm?1:0)+(d.lt.hasCargo?1:0)+(d.lt.hasSeg?d.lt.segKeys.length:0)}</div></div>
           </div>
-          <div className="btn btn-sm" style={{marginTop:14,width:"100%",justifyContent:"center",color:"var(--pink-2)",borderColor:"var(--pink-line)"}}>Open shape builder {GP_Ico.arrow}</div>
+          <div className="btn btn-sm" style={{marginTop:14,width:"100%",justifyContent:"center",color:"var(--pink-2)",borderColor:"var(--pink-line)"}}>Open assumptions {GP_Ico.arrow}</div>
         </div>}
       </div>
     </div>
