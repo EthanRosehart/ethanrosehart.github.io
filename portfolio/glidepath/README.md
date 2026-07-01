@@ -110,12 +110,14 @@ triggers the same redeploy.
 
 ## Known limitations
 
-- **No build step.** Babel Standalone transpiles ~150KB of JSX in-browser on
-  every load, and `index.html` currently loads the **development** builds
-  of React/ReactDOM from unpkg — larger and slower than the production
-  builds. A lightweight bundler (esbuild/Vite) would let this ship minified,
-  pre-transpiled, and on the production React build, at the cost of adding
-  a build step to an otherwise buildless static site.
+- **No build step.** `index.html` now loads the production builds of
+  React/ReactDOM (~47KB gzipped combined, down from ~262KB for the
+  development builds), but Babel Standalone — the in-browser JSX compiler
+  itself — still has to be downloaded and run on every page load (~665KB
+  gzipped) to transpile the app's own ~130KB of JSX source. A lightweight
+  bundler (esbuild/Vite) would precompile that ahead of time and let the
+  browser skip downloading a compiler entirely, at the cost of adding an
+  actual build step to an otherwise buildless static site.
 - **Full data payload on load.** `app.jsx` fetches all of
   `airports.json` + `activity.json` + `forecast.json` + `macro.json`
   (~1.4MB combined) on mount regardless of which airport is picked, since
