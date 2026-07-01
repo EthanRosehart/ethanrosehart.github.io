@@ -745,7 +745,25 @@ ${events.length?`<h2>Shock events</h2>
     GP_saveBlob(new Blob(["﻿"+html], {type:"application/msword"}), fileBase+"_brief.doc");
   };
 
-  const GEN = { csv:genCSV, xlsx:genXLSX, pptx:genPPTX, docx:genDOC };
+  /* ---- Session: a lossless JSON round-trip, not a report ----
+     Meant for Setup ▸ Import session, not for reading — every lever, every
+     event, and (for an uploaded gateway) the meta+series itself, so the
+     exact same forecast reopens later without re-uploading or re-tweaking
+     anything. A catalogue airport only needs its iata: the real data comes
+     back from the live pipeline, not from this file. */
+  const genSession = ()=>{
+    const session = {
+      kind: "glidepath-session", version: 1, generatedAt: new Date().toISOString(),
+      airport: { iata: airport.iata, name: airport.name, custom: !!airport.custom },
+      scenario,
+    };
+    if (airport.custom) {
+      session.customAirport = { iata: airport.iata, meta: GP_getActivityMeta(airport.iata), series: GP_getObservedSeries(airport.iata) };
+    }
+    GP_saveBlob(new Blob([JSON.stringify(session, null, 2)], {type:"application/json"}), fileBase+"_session.json");
+  };
+
+  const GEN = { csv:genCSV, xlsx:genXLSX, pptx:genPPTX, docx:genDOC, session:genSession };
 
   const run = async (id)=>{
     if (busy) return;
@@ -763,6 +781,7 @@ ${events.length?`<h2>Shock events</h2>
     { id:"xlsx", name:"Model workbook", desc:"Real Excel workbook — summary, long-term annual + monthly (with segment columns when set), short-term monthly, full history, assumptions and an events sheet.", tag:"XLSX" },
     { id:"docx", name:"Executive brief", desc:"Word-openable narrative: summary, KPIs, trajectory table, assumptions, segment mix, events and provenance.", tag:"DOCX" },
     { id:"csv", name:"Forecast data extract", desc:"Flat annual + monthly tables (with segment columns when set), assumptions and events for your BI stack or master-plan model.", tag:"CSV" },
+    { id:"session", name:"Save session", desc:"A JSON file that reopens exactly where you left off — gateway, every lever, every event, and (if uploaded) your own data — via Import session on Select airport.", tag:"JSON" },
   ];
 
   return (

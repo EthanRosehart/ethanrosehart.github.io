@@ -128,6 +128,17 @@ function registerCustomAirport(iata, meta, series){
   rebuildAirports();
 }
 
+/* undo registerCustomAirport — used by the app-wide Reset action so a
+   cleared session doesn't leave a ghost gateway still matching in
+   liveAirports() (it filters on availableMetrics(), which a stale custom
+   entry would still satisfy). */
+function removeCustomAirport(iata){
+  delete OBSERVED[iata];
+  delete SEGMENTS[iata];
+  if (ACTIVITY_META && ACTIVITY_META.airports) delete ACTIVITY_META.airports[iata];
+  rebuildAirports();
+}
+
 /* "YYYY-MM" from a variety of raw date-ish spreadsheet cell values. Returns
    null if nothing sensible can be parsed — the upload UI flags those rows
    rather than silently dropping or misreading them. */
@@ -517,6 +528,6 @@ Object.assign(window, {
   GP_getObservedSeries:getObservedSeries, GP_getActivityMeta:getActivityMeta,
   GP_setForecastMeta:setForecastMeta, GP_setAirportForecast:setAirportForecast,
   GP_setReference:setReference, GP_rebuildAirports:rebuildAirports, GP_ensureMacro:ensureMacro,
-  GP_registerCustomAirport:registerCustomAirport, GP_parseMonthKey:parseMonthKey,
+  GP_registerCustomAirport:registerCustomAirport, GP_removeCustomAirport:removeCustomAirport, GP_parseMonthKey:parseMonthKey,
   GP_guessColumnRole:guessColumnRole, GP_guessColumnRoles:guessColumnRoles,
 });

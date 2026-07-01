@@ -17,14 +17,14 @@ same catalogue and forecasting machinery.
 
 | Screen | Purpose |
 |---|---|
-| **Select airport** | Search/browse gateways that have a live public passenger feed, or switch to uploading your own data. |
-| **Connect data** | Shows the three data sources (OpenFlights, Eurostat/StatCan aviation activity, World Bank macro) reconciling for the chosen airport. Replaced by **Upload data** if you're bringing your own history instead. |
+| **Select airport** | Upload your own data, or connect to the open-source catalogue and search/browse gateways with a live public passenger feed — presented as an explicit either/or, not one path buried under the other. Also where a previously saved session gets re-imported. |
+| **Connect data** | Shows the three data sources (OpenFlights, Eurostat/StatCan aviation activity, World Bank macro) reconciling for the chosen airport. **Upload data** is a parallel step, not a relabeling of this one — both are always visible in the nav, split by an "or". |
 | **Overview** | KPI headline, annual throughput history, seasonality, passenger-mix donut. |
 | **Short-term (Prophet)** | 12–24 month tactical forecast with confidence band, model card, and monthly detail table. Not available for uploaded data — see below. |
 | **Long-term** | 10/15/25-year strategic trajectory from the elasticity model, with a growth-driver decomposition. |
 | **Baseline assumptions** | Lever panel (GDP, elasticity, population, tourism, fuel/yield, LCC stimulation, plus movements/cargo/segment levers where the gateway carries that data) with live scenario-vs-baseline impact. |
 | **Event simulator** | Add time-bound shocks (a pandemic, a route collapse, a trade dispute) that dent or lift demand — full recovery or permanent re-baseline — and see them ride on top of the scenario. |
-| **Export** | Generates a real PPTX deck, XLSX workbook, Word-openable DOCX brief, or a dependency-free CSV extract — including the scenario assumptions, the segment breakdown, and any shock events, not just the headline trajectory. |
+| **Export** | Generates a real PPTX deck, XLSX workbook, Word-openable DOCX brief, or a dependency-free CSV extract — including the scenario assumptions, the segment breakdown, and any shock events, not just the headline trajectory. Also offers **Save session**, a JSON round-trip file for the Select-airport import. |
 
 ## Forecasting methodology
 
@@ -63,7 +63,11 @@ leaves the browser — there's no server for it to go to, and the panel says so.
 The upload panel itself explains the expected shape and links a one-click
 "Download template" CSV, rather than requiring a rigid predefined schema; the
 trade-off for that flexibility is that a truly unrecognizable header still
-needs a manual fix in the mapping dropdowns.
+needs a manual fix in the mapping dropdowns. "Build forecast" only enables
+once a gateway name, short code, and one full calendar year of passengers
+are all present — and says exactly which of those is still missing, rather
+than leaving a visitor staring at a greyed-out button next to numbers that
+already say "ready".
 
 A custom gateway is registered through `GP_registerCustomAirport()` in
 [`data.jsx`](data.jsx) — the exact same `ACTIVITY_META`/`AIRPORTS` catalogue
@@ -87,6 +91,22 @@ custom airport out from under the session — the real catalogue fetch always
 resolves *after* the synchronous localStorage restore, however briefly. It
 now merges custom entries back in rather than overwriting them; see the test
 named "the reload-restore race" in `test/data.test.mjs`.
+
+## Save / import a session
+
+Export offers **Save session** alongside the report formats: a small JSON
+file — gateway reference, every scenario lever, every event, and (for an
+uploaded gateway) the meta + monthly series itself — meant purely for
+round-tripping, not for reading. Select airport's **Import session** reads
+it back and reopens exactly where you left off: a catalogue airport just
+needs its iata (the real data comes back from the live pipeline), while an
+uploaded gateway is rebuilt via the same `GP_registerCustomAirport()` the
+original upload used. The topbar's **Reset** clears a session and starts
+over from scratch; for an uploaded gateway it also calls
+`GP_removeCustomAirport()` so the cleared gateway doesn't linger as a match
+in the airport search (`liveAirports()` filters on the same catalogue this
+would otherwise leave behind — see the "ghost gateway" test in
+`test/data.test.mjs`).
 
 ## Architecture
 
