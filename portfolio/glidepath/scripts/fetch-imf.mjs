@@ -68,7 +68,12 @@ async function fetchLevels(codes) {
   const now = new Date().getFullYear();
   const periods = [];
   for (let y = now - YEARS_BACK; y <= now + YEARS_FWD; y++) periods.push(y);
-  const url = `${API}/${INDICATOR}/${codes.join(";")}?periods=${periods.join(",")}`;
+  // country/region/group IDs are appended as their own path segments
+  // (.../INDICATOR/ID1/ID2/...), not joined into one segment — a
+  // semicolon-joined list here silently fails to match any route and the
+  // API falls back to its root {"api":{"version":...}} response instead of
+  // erroring, which is what actually happened on the first real run.
+  const url = `${API}/${INDICATOR}/${codes.join("/")}?periods=${periods.join(",")}`;
   const res = await fetch(url, { headers: { "User-Agent": "glidepath-data-bot" } });
   if (!res.ok) throw new Error(`IMF ${INDICATOR}: HTTP ${res.status}`);
   const body = await res.json();
