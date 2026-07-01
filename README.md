@@ -17,10 +17,11 @@ Personal site and interactive resume for Ethan Rosehart — Data & Strategy, Gre
 | `sitemap.xml` | URL inventory for search-engine indexing |
 | `CNAME` | Tells GitHub Pages to serve the site at `ethanrosehart.com` |
 | `.nojekyll` | Disables GitHub's Jekyll processor (we don't need it) |
+| `portfolio/glidepath/` | **Glidepath** — an aero demand forecasting app (React, real public aviation/macro data, Meta Prophet + elasticity models). See [`portfolio/glidepath/README.md`](portfolio/glidepath/README.md). |
 
 ## Stack
 
-No build step. Vanilla HTML + CSS + a single Chart.js CDN import. Deploys instantly on push.
+No build step. Vanilla HTML + CSS + a single Chart.js CDN import for the resume page. The `portfolio/glidepath` sub-app is its own static React app (also buildless — see its own README) linked from the site's Portfolio menu. Deploys instantly on push.
 
 ## Updating the interactive resume
 
