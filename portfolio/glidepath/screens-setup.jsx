@@ -1,7 +1,7 @@
 /* ============================================================
    screens-setup.jsx — Onboarding (airport select) + Connect data
    ============================================================ */
-const { useState:useStateA, useMemo:useMemoA } = React;
+const { useState:useStateA, useMemo:useMemoA, useEffect:useEffectA } = React;
 
 /* simple inline icons */
 const Ico = {
@@ -11,9 +11,11 @@ const Ico = {
   check:   <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5"><path d="M20 6L9 17l-5-5"/></svg>,
   arrow:   <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><path d="M5 12h14M13 6l6 6-6 6"/></svg>,
   db:      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><ellipse cx="12" cy="5" rx="8" ry="3"/><path d="M4 5v14c0 1.7 3.6 3 8 3s8-1.3 8-3V5"/><path d="M4 12c0 1.7 3.6 3 8 3s8-1.3 8-3"/></svg>,
+  upload:  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><path d="M12 16V4m0 0L7 9m5-5l5 5"/><path d="M4 16v3a2 2 0 002 2h12a2 2 0 002-2v-3"/></svg>,
+  close:   <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><path d="M6 6l12 12M18 6L6 18"/></svg>,
 };
 
-function Onboarding({ onSelect, selected }){
+function Onboarding({ onSelect, selected, onUpload }){
   const [q, setQ] = useStateA("");
   const live = GP_liveAirports();
   const t = q.trim().toLowerCase();
@@ -68,7 +70,7 @@ function Onboarding({ onSelect, selected }){
       </div>
 
       {selected && (
-        <div className="panel panel-pad fade-in confirm-bar" style={{display:"flex", alignItems:"center", justifyContent:"space-between", gap:20}}>
+        <div className="panel panel-pad fade-in confirm-bar" style={{display:"flex", alignItems:"center", justifyContent:"space-between", gap:20, marginBottom:18}}>
           <div style={{display:"flex", alignItems:"center", gap:18}}>
             <div style={{width:54,height:54,borderRadius:12,background:"var(--pink-soft)",border:"1px solid var(--pink-line)",display:"grid",placeItems:"center",color:"var(--pink-2)",fontFamily:"var(--mono)",fontWeight:700,fontSize:18}}>{selected.iata}</div>
             <div>
@@ -79,6 +81,227 @@ function Onboarding({ onSelect, selected }){
           <button className="btn btn-primary btn-lg" onClick={()=>onSelect(selected, true)}>Connect data {Ico.arrow}</button>
         </div>
       )}
+
+      <div style={{textAlign:"center", paddingTop:4}}>
+        <span className="air-meta">Don't see your gateway, or want to model somewhere off the public feeds? </span>
+        <button className="btn btn-sm" style={{marginLeft:8}} onClick={onUpload}>{Ico.upload} Upload your own data</button>
+      </div>
+    </div>
+  );
+}
+
+/* ---------- Upload your own data ------------------------------
+   An alternative to picking a catalogue gateway: parse an uploaded
+   CSV/XLSX client-side (lazy-loads the same SheetJS build ExportView
+   already uses), let the visitor confirm/fix the column mapping and edit
+   the monthly numbers directly, then register it through the exact same
+   catalogue machinery a real airport uses (GP_registerCustomAirport) —
+   every downstream screen just works, except the short-term Prophet
+   forecast, which is fit server-side nightly and isn't available here
+   (see DataCaveat). Nothing leaves the browser; there's no server this
+   data could be sent to even if we wanted to. */
+const ROLE_LABELS = { date:"Month", pax:"Passengers", atm:"Movements", cargo:"Cargo", ignore:"Ignore" };
+const UPLOAD_COUNTRIES = Object.keys(MACRO).map(cc => ({ cc, label: MACRO[cc].label })).concat([{ cc:"OTH", label:"Other / not listed" }]);
+
+function UploadData({ onDone, onCancel }){
+  const [name, setName] = useStateA("");
+  const [code, setCode] = useStateA("");
+  const [cc, setCc] = useStateA("USA");
+  const [rawRows, setRawRows] = useStateA(null);     // array-of-arrays incl. header row, from the parsed file
+  const [roles, setRoles] = useStateA([]);           // per-column role, parallel to rawRows[0]
+  const [rows, setRows] = useStateA([]);             // editable working rows: [{month,pax,atm,cargo}]
+  const [fileName, setFileName] = useStateA(null);
+  const [fileError, setFileError] = useStateA(null);
+  const [busy, setBusy] = useStateA(false);
+  const [addMonth, setAddMonth] = useStateA("");
+
+  const onFile = async (file) => {
+    setFileError(null); setBusy(true);
+    try {
+      await GP_loadScript("https://cdn.sheetjs.com/xlsx-0.20.3/package/dist/xlsx.full.min.js");
+      const buf = await file.arrayBuffer();
+      const wb = window.XLSX.read(buf, { type:"array", cellDates:true });
+      const sheet = wb.Sheets[wb.SheetNames[0]];
+      const aoa = window.XLSX.utils.sheet_to_json(sheet, { header:1, raw:true, blankrows:false });
+      if (!aoa.length) throw new Error("that file looks empty");
+      const header = aoa[0].map(c => String(c ?? ""));
+      setRawRows(aoa);
+      setRoles(header.map(GP_guessColumnRole));
+      setFileName(file.name);
+    } catch(e) {
+      setFileError("Couldn't read that file — try exporting it as CSV. (" + (e && e.message || e) + ")");
+      setRawRows(null);
+    } finally { setBusy(false); }
+  };
+
+  // re-derive the editable table whenever the file or the column mapping
+  // changes; after that, rows are edited independently (this effect won't
+  // clobber in-progress edits since neither rawRows nor roles changes then)
+  useEffectA(() => {
+    if (!rawRows) return;
+    const dateIdx = roles.indexOf("date");
+    const byMonth = {};
+    for (let r = 1; r < rawRows.length; r++) {
+      const raw = rawRows[r];
+      const month = dateIdx >= 0 ? GP_parseMonthKey(raw[dateIdx]) : null;
+      if (!month) continue;
+      const rec = byMonth[month] || { month };
+      roles.forEach((role, ci) => {
+        if (role !== "pax" && role !== "atm" && role !== "cargo") return;
+        const v = raw[ci];
+        const n = typeof v === "number" ? v : parseFloat(String(v ?? "").replace(/[,\s]/g, ""));
+        if (!isNaN(n)) rec[role] = n;
+      });
+      byMonth[month] = rec;
+    }
+    setRows(Object.values(byMonth).sort((a,b)=>a.month.localeCompare(b.month)));
+  }, [rawRows, roles.join(",")]);
+
+  const setRole = (colIdx, role) => setRoles(rs => rs.map((r,i)=> i===colIdx ? role : r));
+  const updateCell = (i, field, value) => setRows(rs => rs.map((r,ri)=> ri===i ? { ...r, [field]: value } : r));
+  const removeRow = (i) => setRows(rs => rs.filter((_,ri)=> ri!==i));
+  const addRow = () => {
+    if (!addMonth) return;
+    setRows(rs => [...rs, { month:addMonth, pax:"" }].sort((a,b)=>a.month.localeCompare(b.month)));
+    setAddMonth("");
+  };
+
+  // the series this table would produce, and whether it's enough to build
+  // on — reuses the app's real long-term-model threshold (>=1 complete
+  // calendar year), not an arbitrary made-up minimum
+  const { series, fullYearCount, monthCount } = useMemoA(() => {
+    const s = { pax:{} };
+    rows.forEach(r => {
+      if (!r.month) return;
+      if (r.pax !== "" && r.pax != null && !isNaN(+r.pax)) s.pax[r.month] = +r.pax;
+      if (r.atm !== "" && r.atm != null && !isNaN(+r.atm)) (s.atm ||= {})[r.month] = +r.atm;
+      if (r.cargo !== "" && r.cargo != null && !isNaN(+r.cargo)) (s.cargo ||= {})[r.month] = +r.cargo;
+    });
+    const hist = Object.keys(s.pax).map(k => ({ y:+k.slice(0,4), m:+k.slice(5,7)-1, pax:s.pax[k] }));
+    const fy = GP_fullYears(hist, "pax");
+    return { series:s, fullYearCount:fy.length, monthCount: Object.keys(s.pax).length };
+  }, [rows]);
+
+  const canSubmit = name.trim().length>0 && code.trim().length>0 && fullYearCount>=1 && !busy;
+
+  const submit = () => {
+    const iata = "C-" + code.trim().toUpperCase().replace(/[^A-Z0-9]/g,"").slice(0,10);
+    const country = UPLOAD_COUNTRIES.find(c=>c.cc===cc) || UPLOAD_COUNTRIES[UPLOAD_COUNTRIES.length-1];
+    const meta = {
+      name: name.trim(), cc, countryName: country.label, region:"Your data",
+      city:"", icao:"", lat:null, lon:null, rep_airp:null, country:null,
+    };
+    onDone(iata, meta, series);
+  };
+
+  const dateColIdx = roles.indexOf("date");
+
+  return (
+    <div className="content fade-in" style={{maxWidth:900}}>
+      <div style={{marginBottom:26}}>
+        <div className="eyebrow" style={{marginBottom:12}}>Step 02 · Provide your data</div>
+        <h1 style={{fontSize:34, marginBottom:12}}>Bring your own monthly history</h1>
+        <p style={{color:"var(--dim)", fontSize:16, maxWidth:640}}>
+          Upload a spreadsheet of monthly passengers (and, optionally, movements or cargo) — up to 10 years works
+          best — then fix up the numbers right here. Nothing is uploaded anywhere; it stays in this browser.
+        </p>
+      </div>
+
+      <div className="panel panel-pad" style={{marginBottom:16}}>
+        <SectionHead kicker="Gateway details" title="Name it"/>
+        <div className="grid g-3" style={{gap:14}}>
+          <div>
+            <div className="lever-desc" style={{marginBottom:6}}>Gateway name</div>
+            <input value={name} onChange={e=>setName(e.target.value)} placeholder="e.g. Riverside Regional"
+              style={{width:"100%",background:"var(--bg-2)",border:"1px solid var(--line-2)",borderRadius:"var(--r-sm)",color:"var(--text)",fontFamily:"var(--sans)",fontSize:14,padding:"10px 12px",outline:"none"}}/>
+          </div>
+          <div>
+            <div className="lever-desc" style={{marginBottom:6}}>Short code (for charts &amp; exports)</div>
+            <input value={code} onChange={e=>setCode(e.target.value)} placeholder="e.g. RVR" maxLength={10}
+              style={{width:"100%",background:"var(--bg-2)",border:"1px solid var(--line-2)",borderRadius:"var(--r-sm)",color:"var(--text)",fontFamily:"var(--mono)",fontSize:14,padding:"10px 12px",outline:"none",textTransform:"uppercase"}}/>
+          </div>
+          <div>
+            <div className="lever-desc" style={{marginBottom:6}}>Country (for macro drivers)</div>
+            <select value={cc} onChange={e=>setCc(e.target.value)} className="seg-select" style={{width:"100%",padding:"10px 12px"}}>
+              {UPLOAD_COUNTRIES.map(c => <option key={c.cc} value={c.cc}>{c.label}{c.cc==="OTH"?"":" (World Bank data)"}</option>)}
+            </select>
+          </div>
+        </div>
+      </div>
+
+      <div className="panel panel-pad" style={{marginBottom:16}}>
+        <SectionHead kicker="Source file" title="Upload a CSV or Excel file"/>
+        <div style={{display:"flex",alignItems:"center",gap:14,flexWrap:"wrap"}}>
+          <label className="btn btn-primary" style={{cursor:"pointer"}}>
+            {Ico.upload} {busy ? "Reading…" : "Choose file"}
+            <input type="file" accept=".csv,.xlsx,.xls" style={{display:"none"}} disabled={busy}
+              onChange={e => e.target.files[0] && onFile(e.target.files[0])}/>
+          </label>
+          {fileName && !fileError && <span className="air-meta">{fileName} · {rawRows ? rawRows.length-1 : 0} rows read</span>}
+        </div>
+        {fileError && <div className="caveat fade-in" style={{marginTop:14}}><b>Couldn't read that file —</b> {fileError.replace(/^Couldn't read that file — /,"")}</div>}
+        {rawRows && (
+          <div style={{marginTop:18}}>
+            <div className="lever-desc" style={{marginBottom:10}}>We guessed what each column is — fix anything that's wrong:</div>
+            <div className="grid" style={{gridTemplateColumns:`repeat(${rawRows[0].length}, minmax(120px,1fr))`, gap:10, overflowX:"auto"}}>
+              {rawRows[0].map((h,i)=>(
+                <div key={i}>
+                  <div className="air-meta" style={{marginBottom:5, whiteSpace:"nowrap", overflow:"hidden", textOverflow:"ellipsis"}} title={String(h)}>{String(h) || `Column ${i+1}`}</div>
+                  <select value={roles[i]} onChange={e=>setRole(i,e.target.value)} className="seg-select" style={{width:"100%"}}>
+                    {Object.keys(ROLE_LABELS).map(r => <option key={r} value={r}>{ROLE_LABELS[r]}</option>)}
+                  </select>
+                </div>
+              ))}
+            </div>
+            {dateColIdx<0 && <div className="caveat fade-in" style={{marginTop:14}}><b>Pick a Month column —</b> we need to know which column holds the date before we can build the table below.</div>}
+          </div>
+        )}
+      </div>
+
+      {rows.length>0 && (
+        <div className="panel panel-pad" style={{marginBottom:16}}>
+          <SectionHead kicker={monthCount+" months detected"} title="Check the numbers"
+            right={<span className="air-meta" style={{color: fullYearCount>=1 ? "var(--ok)" : "var(--bad)"}}>
+              {fullYearCount>=1 ? `${fullYearCount} complete calendar year${fullYearCount>1?"s":""} — ready` : "needs one full Jan–Dec year of passengers"}
+            </span>}/>
+          <div style={{maxHeight:320, overflowY:"auto"}}>
+            <table className="tbl">
+              <thead><tr><th>Month</th><th>Passengers</th><th>Movements</th><th>Cargo (t)</th><th></th></tr></thead>
+              <tbody>
+                {rows.map((r,i)=>(
+                  <tr key={i}>
+                    <td style={{textAlign:"left"}}>
+                      <input type="month" value={r.month||""} onChange={e=>updateCell(i,"month",e.target.value)}
+                        style={{background:"transparent",border:"none",color:"var(--text)",fontFamily:"var(--mono)",fontSize:13,outline:"none"}}/>
+                    </td>
+                    {["pax","atm","cargo"].map(field=>(
+                      <td key={field}>
+                        <input type="number" value={r[field]??""} onChange={e=>updateCell(i,field,e.target.value)} placeholder="—"
+                          style={{width:88,background:"transparent",border:"none",borderBottom:"1px solid var(--line)",color:"var(--text)",fontFamily:"var(--mono)",fontSize:13,textAlign:"right",padding:"2px 0",outline:"none"}}/>
+                      </td>
+                    ))}
+                    <td style={{width:30}}>
+                      <button className="icon-btn" title="Remove row" onClick={()=>removeRow(i)} style={{width:26,height:26}}>
+                        <span style={{width:12,height:12,display:"inline-block"}}>{Ico.close}</span>
+                      </button>
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+          <div style={{display:"flex",alignItems:"center",gap:10,marginTop:14,paddingTop:14,borderTop:"1px solid var(--line)"}}>
+            <input type="month" value={addMonth} onChange={e=>setAddMonth(e.target.value)} className="seg-select"/>
+            <button className="btn btn-sm" disabled={!addMonth} onClick={addRow}>+ Add month</button>
+            <span className="air-meta">for a month your file was missing</span>
+          </div>
+        </div>
+      )}
+
+      <div className="panel panel-pad confirm-bar" style={{display:"flex", alignItems:"center", justifyContent:"space-between", gap:20}}>
+        <button className="btn" onClick={onCancel}>Cancel</button>
+        <button className="btn btn-primary btn-lg" disabled={!canSubmit} onClick={submit}>Build forecast {Ico.arrow}</button>
+      </div>
     </div>
   );
 }
@@ -192,4 +415,4 @@ function ConnectData({ airport, onDone, alreadyDone, macroMeta, actMeta, ofMeta,
   );
 }
 
-Object.assign(window, { Onboarding, ConnectData, GP_Ico:Ico, GP_SOURCES:SOURCES });
+Object.assign(window, { Onboarding, ConnectData, UploadData, GP_Ico:Ico, GP_SOURCES:SOURCES });

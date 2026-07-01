@@ -1,24 +1,26 @@
 # Glidepath — aero demand forecasting
 
 A single-page app that walks through an airport-demand forecasting workflow end
-to end: pick a gateway → connect real public data → tactical (short-term) and
-strategic (long-term) forecasts → scenario / event simulation → export a
-deck, workbook, brief or CSV. Live at
+to end: pick a gateway → connect real public data (or upload your own) →
+tactical (short-term) and strategic (long-term) forecasts → scenario / event
+simulation → export a deck, workbook, brief or CSV. Live at
 [ethanrosehart.com/portfolio/glidepath](https://ethanrosehart.com/portfolio/glidepath/).
 
-There is **no synthetic data**. An airport only appears if a public feed
-(Eurostat, Statistics Canada, OpenFlights, World Bank) actually carries real
-monthly passenger data for it, and every number in the app traces back to one
-of those sources.
+There is **no synthetic data**. A catalogue airport only appears if a public
+feed (Eurostat, Statistics Canada, OpenFlights, World Bank) actually carries
+real monthly passenger data for it, and every number for it traces back to one
+of those sources. A visitor can also bring their **own** monthly history — see
+[Bring your own data](#bring-your-own-data) — which runs through the exact
+same catalogue and forecasting machinery.
 
 ## What it does
 
 | Screen | Purpose |
 |---|---|
-| **Select airport** | Search/browse gateways that have a live public passenger feed. |
-| **Connect data** | Shows the three data sources (OpenFlights, Eurostat/StatCan aviation activity, World Bank macro) reconciling for the chosen airport. |
+| **Select airport** | Search/browse gateways that have a live public passenger feed, or switch to uploading your own data. |
+| **Connect data** | Shows the three data sources (OpenFlights, Eurostat/StatCan aviation activity, World Bank macro) reconciling for the chosen airport. Replaced by **Upload data** if you're bringing your own history instead. |
 | **Overview** | KPI headline, annual throughput history, seasonality, passenger-mix donut. |
-| **Short-term (Prophet)** | 12–24 month tactical forecast with confidence band, model card, and monthly detail table. |
+| **Short-term (Prophet)** | 12–24 month tactical forecast with confidence band, model card, and monthly detail table. Not available for uploaded data — see below. |
 | **Long-term** | 10/15/25-year strategic trajectory from the elasticity model, with a growth-driver decomposition. |
 | **Baseline assumptions** | Lever panel (GDP, elasticity, population, tourism, fuel/yield, LCC stimulation, plus movements/cargo/segment levers where the gateway carries that data) with live scenario-vs-baseline impact. |
 | **Event simulator** | Add time-bound shocks (a pandemic, a route collapse, a trade dispute) that dent or lift demand — full recovery or permanent re-baseline — and see them ride on top of the scenario. |
@@ -44,6 +46,38 @@ of those sources.
 - Both models only render for a metric when the gateway actually publishes
   it — there's no interpolation or backfill for a series that doesn't exist.
 
+## Bring your own data
+
+"Select airport" also offers **Upload your own data**: pick a CSV or Excel
+file (parsed client-side with [SheetJS](https://sheetjs.com), lazy-loaded the
+same way `ExportView` loads it for downloads), confirm/fix the column mapping
+(auto-guessed from the header row), then edit the monthly numbers directly in
+a table before building the forecast. Nothing leaves the browser — there's no
+server for it to go to.
+
+A custom gateway is registered through `GP_registerCustomAirport()` in
+[`data.jsx`](data.jsx) — the exact same `ACTIVITY_META`/`AIRPORTS` catalogue
+machinery a real pipeline-fed airport uses, so **every screen downstream
+(Overview, long-term, scenario levers, event simulator, export) works
+unchanged**. The one thing that's deliberately never populated is
+`FORECASTS[iata]`: Meta Prophet is fit server-side, nightly, only for the
+committed public feeds, so a custom airport has no short-term tactical
+forecast — the "Short-term (Prophet)" nav entry is hidden for it, and
+`DataCaveat` explains why on the Overview screen. Everything else — the
+elasticity model, scenario/event tooling, and every export format — runs
+identically to a catalogue airport, with export copy adjusted to say the
+figures came from you rather than a public source.
+
+Since there's no server involved, a custom airport's meta + monthly series
+ride along in `localStorage` itself (not just its IATA-style code) so a
+reload can restore it without anywhere to re-fetch from. One thing this
+uncovered: `GP_setActivityIndex()` (which loads the real catalogue) used to
+replace `ACTIVITY_META` wholesale, which would silently wipe a just-restored
+custom airport out from under the session — the real catalogue fetch always
+resolves *after* the synchronous localStorage restore, however briefly. It
+now merges custom entries back in rather than overwriting them; see the test
+named "the reload-restore race" in `test/data.test.mjs`.
+
 ## Architecture
 
 React 18 (production build, from a CDN). The app's own six `.jsx` files are
@@ -56,7 +90,7 @@ rebuilt.
 index.html
 ├── data.jsx              airport catalogue, macro table, long-term model, formatters
 ├── charts.jsx            hand-built SVG LineChart / BarChart / Donut / Sparkline
-├── screens-setup.jsx     Onboarding (airport picker) + Connect data
+├── screens-setup.jsx     Onboarding (airport picker) + Connect data + UploadData
 ├── screens-forecast.jsx  Overview + Short-term tactical (Prophet)
 ├── screens-strategic.jsx Long-term + Scenario builder + Event simulator + Export
 ├── app.jsx               shell, nav, routing (in-memory + localStorage), data loading
@@ -164,6 +198,11 @@ to `main` and trigger that same redeploy: the nightly data refresh
 
 ## Known limitations
 
+- **Uploaded data has no short-term forecast and no passenger-segment split.**
+  Both are deliberate scope choices (Prophet is fit server-side only for the
+  committed public feeds; segment upload adds a column-mapping case not worth
+  the complexity yet) rather than a technical wall — see
+  [Bring your own data](#bring-your-own-data).
 - **US coverage is defined but not populated.** `scripts/fetch-bts.mjs`
   discovers and fetches BTS T-100 data by design, but as of the last nightly
   run the Socrata catalog exposes no working monthly segment dataset, so no

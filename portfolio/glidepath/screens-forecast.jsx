@@ -36,6 +36,16 @@ function SectionHead({ kicker, title, right }){
    that under-counts true throughput and reads low even as an enplanement
    estimate — so we flag it wherever those numbers are shown. */
 function DataCaveat({ airport, style }){
+  if (airport.custom) {
+    return (
+      <div className="caveat fade-in" style={{marginBottom:16, ...style}}>
+        <b>Your data —</b> {airport.iata} runs on the monthly figures you uploaded, not a public feed. The long-term
+        elasticity forecast, scenario levers, event simulator and export all work exactly the same as for a catalogue
+        gateway. The one thing that isn't available is the short-term Prophet forecast — that model is fit
+        server-side, nightly, only for the committed public data sources.
+      </div>
+    );
+  }
   const src = (GP_activityFor(airport.iata)||{}).source;
   if (src !== "statcan") return null;
   return (
@@ -114,7 +124,7 @@ function Overview({ airport, history, scenario, go }){
             </div>
           )}
           <div className="method" style={{marginTop:14}}>
-            <b>Source —</b> real monthly filings ({GP_sourceLabel(GP_activityFor(airport.iata).source)}),
+            <b>Source —</b> {airport.custom ? "the monthly figures you uploaded" : `real monthly filings (${GP_sourceLabel(GP_activityFor(airport.iata).source)})`},
             reconciled to complete calendar years{(d.hasAtm||d.hasCargo)?` — passengers${d.hasAtm?", aircraft movements":""}${d.hasCargo?" and cargo tonnage":""} tracked side by side`:""}.
             Indexed to {macro.label} macro drivers for the strategic outlook.
           </div>

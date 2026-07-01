@@ -33,6 +33,7 @@ function App(){
   const [ofMeta, setOfMeta] = useStateApp(window.GP_OF_META || null);
   const [actVer, setActVer] = useStateApp(0);
   const [navOpen, setNavOpen] = useStateApp(false);   // mobile drawer
+  const [customPending, setCustomPending] = useStateApp(false); // mid "upload your own data" flow, no airport chosen yet
 
   // kept current via effects below so async callbacks (fetch .then) can read
   // live state instead of the value closed over when the effect first ran
@@ -40,6 +41,19 @@ function App(){
   const connectedRef = useRefApp(connected);
   useEffectApp(()=>{ airportRef.current = airport; },[airport]);
   useEffectApp(()=>{ connectedRef.current = connected; },[connected]);
+
+  // Restore a previously-uploaded custom airport. Unlike the catalogue path,
+  // this never touches the network — the visitor's own data was saved
+  // straight into localStorage (there's no server to re-fetch it from), so
+  // it can be restored synchronously on mount, before any fetch resolves.
+  useEffectApp(()=>{
+    if (saved.customAirport && saved.customAirport.meta && saved.customAirport.series && !airport) {
+      GP_registerCustomAirport(saved.customAirport.iata, saved.customAirport.meta, saved.customAirport.series);
+      const a = AIRPORTS.find(x => x.iata === saved.customAirport.iata);
+      if (a) setAirport(a);
+      setActVer(v => v + 1);
+    }
+  },[]);
 
   const history = useMemoApp(()=> airport ? GP_buildHistory(airport.iata) : null, [airport, actVer]);
 
@@ -160,7 +174,18 @@ function App(){
   },[]);
 
   useEffectApp(()=>{
-    localStorage.setItem(LS, JSON.stringify({ screen, iata:airport?.iata, connected, scenario }));
+    const payload = { screen, iata:airport?.iata, connected, scenario };
+    // a custom airport has no server to re-fetch from on the next visit, so
+    // its meta + series ride along in localStorage itself (a few KB at most
+    // for a decade of monthly numbers)
+    if (airport?.custom) {
+      payload.customAirport = {
+        iata: airport.iata,
+        meta: GP_getActivityMeta(airport.iata),
+        series: GP_getObservedSeries(airport.iata),
+      };
+    }
+    localStorage.setItem(LS, JSON.stringify(payload));
   },[screen, airport, connected, scenario]);
 
   // ensure scenario resets to airport default when airport changes & none set
@@ -168,20 +193,42 @@ function App(){
     if (airport && !scenario) setScenario(GP_defaultScenario(airport.iata));
   },[airport]);
 
+  // a custom airport never has (and never will have) a Prophet forecast —
+  // that's fit server-side, nightly, only for the committed public feeds —
+  // so bounce off the tactical screen rather than render it blank if it's
+  // ever reached (nav hides the link, but a stale saved `screen` shouldn't
+  // strand the visitor on an empty page)
+  useEffectApp(()=>{
+    if (airport?.custom && screen==="short") setScreen("overview");
+  },[airport, screen]);
+
   const selectAirport = (a, proceed)=>{
+    setCustomPending(false);
     if (!airport || airport.iata!==a.iata){ setAirport(a); setScenario(GP_defaultScenario(a.iata)); setConnected(false); }
     if (proceed) setScreen("connect");
   };
+  const startUpload = ()=>{ setCustomPending(true); setScreen("connect"); };
+  const cancelUpload = ()=>{ setCustomPending(false); setScreen("select"); };
   const finishConnect = ()=>{ setConnected(true); setScreen("overview"); };
+  const finishCustomUpload = (iata, meta, series)=>{
+    GP_registerCustomAirport(iata, meta, series);
+    const a = AIRPORTS.find(x=>x.iata===iata);
+    setAirport(a);
+    setScenario(GP_defaultScenario(iata));
+    setConnected(true);
+    setCustomPending(false);
+    setScreen("overview");
+  };
 
   const reachable = (id)=>{
     if (id==="select") return true;
-    if (id==="connect") return !!airport;
+    if (id==="connect") return !!airport || customPending;
+    if (id==="short" && airport?.custom) return false;
     return !!airport && connected;
   };
   const go = (id)=>{ if (reachable(id)){ setScreen(id); setNavOpen(false); } };
 
-  const [t1,t2] = TITLES[screen] || ["",""];
+  const [t1,t2] = (screen==="connect" && customPending) ? ["Setup","Provide your data"] : (TITLES[screen] || ["",""]);
 
   return (
     <div className="app">
@@ -195,14 +242,15 @@ function App(){
         {["Setup","Forecast","Deliver"].map(group=>(
           <div key={group}>
             <div className="nav-section">{group}</div>
-            {NAV.filter(n=>n.group===group).map(n=>{
+            {NAV.filter(n=>n.group===group && !(n.id==="short" && airport?.custom)).map(n=>{
               const active = screen===n.id;
               const ok = reachable(n.id);
               const done = (n.id==="select"&&airport) || (n.id==="connect"&&connected);
+              const label = n.id==="connect" && (customPending || airport?.custom) ? "Upload data" : n.label;
               return (
                 <div key={n.id} className={"nav-item"+(active?" active":"")+(done&&!active?" done":"")+(ok?"":" nav-disabled")} onClick={()=>go(n.id)}>
                   {n.step ? <span className="step-n">{done&&!active?"✓":n.step}</span> : <span style={{width:18,display:"grid",placeItems:"center"}}>{n.icon}</span>}
-                  <span>{n.label}</span>
+                  <span>{label}</span>
                 </div>
               );
             })}
@@ -214,7 +262,7 @@ function App(){
             <div className="nav-air">
               <span className="nav-air-code">{airport.iata}</span>
               <div style={{flex:1,minWidth:0}}>
-                <div style={{fontSize:12,whiteSpace:"nowrap",overflow:"hidden",textOverflow:"ellipsis",color:"var(--dim)"}}>{airport.city}</div>
+                <div style={{fontSize:12,whiteSpace:"nowrap",overflow:"hidden",textOverflow:"ellipsis",color:"var(--dim)"}}>{airport.city || airport.country}</div>
                 <div className="air-meta" style={{fontSize:10}}>{connected?<span style={{color:"var(--ok)"}}>● data live</span>:"not connected"}</div>
               </div>
               <button className="icon-btn" title="Change airport" onClick={()=>{ setScreen("select"); setNavOpen(false); }} style={{width:30,height:30}}>
@@ -245,22 +293,23 @@ function App(){
           <div style={{display:"flex",alignItems:"center",gap:12}}>
             <span className="topbar-chips" style={{display:"flex",alignItems:"center",gap:12}}>
               {macroMeta && <span className="chip" title={"World Bank snapshot · "+(macroMeta.source||"")}><span className="dot dot-ok"></span>WB snapshot {new Date(macroMeta.generatedAt).toLocaleDateString("en-CA")}</span>}
-              {airport && <span className="chip chip-pink"><span className="dot dot-pink"></span>{airport.iata} · {airport.icao}</span>}
-              {connected && <span className="chip chip-ok"><span className="dot dot-ok"></span>3 sources live</span>}
+              {airport && <span className="chip chip-pink"><span className="dot dot-pink"></span>{airport.iata}{airport.icao?" · "+airport.icao:""}</span>}
+              {connected && <span className="chip chip-ok"><span className="dot dot-ok"></span>{airport?.custom ? "your data" : "3 sources live"}</span>}
             </span>
             {connected && screen!=="export" && <button className="btn btn-primary btn-sm" onClick={()=>{ setScreen("export"); setNavOpen(false); }}>Export</button>}
           </div>
         </div>
 
-        {screen==="select"   && <Onboarding onSelect={selectAirport} selected={airport}/>}
-        {screen==="connect"  && airport && <ConnectData airport={airport} onDone={finishConnect} alreadyDone={connected} macroMeta={macroMeta} actMeta={actMeta} ofMeta={ofMeta} seriesStatus={seriesStatus}/>}
+        {screen==="select"   && <Onboarding onSelect={selectAirport} selected={airport} onUpload={startUpload}/>}
+        {screen==="connect"  && customPending && <UploadData onDone={finishCustomUpload} onCancel={cancelUpload}/>}
+        {screen==="connect"  && !customPending && airport && <ConnectData airport={airport} onDone={finishConnect} alreadyDone={connected} macroMeta={macroMeta} actMeta={actMeta} ofMeta={ofMeta} seriesStatus={seriesStatus}/>}
         {screen!=="select" && screen!=="connect" && connected && airport && !dataReady && (
           <div className="content fade-in"><div className="panel panel-pad"><div className="air-meta">
             {seriesStatus.error ? `Couldn't load ${airport.iata}'s data — check your connection and reload.` : `Loading ${airport.iata} data…`}
           </div></div></div>
         )}
         {screen==="overview" && airport && connected && dataReady && scenario && <Overview airport={airport} history={history} scenario={scenario} go={go}/>}
-        {screen==="short"    && airport && connected && dataReady && <ShortTerm airport={airport} history={history}/>}
+        {screen==="short"    && airport && connected && dataReady && !airport.custom && <ShortTerm airport={airport} history={history}/>}
         {screen==="long"     && airport && connected && dataReady && scenario && <LongTerm airport={airport} history={history} scenario={scenario} go={go}/>}
         {screen==="scenario" && airport && connected && dataReady && scenario && <Scenario airport={airport} history={history} scenario={scenario} setScenario={setScenario}/>}
         {screen==="events"   && airport && connected && dataReady && scenario && <EventSim airport={airport} history={history} scenario={scenario} setScenario={setScenario}/>}
