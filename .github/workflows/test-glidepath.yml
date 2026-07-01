@@ -19,6 +19,9 @@ on:
       - ".github/workflows/test-glidepath.yml"
   workflow_dispatch: {}
 
+permissions:
+  contents: read   # read-only — this workflow only runs tests, never commits
+
 jobs:
   test:
     runs-on: ubuntu-latest
