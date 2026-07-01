@@ -83,9 +83,13 @@ async function fetchCountryRates(cc, periods, diag) {
     // guessing blind again.
     if (diag && !diag.logged) {
       diag.logged = true;
+      const countryData = body?.values?.[INDICATOR];
+      const countryKeys = countryData && typeof countryData === "object" ? Object.keys(countryData) : null;
       console.error(`IMF ${cc} url:`, url);
       console.error(`IMF ${cc} response top-level keys:`, body && typeof body === "object" ? Object.keys(body) : typeof body);
-      console.error(`IMF ${cc} response sample:`, JSON.stringify(body).slice(0, 2000));
+      console.error(`IMF ${cc} values.${INDICATOR} country count:`, countryKeys ? countryKeys.length : "n/a");
+      console.error(`IMF ${cc} values.${INDICATOR} has "${cc}"?`, countryKeys ? countryKeys.includes(cc) : "n/a");
+      console.error(`IMF ${cc} values.${INDICATOR} sample keys:`, countryKeys ? countryKeys.slice(0, 15) : "n/a");
     }
     throw new Error("unexpected payload shape");
   }
