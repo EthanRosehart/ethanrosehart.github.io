@@ -46,11 +46,11 @@ of those sources.
 
 ## Architecture
 
-Static site, **no build step**: React 18 + Babel Standalone are loaded from
-a CDN and JSX is transpiled in the browser at load time. This keeps the repo
-trivially deployable on GitHub Pages (just static files) at the cost of a
-slower first paint than a bundled/minified build — see
-[Known limitations](#known-limitations).
+React 18 (production build, from a CDN). The app's own six `.jsx` files are
+precompiled by [`build.mjs`](build.mjs) (esbuild) into a single minified
+`dist/app.bundle.js` — the browser never downloads a JSX compiler, only that
+one plain-JS file. See [Building](#building) for how the bundle gets
+rebuilt.
 
 ```
 index.html
@@ -60,14 +60,26 @@ index.html
 ├── screens-forecast.jsx  Overview + Short-term tactical (Prophet)
 ├── screens-strategic.jsx Long-term + Scenario builder + Event simulator + Export
 ├── app.jsx               shell, nav, routing (in-memory + localStorage), data loading
-└── styles.css            dark/pink design system
+├── styles.css            dark/pink design system
+├── build.mjs             esbuild: JSX → JS + minify, per file, then concatenate (see below)
+└── dist/app.bundle.js    committed build output index.html actually loads
 ```
 
-All six `.jsx` files are loaded as separate `<script type="text/babel">`
-tags (no ES modules, no bundler), so they share one global scope — later
-files close over `const`s declared in earlier ones (e.g. `AIRPORTS`, `MACRO`
-from `data.jsx`) or read them off `window` (the `GP_*` exports at the bottom
-of each file). Load order in `index.html` matters.
+The six `.jsx` files intentionally share **one global scope** — there's no
+ES module graph between them. Later files close over `const`s declared in
+earlier ones (e.g. `AIRPORTS`, `MACRO` from `data.jsx`) or read them off
+`window` (the `GP_*` exports at the bottom of each file); load order matters
+(`data.jsx` → `charts.jsx` → `screens-setup.jsx` → `screens-forecast.jsx` →
+`screens-strategic.jsx` → `app.jsx`). `build.mjs` preserves that on purpose:
+it transforms each file **individually** (esbuild's `transform()`, never its
+bundler) and concatenates the results in load order — the same shape as six
+separate `<script>` tags, just precompiled and minified. This matters for
+correctness, not just style: esbuild's minifier only renames identifiers it
+can prove are local to a function, so top-level names crossing file
+boundaries (`AIRPORTS`, `GP_Ico`, ...) survive unchanged after minification;
+bundling the files together as an ES module graph instead would risk
+tree-shaking code that looks "unused" within a single file but is actually
+consumed by a later one.
 
 State is a handful of `useState`s in `App` (`app.jsx`), persisted to
 `localStorage` (key `glidepath.v1`) so a reload resumes on the same screen,
@@ -99,30 +111,39 @@ python3 -m http.server 8000
 # or: npx serve .
 ```
 
-Then open `http://localhost:8000/`. The committed `data/*.json` snapshots
-are used as-is — no API keys or local pipeline run needed to browse the app.
+Then open `http://localhost:8000/`. The committed `dist/app.bundle.js` and
+`data/*.json` snapshots are used as-is — no build, API keys, or local
+pipeline run needed just to browse the app.
 
 To refresh the data snapshots locally (Node 20+, plus Python 3.11 with
 `prophet`/`holidays`/`pandas` for the forecast step), see
 [`data/README.md`](data/README.md#run-it-locally).
 
+## Building
+
+```bash
+npm install         # esbuild only — one devDependency
+npm run build        # writes dist/app.bundle.js
+npm run watch         # rebuilds on every .jsx save, for active development
+```
+
+The committed `dist/app.bundle.js` is what `index.html` actually loads, so
+if you edit a `.jsx` file, either run `npm run build` before committing or
+just push — [`.github/workflows/build-glidepath.yml`](../../.github/workflows/build-glidepath.yml)
+rebuilds it in CI and commits the result back to `main` (same bot-commit
+pattern as the nightly data refresh), so the author workflow stays
+edit-and-push even though the site ships a precompiled bundle.
+
 ## Deploying
 
 Part of the root [ethanrosehart.github.io](../../README.md) GitHub Pages
-site — any push to `main` redeploys automatically. The nightly workflow
-commits refreshed `data/*.json` snapshots directly to `main`, which
-triggers the same redeploy.
+site — any push to `main` redeploys automatically. Two bots commit straight
+to `main` and trigger that same redeploy: the nightly data refresh
+(`refresh-data.yml`) and, on any `.jsx` change, the bundle rebuild
+(`build-glidepath.yml`).
 
 ## Known limitations
 
-- **No build step.** `index.html` now loads the production builds of
-  React/ReactDOM (~47KB gzipped combined, down from ~262KB for the
-  development builds), but Babel Standalone — the in-browser JSX compiler
-  itself — still has to be downloaded and run on every page load (~665KB
-  gzipped) to transpile the app's own ~130KB of JSX source. A lightweight
-  bundler (esbuild/Vite) would precompile that ahead of time and let the
-  browser skip downloading a compiler entirely, at the cost of adding an
-  actual build step to an otherwise buildless static site.
 - **US coverage is defined but not populated.** `scripts/fetch-bts.mjs`
   discovers and fetches BTS T-100 data by design, but as of the last nightly
   run the Socrata catalog exposes no working monthly segment dataset, so no

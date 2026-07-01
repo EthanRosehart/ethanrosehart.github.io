@@ -21,7 +21,7 @@ Personal site and interactive resume for Ethan Rosehart — Data & Strategy, Gre
 
 ## Stack
 
-No build step. Vanilla HTML + CSS + a single Chart.js CDN import for the resume page. The `portfolio/glidepath` sub-app is its own static React app (also buildless — see its own README) linked from the site's Portfolio menu. Deploys instantly on push.
+No build step for the resume page itself: vanilla HTML + CSS + a single Chart.js CDN import. The `portfolio/glidepath` sub-app is its own React app, linked from the site's Portfolio menu — its JSX is precompiled by a small esbuild step (CI rebuilds it automatically on push, see its own README). Either way, a push to `main` redeploys the whole site within seconds.
 
 ## Updating the interactive resume
 
