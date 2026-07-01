@@ -69,6 +69,26 @@ def test_gdp_monthly_series_extrapolates_past_the_known_years(bf):
     assert out[1] == pytest.approx(100.0 / 1.05, rel=1e-6)   # one year before the first anchor
 
 
+def test_gdp_monthly_series_prefers_real_future_rates_over_the_trailing_average(bf):
+    # A real per-year forecast (e.g. IMF WEO) should drive the extrapolated
+    # year it covers, not the flat trailing rate — that's the whole point of
+    # having it. 2025 has a real 8% rate on file; 2026 doesn't, so it must
+    # fall back to the 5% trailing rate for that year only.
+    levels = {2024: 100.0}
+    out = bf.gdp_monthly_series(levels, 5.0, [pd.Timestamp(2025, 7, 1), pd.Timestamp(2026, 7, 1)],
+                                 future_annual_rates={2025: 8.0})
+    assert out[0] == pytest.approx(108.0, rel=1e-6)          # 100 * 1.08 (real rate)
+    assert out[1] == pytest.approx(108.0 * 1.05, rel=1e-6)   # 108 * 1.05 (trailing fallback, 2026 not covered)
+
+
+def test_gdp_monthly_series_interpolates_within_an_extrapolated_year(bf):
+    # a month partway through a synthetic future year should land partway
+    # between that year's July anchor and the next, not jump discretely.
+    levels = {2024: 100.0}
+    out = bf.gdp_monthly_series(levels, 0.0, [pd.Timestamp(2025, 1, 1)], future_annual_rates={2025: 10.0})
+    assert 100.0 < out[0] < 110.0
+
+
 def test_gdp_monthly_series_returns_none_when_no_levels_available(bf):
     assert bf.gdp_monthly_series({}, 5.0, [pd.Timestamp(2024, 1, 1)]) is None
     assert bf.gdp_monthly_series(None, 5.0, [pd.Timestamp(2024, 1, 1)]) is None

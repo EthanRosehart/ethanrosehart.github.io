@@ -174,6 +174,32 @@ function App(){
     return ()=>{ alive = false; };
   },[]);
 
+  // Load the real forward GDP/capita growth forecast (data/imf-weo.json,
+  // IMF World Economic Outlook — see scripts/fetch-imf.mjs) and set it as
+  // gdpcapProj, which the long-term model's GDP lever default prefers over
+  // the World Bank trailing mean when present (see defaultScenario() in
+  // data.jsx). A missing file, or a country IMF doesn't cover, just means
+  // that lever default falls back to the trailing mean, same as before
+  // this existed — never a hard failure.
+  useEffectApp(()=>{
+    let alive = true;
+    fetch("data/imf-weo.json", { cache:"no-cache" })
+      .then(r => r.ok ? r.json() : null)
+      .then(j => {
+        if (!alive || !j || !j.countries) return;
+        Object.keys(j.countries).forEach(cc => {
+          const c = j.countries[cc];
+          if (!c.nextYear || c.nextYear.pct == null) return;
+          GP_ensureMacro(cc, c.name);
+          MACRO[cc].gdpcapProj = c.nextYear.pct;
+          MACRO[cc].gdpcapProjYear = c.nextYear.year;
+        });
+        if (!connectedRef.current && airportRef.current) setScenario(GP_defaultScenario(airportRef.current.iata));
+      })
+      .catch(()=>{});
+    return ()=>{ alive = false; };
+  },[]);
+
   useEffectApp(()=>{
     const payload = { screen, iata:airport?.iata, connected, scenario };
     // a custom airport has no server to re-fetch from on the next visit, so

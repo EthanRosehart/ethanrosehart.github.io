@@ -36,18 +36,26 @@ same catalogue and forecasting machinery.
   seasonality or inflate the uncertainty band while every observed month
   still trains the model. Where a real GDP/capita history is on file for the
   airport's country, it rides along as an `extra_regressor` — real World
-  Bank annual levels, interpolated monthly for training and extrapolated
-  forward (at the trailing growth rate) for the horizon, since World Bank
-  itself publishes no GDP forecast. Every forecast's `gdpRegressor` flag
-  discloses whether it was used; see `gdp_monthly_series()` in
+  Bank annual levels, interpolated monthly for training; for the horizon,
+  each future year uses a real **IMF World Economic Outlook** growth
+  forecast where one's published for that year, falling back to
+  extrapolating the trailing World Bank rate only for years IMF doesn't
+  cover. (World Bank alone publishes no GDP forecast product — OECD does,
+  but its SDMX API was tried three times for this and dropped after
+  persistent HTTP 500s; IMF's plain-JSON API sidesteps that entirely.)
+  Every forecast's `gdpRegressor`/`gdpForecast` flags disclose whether the
+  regressor ran and whether a real forecast (vs. only extrapolation) drove
+  it; see `gdp_monthly_series()` in
   [`scripts/build-forecast.py`](scripts/build-forecast.py). The browser only
   renders precomputed output — no forecasting happens client-side.
 - **Long-term (strategic):** an elasticity model —
   `g = GDPpc·ε + pop + 0.5·tourism + lcc − 0.18·fuel` — compounding the real
   observed base year on its own seasonal shape. Movements track passengers
   less an up-gauging drag; cargo rides a damped share of the same demand
-  trend plus its own growth shift. See `longTermForecast()` in
-  [`data.jsx`](data.jsx).
+  trend plus its own growth shift. The GDP/capita lever's default is that
+  same real IMF forecast when published, falling back to the World Bank
+  trailing mean otherwise (`gdpcapProj`/`gdpcap` in `data.jsx`'s `MACRO`
+  table). See `longTermForecast()` in [`data.jsx`](data.jsx).
 - Both models only render for a metric when the gateway actually publishes
   it — there's no interpolation or backfill for a series that doesn't exist.
 - **Demand seasonality** (the "share of an average month" chart on Overview)
@@ -259,7 +267,8 @@ to `main` and trigger that same redeploy: the nightly data refresh
 ## Credits / provenance
 
 OpenFlights (airport reference) · World Bank Open Data (GDP/capita,
-population) · Eurostat `avia_paoa`/`avia_gooa` (EU/EFTA passenger,
-movement, cargo) · Statistics Canada WDS (CATSA screened-passenger proxy,
-aircraft movements) · Meta Prophet (short-term forecasting). Full detail in
+population) · IMF World Economic Outlook (forward GDP/capita forecast) ·
+Eurostat `avia_paoa`/`avia_gooa` (EU/EFTA passenger, movement, cargo) ·
+Statistics Canada WDS (CATSA screened-passenger proxy, aircraft
+movements) · Meta Prophet (short-term forecasting). Full detail in
 [`data/README.md`](data/README.md).

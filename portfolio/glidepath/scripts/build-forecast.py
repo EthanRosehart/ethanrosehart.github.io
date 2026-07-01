@@ -49,6 +49,7 @@ SERIES_DIR = os.path.join(DATA, "series")
 FORECASTS_DIR = os.path.join(DATA, "forecasts")
 META_OUT = os.path.join(DATA, "forecast-meta.json")
 MACRO = os.path.join(DATA, "macro.json")
+IMF_WEO = os.path.join(DATA, "imf-weo.json")
 
 HORIZON = 24            # months forecast (UI offers 12 / 24)
 INTERVAL = 0.80         # prediction interval width -> P10..P90 band
@@ -128,25 +129,43 @@ def series_frame(monthly):
     return df
 
 
-def gdp_monthly_series(annual_levels, trailing_growth_pct, month_starts):
+def gdp_monthly_series(annual_levels, trailing_growth_pct, month_starts, future_annual_rates=None):
     """Real annual GDP/capita levels -> a monthly value for each of
     `month_starts` (a Prophet extra_regressor needs one for every ds, both
-    historical and forecast). World Bank publishes no GDP forecast product,
-    so this is honest about what it is: real annual levels, each anchored at
-    that year's midpoint, linearly interpolated between anchors, and
-    extrapolated past the earliest/latest anchor by compounding
-    `trailing_growth_pct` (the same trailing 5-yr mean already used as the
-    long-term model's GDP lever default) at a monthly rate. Not a
-    third-party forecast — a disclosed extrapolation of real data.
+    historical and forecast). Real annual levels are each anchored at that
+    year's midpoint and linearly interpolated between anchors. Beyond the
+    last observed year, `future_annual_rates` (e.g. real IMF WEO growth
+    forecasts, {year:int -> pct:float}) is used one real year at a time
+    where available; any year it doesn't cover — including every year when
+    it's omitted entirely — falls back to compounding `trailing_growth_pct`
+    (the same trailing 5-yr mean used as the long-term model's GDP lever
+    default). World Bank alone publishes no GDP forecast product, so
+    without `future_annual_rates` this is honest about what it is: a
+    disclosed extrapolation of real data, not a third-party forecast.
 
     `annual_levels`: {year:int -> level:float}. Returns None if empty.
     """
     if not annual_levels:
         return None
-    anchors = sorted((pd.Timestamp(int(y), 7, 1), float(v)) for y, v in annual_levels.items())
+    future_annual_rates = future_annual_rates or {}
+    anchors = sorted((int(y), float(v)) for y, v in annual_levels.items())
     monthly_rate = (1 + (trailing_growth_pct or 0) / 100.0) ** (1 / 12) - 1
-    first_ts, first_val = anchors[0]
-    last_ts, last_val = anchors[-1]
+
+    # extend the anchor list forward one real year at a time, past the last
+    # observed level, far enough to cover every month requested — using a
+    # real per-year rate where available and the trailing rate otherwise.
+    last_year, last_val = anchors[-1]
+    needed_year = max(d.year for d in month_starts)
+    y, v = last_year, last_val
+    while y < needed_year:
+        y += 1
+        pct = future_annual_rates.get(y)
+        v = v * (1 + pct / 100.0) if pct is not None else v * (1 + monthly_rate) ** 12
+        anchors.append((y, v))
+
+    anchor_ts = [(pd.Timestamp(yr, 7, 1), val) for yr, val in anchors]
+    first_ts, first_val = anchor_ts[0]
+    last_ts, last_val = anchor_ts[-1]
 
     def months_between(a, b):
         return (b.year - a.year) * 12 + (b.month - a.month)
@@ -159,7 +178,7 @@ def gdp_monthly_series(annual_levels, trailing_growth_pct, month_starts):
             out.append(last_val * (1 + monthly_rate) ** months_between(last_ts, d))
         else:
             ta, va = first_ts, first_val
-            for tb, vb in anchors[1:]:
+            for tb, vb in anchor_ts[1:]:
                 if d <= tb:
                     frac = months_between(ta, d) / months_between(ta, tb)
                     out.append(va + (vb - va) * frac)
@@ -168,12 +187,14 @@ def gdp_monthly_series(annual_levels, trailing_growth_pct, month_starts):
     return out
 
 
-def fit_predict(df, hol_df, horizon, gdp_levels=None, gdp_growth=None):
+def fit_predict(df, hol_df, horizon, gdp_levels=None, gdp_growth=None, gdp_future_rates=None):
     """Fit Prophet (multiplicative yearly + holidays) and forecast `horizon`.
     When `gdp_levels` (real WB annual GDP/capita) is available for this
     airport's country, GDP/capita rides along as an extra_regressor —
     Prophet needs a value for every ds, historical and future, which is
-    exactly what gdp_monthly_series() builds."""
+    exactly what gdp_monthly_series() builds. `gdp_future_rates` (real IMF
+    WEO per-year growth forecasts, when available) drives the years it
+    covers instead of the flat trailing-rate extrapolation."""
     m = Prophet(
         growth="linear",
         yearly_seasonality=6,
@@ -189,22 +210,22 @@ def fit_predict(df, hol_df, horizon, gdp_levels=None, gdp_growth=None):
     if use_gdp:
         m.add_regressor("gdp_percap", standardize=True)
         df = df.copy()
-        df["gdp_percap"] = gdp_monthly_series(gdp_levels, gdp_growth, list(df["ds"]))
+        df["gdp_percap"] = gdp_monthly_series(gdp_levels, gdp_growth, list(df["ds"]), gdp_future_rates)
     m.fit(df)
     future = m.make_future_dataframe(periods=horizon, freq="MS")
     if use_gdp:
-        future["gdp_percap"] = gdp_monthly_series(gdp_levels, gdp_growth, list(future["ds"]))
+        future["gdp_percap"] = gdp_monthly_series(gdp_levels, gdp_growth, list(future["ds"]), gdp_future_rates)
     fc = m.predict(future)
     return m, fc
 
 
-def backtest_mape(df, hol_df, holdout=12, gdp_levels=None, gdp_growth=None):
+def backtest_mape(df, hol_df, holdout=12, gdp_levels=None, gdp_growth=None, gdp_future_rates=None):
     """Honest holdout: fit on all-but-last-`holdout`, score those months."""
     if len(df) <= holdout + 24:
         return None
     train, test = df.iloc[:-holdout], df.iloc[-holdout:]
     try:
-        _, fc = fit_predict(train, hol_df, holdout, gdp_levels, gdp_growth)
+        _, fc = fit_predict(train, hol_df, holdout, gdp_levels, gdp_growth, gdp_future_rates)
     except Exception:
         return None
     pred = fc.set_index("ds").loc[test["ds"], "yhat"].values
@@ -241,7 +262,7 @@ def top_holidays(m, fc, names, k=5):
     return [c for c, _ in scored[:k]]
 
 
-def forecast_metric(iata, iso2, monthly, horizon, gdp_levels=None, gdp_growth=None):
+def forecast_metric(iata, iso2, monthly, horizon, gdp_levels=None, gdp_growth=None, gdp_future_rates=None):
     df = series_frame(monthly)
     if df is None or len(df) < MIN_MONTHS:
         return None
@@ -255,8 +276,8 @@ def forecast_metric(iata, iso2, monthly, horizon, gdp_levels=None, gdp_growth=No
     frames = [f for f in (hol_df, cov_df) if len(f)]
     fit_holidays = pd.concat(frames, ignore_index=True) if frames else hol_df
 
-    m, fc = fit_predict(df, fit_holidays, horizon, gdp_levels, gdp_growth)
-    mape = backtest_mape(df, fit_holidays, gdp_levels=gdp_levels, gdp_growth=gdp_growth)
+    m, fc = fit_predict(df, fit_holidays, horizon, gdp_levels, gdp_growth, gdp_future_rates)
+    mape = backtest_mape(df, fit_holidays, gdp_levels=gdp_levels, gdp_growth=gdp_growth, gdp_future_rates=gdp_future_rates)
 
     fut = fc.tail(horizon)
     out = []
@@ -278,6 +299,7 @@ def forecast_metric(iata, iso2, monthly, horizon, gdp_levels=None, gdp_growth=No
         "holidays": top_holidays(m, fc, names),
         "holidays_total": len(names),
         "gdpRegressor": bool(gdp_levels),
+        "gdpForecast": bool(gdp_future_rates),
         "forecast": out,
     }
 
@@ -294,22 +316,43 @@ def load_airport_series(iata):
     return series if isinstance(series, dict) else None
 
 
+def load_imf_future_rates():
+    """cc (ISO3) -> {year:int -> pct:float}, from data/imf-weo.json (real
+    IMF WEO forward growth forecasts — see scripts/fetch-imf.mjs). Missing
+    or unreadable file just means every country falls back to the trailing-
+    rate extrapolation in gdp_monthly_series(); never a hard failure."""
+    try:
+        with open(IMF_WEO, "r", encoding="utf-8") as f:
+            doc = json.load(f)
+    except (OSError, json.JSONDecodeError):
+        return {}
+    out = {}
+    for cc, c in (doc.get("countries") or {}).items():
+        years = c.get("years") or []
+        if years:
+            out[cc] = {int(r["year"]): float(r["pct"]) for r in years if r.get("year") is not None}
+    return out
+
+
 def load_gdp_by_country():
     """cc (ISO3) -> (annual GDP/capita levels {year:int -> value}, trailing
-    growth rate %), from data/macro.json — the same file the browser's
-    long-term model reads. Missing/unreadable file, or a country with no
-    gdpcapSeries yet, just means that country's forecasts skip the
+    growth rate %, real future per-year rates {year:int -> pct:float} or
+    None), from data/macro.json (World Bank actuals — the same file the
+    browser's long-term model reads) plus data/imf-weo.json (real IMF WEO
+    forecast, when available). Missing/unreadable files, or a country with
+    no gdpcapSeries, just means that country's forecasts skip the
     regressor (see forecast_metric); never a hard failure."""
     try:
         with open(MACRO, "r", encoding="utf-8") as f:
             doc = json.load(f)
     except (OSError, json.JSONDecodeError):
         return {}
+    imf_rates = load_imf_future_rates()
     out = {}
     for cc, c in (doc.get("countries") or {}).items():
         series = c.get("gdpcapSeries")
         if series:
-            out[cc] = ({int(y): float(v) for y, v in series.items()}, c.get("gdpcap"))
+            out[cc] = ({int(y): float(v) for y, v in series.items()}, c.get("gdpcap"), imf_rates.get(cc))
     return out
 
 
@@ -331,7 +374,9 @@ def main():
         activity = json.load(f)
     airports_in = activity.get("airports", {})
     gdp_by_country = load_gdp_by_country()
-    print(f"GDP/capita regressor available for {len(gdp_by_country)} countries.")
+    n_with_forecast = sum(1 for _, _, r in gdp_by_country.values() if r)
+    print(f"GDP/capita regressor available for {len(gdp_by_country)} countries "
+          f"({n_with_forecast} with a real IMF WEO forecast, rest trailing-rate extrapolation).")
 
     os.makedirs(FORECASTS_DIR, exist_ok=True)
 
@@ -345,14 +390,14 @@ def main():
         if not series:
             print(f"  {iata}: no data/series/{iata}.json — skipped", file=sys.stderr)
             continue
-        gdp_levels, gdp_growth = gdp_by_country.get(a.get("cc"), (None, None))
+        gdp_levels, gdp_growth, gdp_future_rates = gdp_by_country.get(a.get("cc"), (None, None, None))
         metrics = {}
         for metric in METRICS:
             monthly = series.get(metric)
             if not monthly:
                 continue
             try:
-                res = forecast_metric(iata, iso2, monthly, HORIZON, gdp_levels, gdp_growth)
+                res = forecast_metric(iata, iso2, monthly, HORIZON, gdp_levels, gdp_growth, gdp_future_rates)
             except Exception as e:
                 print(f"  {iata}/{metric}: FAILED ({e})", file=sys.stderr)
                 res = None

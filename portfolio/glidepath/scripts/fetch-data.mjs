@@ -18,11 +18,11 @@ import { fileURLToPath } from "node:url";
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const OUT = resolve(__dirname, "..", "data", "macro.json");
-const ACTIVITY = resolve(__dirname, "..", "data", "activity.json");
+const ACTIVITY = resolve(__dirname, "..", "data", "activity-index.json");
 
 /* ISO3 -> friendly name. The live set is derived from the airports that
-   actually carry data (activity.json); this baseline guarantees coverage
-   even on a cold checkout before the activity feed has run. */
+   actually carry data (activity-index.json); this baseline guarantees
+   coverage even on a cold checkout before the activity feed has run. */
 const COUNTRIES = {
   CAN: "Canada", USA: "United States", GBR: "United Kingdom",
   NLD: "Netherlands", DEU: "Germany", DNK: "Denmark",
