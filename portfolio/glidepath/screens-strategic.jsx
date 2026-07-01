@@ -480,6 +480,10 @@ function ExportView({ airport, history, scenario }){
   const base = d.lt.rows[0];
   const hasAtm = d.lt.hasAtm, hasCargo = d.lt.hasCargo;
   const st12 = d.st ? d.st.forecast.slice(0,12) : [];
+  const provenanceShort = airport.custom ? "your uploaded data · World Bank" : "OpenFlights · World Bank · Eurostat/StatCan/BTS";
+  const provenanceLong = airport.custom
+    ? "the monthly figures you uploaded, plus World Bank population & GDP/capita for the macro drivers"
+    : "OpenFlights reference · World Bank (GDP per capita & population) · Eurostat/StatCan/BTS (monthly passengers, movements & cargo, wired nightly)";
 
   /* the scenario assumptions, paired with their lever metadata (include the
      movements / cargo shape levers only when the gateway carries that series) */
@@ -578,9 +582,11 @@ function ExportView({ airport, history, scenario }){
     let s = pptx.addSlide(); s.background = { color: DARK };
     s.addText("G L I D E P A T H", { x:0.6, y:2.0, w:8, fontSize:13, color:PINK, bold:true });
     s.addText(airport.name, { x:0.6, y:2.5, w:11, fontSize:40, bold:true, color:INK });
-    s.addText("Aero demand forecast · "+airport.iata+" / "+airport.icao+" · "+airport.city+", "+airport.country,
-      { x:0.6, y:3.7, w:11, fontSize:18, color:DIM });
-    s.addText("Generated "+stamp+"  ·  Sources: OpenFlights · World Bank · Eurostat/StatCan/BTS",
+    const subtitle = airport.custom
+      ? "Aero demand forecast · "+airport.iata+" · "+airport.country
+      : "Aero demand forecast · "+airport.iata+" / "+airport.icao+" · "+airport.city+", "+airport.country;
+    s.addText(subtitle, { x:0.6, y:3.7, w:11, fontSize:18, color:DIM });
+    s.addText("Generated "+stamp+"  ·  Sources: "+provenanceShort,
       { x:0.6, y:6.7, w:12, fontSize:11, color:DIM });
 
     // 2 — headline KPIs
@@ -672,8 +678,9 @@ driven by blended income, population and tourism dynamics totalling <b>${GP_fmt.
 Passengers compound on the observed base-year seasonal shape${hasAtm?"; movements are held proportional to passengers at the latest observed ratio":""}.</p>
 
 <h2>Provenance</h2>
-<p style='font-size:9.5pt;color:#444;'>OpenFlights reference &middot; World Bank (GDP per capita &amp; population) &middot;
-Eurostat / StatCan / US BTS (monthly passengers, movements, cargo) &middot; Meta Prophet short-term forecast. Every figure traces to a public source.</p>
+<p style='font-size:9.5pt;color:#444;'>${airport.custom
+  ? "This forecast runs on the monthly passenger figures uploaded by the report's author, not a public feed, plus World Bank population &amp; GDP/capita for the macro drivers. There is no short-term (Prophet) tactical forecast for uploaded data &mdash; that model is fit only for the committed public data sources."
+  : "OpenFlights reference &middot; World Bank (GDP per capita &amp; population) &middot; Eurostat / StatCan / US BTS (monthly passengers, movements, cargo) &middot; Meta Prophet short-term forecast. Every figure traces to a public source."}</p>
 </body></html>`;
     GP_saveBlob(new Blob(["﻿"+html], {type:"application/msword"}), fileBase+"_brief.doc");
   };
@@ -750,7 +757,9 @@ Eurostat / StatCan / US BTS (monthly passengers, movements, cargo) &middot; Meta
             ))}
           </div>
           <div className="method" style={{marginTop:16}}>
-            <b>Provenance —</b> OpenFlights reference · World Bank (GDP per capita & population) · Eurostat/StatCan/BTS (monthly passengers, movements & cargo, wired nightly). Every figure traces to a public source; the workbook ships the full audit trail.
+            <b>Provenance —</b> {airport.custom
+              ? "runs on the monthly figures you uploaded, plus World Bank population & GDP/capita for the macro drivers. No short-term (Prophet) tactical forecast — that model only runs for the committed public data sources."
+              : "OpenFlights reference · World Bank (GDP per capita & population) · Eurostat/StatCan/BTS (monthly passengers, movements & cargo, wired nightly). Every figure traces to a public source; the workbook ships the full audit trail."}
           </div>
         </div>
       </div>

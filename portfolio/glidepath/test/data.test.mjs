@@ -177,3 +177,76 @@ test("GP_fmt: number formatting helpers", () => {
   assert.equal(win.GP_fmt.pct(-1.1), "-1.1%");
   assert.equal(win.GP_fmt.int(1234.6), "1,235");
 });
+
+test("GP_parseMonthKey: recognizes the date formats the upload wizard is likely to see", () => {
+  const win = loadDataModule();
+  const cases = [
+    ["2024-01", "2024-01"], ["2024-01-15", "2024-01"], ["01/2024", "2024-01"],
+    ["1/2024", "2024-01"], ["3/15/2024", "2024-03"], ["Jan-24", "2024-01"], ["Jan-2024", "2024-01"],
+    ["", null], ["not a date", null], [null, null],
+  ];
+  for (const [input, expected] of cases) assert.equal(win.GP_parseMonthKey(input), expected, `parseMonthKey(${JSON.stringify(input)})`);
+  const d = win.GP_parseMonthKey(new Date(2024, 2, 1)); // a real Date object, as SheetJS's cellDates:true produces
+  assert.equal(d, "2024-03");
+});
+
+test("GP_guessColumnRole: maps common spreadsheet headers to a role", () => {
+  const win = loadDataModule();
+  assert.equal(win.GP_guessColumnRole("Month"), "date");
+  assert.equal(win.GP_guessColumnRole("Date"), "date");
+  assert.equal(win.GP_guessColumnRole("Passengers"), "pax");
+  assert.equal(win.GP_guessColumnRole("PAX"), "pax");
+  assert.equal(win.GP_guessColumnRole("Movements"), "atm");
+  assert.equal(win.GP_guessColumnRole("Flights"), "atm");
+  assert.equal(win.GP_guessColumnRole("Cargo (t)"), "cargo");
+  assert.equal(win.GP_guessColumnRole("Notes"), "ignore");
+});
+
+test("GP_registerCustomAirport: a user-uploaded gateway drives the same long-term model as a catalogue airport, with no Prophet forecast", () => {
+  const win = loadDataModule();
+  win.GP_setActivityIndex({ airports: {} }); // simulate the real catalogue not carrying this gateway
+  const pax = monthlySeries(2022, 1, 36, (i, y, m) => 50000 + m * 100);
+  win.GP_registerCustomAirport("C-MYAP", { name:"My Airport", cc:"USA", countryName:"United States", region:"Your data", city:"", icao:"", lat:null, lon:null }, { pax });
+
+  const a = win.AIRPORTS.find(x => x.iata === "C-MYAP");
+  assert.ok(a, "custom airport should be findable in the catalogue like any other");
+  assert.ok(a.annualPax > 0, "annualPax should be computed from the uploaded series");
+  assert.equal(a.custom, true, "the AIRPORTS entry itself must carry `custom` — the UI branches on airport.custom directly, not on a lookup");
+  assert.ok(win.GP_liveAirports().some(x => x.iata === "C-MYAP"), "should show up in the picker's live-airport list");
+
+  const history = win.GP_buildHistory("C-MYAP");
+  const scenario = win.GP_defaultScenario("C-MYAP");
+  const lt = win.GP_longTerm("C-MYAP", history, scenario);
+  assert.ok(lt, "the elasticity model should run on uploaded data exactly like a real airport");
+  assert.equal(lt.rows[0].pax, a.annualPax);
+
+  assert.equal(win.GP_hasForecast("C-MYAP", "pax"), false, "a custom airport should never have a Prophet forecast");
+  assert.equal(win.GP_activityFor("C-MYAP").source, "custom");
+});
+
+test("GP_registerCustomAirport: survives a later GP_setActivityIndex call — the reload-restore race", () => {
+  // On a page reload, the custom-airport restore runs synchronously on mount
+  // (localStorage, no network needed), while the REAL catalogue fetch
+  // (data/activity-index.json) always resolves afterward, however briefly.
+  // A naive `ACTIVITY_META = json` reassignment in setActivityIndex would
+  // silently drop the just-restored custom airport from the catalogue.
+  const win = loadDataModule();
+  const pax = monthlySeries(2022, 1, 36, 50000);
+  win.GP_registerCustomAirport("C-MYAP", { name:"My Airport", cc:"USA", countryName:"United States", region:"Your data", city:"", icao:"", lat:null, lon:null }, { pax });
+  assert.ok(win.AIRPORTS.find(x => x.iata === "C-MYAP"), "sanity check: registered before the real fetch resolves");
+
+  // simulate the real data/activity-index.json fetch resolving afterward,
+  // with a completely unrelated set of catalogue airports
+  win.GP_setActivityIndex({ airports: { MAD: { observed:true, source:"eurostat", cc:"ESP", countryName:"Spain", region:"Europe", name:"Madrid", metrics:["pax"], annualPax:1000000 } } });
+
+  const a = win.AIRPORTS.find(x => x.iata === "C-MYAP");
+  assert.ok(a, "custom airport must survive a subsequent real-catalogue load");
+  assert.equal(a.custom, true);
+  assert.ok(win.AIRPORTS.find(x => x.iata === "MAD"), "the real catalogue airport should still load normally alongside it");
+
+  // and the forecast must still actually compute — this is what a visitor
+  // would notice: "Not enough complete years of data" after a reload
+  const history = win.GP_buildHistory("C-MYAP");
+  const lt = win.GP_longTerm("C-MYAP", history, win.GP_defaultScenario("C-MYAP"));
+  assert.ok(lt, "the long-term model must still run on the restored custom airport's data");
+});

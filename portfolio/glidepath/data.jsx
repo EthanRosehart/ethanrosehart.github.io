@@ -66,8 +66,21 @@ let ACTIVITY_META = null;
 /* the catalogue index — metadata for every airport, no series. Safe to call
    again (e.g. a re-fetch) since it doesn't touch already-loaded OBSERVED. */
 function setActivityIndex(json){
+  // preserve any custom (user-uploaded) airport already registered — the
+  // real catalogue fetch has no idea it exists, and on a page reload it
+  // resolves AFTER the synchronous localStorage restore (see app.jsx),
+  // so a plain reassignment here would silently wipe it out from under
+  // the running session even though its series survives fine in OBSERVED
+  const customEntries = {};
+  if (ACTIVITY_META && ACTIVITY_META.airports) {
+    for (const iata in ACTIVITY_META.airports) {
+      const a = ACTIVITY_META.airports[iata];
+      if (a && a.custom) customEntries[iata] = a;
+    }
+  }
   ACTIVITY_META = json;
-  window.GP_ACTIVITY_META = json;
+  if (ACTIVITY_META && ACTIVITY_META.airports) Object.assign(ACTIVITY_META.airports, customEntries);
+  window.GP_ACTIVITY_META = ACTIVITY_META;
   rebuildAirports();
 }
 /* one airport's real monthly series, fetched lazily once selected. */
@@ -77,6 +90,75 @@ function setAirportSeries(iata, json){
   else delete SEGMENTS[iata];
 }
 function hasAirportSeries(iata){ return !!OBSERVED[iata]; }
+function getObservedSeries(iata){ return OBSERVED[iata] || null; }
+function getActivityMeta(iata){ return (ACTIVITY_META && ACTIVITY_META.airports && ACTIVITY_META.airports[iata]) || null; }
+
+/* ============================================================
+   CUSTOM (user-uploaded) AIRPORTS
+   Lets a visitor bring their own monthly history instead of picking a
+   catalogue gateway. Registered through the exact same machinery the real
+   nightly pipeline uses (ACTIVITY_META.airports[iata] + rebuildAirports()),
+   so every existing screen — Overview, long-term, scenario levers, event
+   simulator, export — just works unchanged. The one thing that's never
+   populated is FORECASTS[iata]: Prophet is fit server-side, nightly, only
+   for the committed public feeds, and every screen that reads a forecast
+   already treats "no forecast" as a normal, handled state rather than an
+   error, so a custom airport degrades gracefully with zero extra plumbing
+   there — see app.jsx / DataCaveat for the one place that explains why.
+   ============================================================ */
+function registerCustomAirport(iata, meta, series){
+  if (!ACTIVITY_META || !ACTIVITY_META.airports) ACTIVITY_META = { airports:{} };
+  OBSERVED[iata] = series;
+  delete SEGMENTS[iata]; // custom uploads don't support the segment split
+  const paxKeys = Object.keys(series.pax || {});
+  // register metadata (incl. `metrics`) BEFORE computing annualPax — buildHistory()
+  // reads availableMetrics(), which reads this same metadata, so annualPax's
+  // buildHistory()/fullYears() call has to run after this object exists, not before.
+  ACTIVITY_META.airports[iata] = {
+    ...meta,
+    observed: true, source: "custom", custom: true,
+    metrics: METRIC_KEYS.filter(m => series[m] && Object.keys(series[m]).length),
+    hasPaxSeg: false,
+    months: paxKeys.length,
+    latest: paxKeys.sort().pop() || null,
+    annualPax: null,
+  };
+  const paxYears = fullYears(buildHistory(iata), "pax");
+  ACTIVITY_META.airports[iata].annualPax = paxYears.length ? paxYears[paxYears.length - 1].v : null;
+  rebuildAirports();
+}
+
+/* "YYYY-MM" from a variety of raw date-ish spreadsheet cell values. Returns
+   null if nothing sensible can be parsed — the upload UI flags those rows
+   rather than silently dropping or misreading them. */
+function parseMonthKey(raw){
+  if (raw == null || raw === "") return null;
+  if (raw instanceof Date && !isNaN(raw)) return `${raw.getFullYear()}-${String(raw.getMonth() + 1).padStart(2, "0")}`;
+  const s = String(raw).trim();
+  let m;
+  if ((m = s.match(/^(\d{4})[-/](\d{1,2})/))) return `${m[1]}-${String(+m[2]).padStart(2, "0")}`;              // YYYY-MM(-DD)
+  if ((m = s.match(/^(\d{1,2})[-/](\d{4})$/))) return `${m[2]}-${String(+m[1]).padStart(2, "0")}`;              // MM/YYYY
+  if ((m = s.match(/^(\d{1,2})[-/](\d{1,2})[-/](\d{4})$/))) return `${m[3]}-${String(+m[1]).padStart(2, "0")}`; // MM/DD/YYYY
+  const MON = { jan:1, feb:2, mar:3, apr:4, may:5, jun:6, jul:7, aug:8, sep:9, oct:10, nov:11, dec:12 };
+  if ((m = s.toLowerCase().match(/^([a-z]{3,})[-\s](\d{2,4})$/)) && MON[m[1].slice(0, 3)]) {
+    const y = m[2].length === 2 ? 2000 + (+m[2]) : +m[2];
+    return `${y}-${String(MON[m[1].slice(0, 3)]).padStart(2, "0")}`;
+  }
+  const d = new Date(s);
+  if (!isNaN(d)) return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}`;
+  return null;
+}
+
+/* best-effort column-role guess from a spreadsheet header cell, for the
+   upload wizard's default mapping — the user can always override it. */
+function guessColumnRole(header){
+  const h = String(header || "").toLowerCase();
+  if (/date|month|period/.test(h)) return "date";
+  if (/pax|passenger/.test(h)) return "pax";
+  if (/atm|movement|flight|depart/.test(h)) return "atm";
+  if (/cargo|freight/.test(h)) return "cargo";
+  return "ignore";
+}
 
 /* segment keys that actually carry monthly data for an airport, in canonical
    order. Used to drive the shape-builder levers and segment view. */
@@ -121,6 +203,7 @@ function rebuildAirports(){
       metrics: a.metrics || [],
       hasPaxSeg: !!a.hasPaxSeg,
       annualPax: a.annualPax ?? null,
+      custom: !!a.custom,
     });
   });
   AIRPORTS.sort((x, y) => (x.region === y.region ? x.name.localeCompare(y.name) : x.region.localeCompare(y.region)));
@@ -146,7 +229,7 @@ function liveAirports(){ return AIRPORTS.filter(a => availableMetrics(a.iata).in
 /* human-readable name for a raw activity source key (e.g. "statcan") */
 function sourceLabel(src){
   const k = (src||"").split(":")[0].toLowerCase();
-  return ({ eurostat:"Eurostat", statcan:"Statistics Canada", bts:"US BTS" })[k]
+  return ({ eurostat:"Eurostat", statcan:"Statistics Canada", bts:"US BTS", custom:"your uploaded data" })[k]
     || (k ? k[0].toUpperCase()+k.slice(1) : "public");
 }
 /* short badge code for a source — drives the connect-step source icon */
@@ -416,6 +499,8 @@ Object.assign(window, {
   GP_segmentsFor:segmentsFor, GP_PAX_SEGMENTS:PAX_SEGMENTS,
   GP_fmt:fmt, GP_activityFor:activityFor,
   GP_setActivityIndex:setActivityIndex, GP_setAirportSeries:setAirportSeries, GP_hasAirportSeries:hasAirportSeries,
+  GP_getObservedSeries:getObservedSeries, GP_getActivityMeta:getActivityMeta,
   GP_setForecastMeta:setForecastMeta, GP_setAirportForecast:setAirportForecast,
   GP_setReference:setReference, GP_rebuildAirports:rebuildAirports, GP_ensureMacro:ensureMacro,
+  GP_registerCustomAirport:registerCustomAirport, GP_parseMonthKey:parseMonthKey, GP_guessColumnRole:guessColumnRole,
 });
