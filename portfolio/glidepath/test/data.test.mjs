@@ -102,6 +102,22 @@ test("GP_observedSeasonality: recovers a known monthly shape from two complete y
   assert.equal(win.GP_observedSeasonality([{ y:2024, m:0, pax:100 }], "pax"), null, "a single month can't produce a seasonal index");
 });
 
+test("GP_observedSeasonality: a real zero-passenger month (e.g. a lockdown) produces an exact 0, not NaN", () => {
+  // a plausible real case for uploaded data: one calendar month genuinely
+  // had zero traffic in every complete year on file. The index itself
+  // should still compute cleanly — it's the UI's peak/quietest *ratio*
+  // display that has to guard against dividing by that 0, not this function.
+  const win = loadDataModule();
+  const history = [];
+  [2024, 2025].forEach(y => {
+    for (let m = 0; m < 12; m++) history.push({ y, m, pax: m === 3 ? 0 : 100 });
+  });
+  const idx = win.GP_observedSeasonality(history, "pax");
+  assert.ok(idx, "a single zero month shouldn't null out the whole index");
+  assert.equal(idx[3], 0, "the zeroed month should be an exact 0 in the index");
+  assert.ok(idx.every(v => Number.isFinite(v)), "every index value must be a finite number, never NaN/Infinity");
+});
+
 test("longTermForecast: base year matches the observed annual total exactly", () => {
   const win = loadDataModule();
   const iata = setupAirport(win, { series: { pax: monthlySeries(2024, 1, 24, 1000) } });
@@ -319,4 +335,12 @@ test("GP_forecastFor: passes gdpRegressor through so the model card can disclose
   assert.equal(win.GP_forecastFor("TST", "pax").gdpRegressor, true);
   assert.equal(win.GP_forecastFor("OTH", "pax").gdpRegressor, false, "missing gdpRegressor must coerce to false, not undefined");
   assert.equal(win.GP_forecastFor("TST", "atm"), null, "a metric this airport has no forecast for is null, not a crash");
+});
+
+test("GP_forecastFor: passes gdpForecast through — the model card can't tell a real IMF forecast from mere extrapolation without it", () => {
+  const win = loadDataModule();
+  win.GP_setAirportForecast("IMF", { pax: { mape: 3.1, forecast: [], gdpRegressor: true, gdpForecast: true } });
+  win.GP_setAirportForecast("EXT", { pax: { mape: 3.1, forecast: [], gdpRegressor: true, gdpForecast: false } });
+  assert.equal(win.GP_forecastFor("IMF", "pax").gdpForecast, true, "a real IMF-driven forecast must say so, not silently read as extrapolation-only");
+  assert.equal(win.GP_forecastFor("EXT", "pax").gdpForecast, false);
 });

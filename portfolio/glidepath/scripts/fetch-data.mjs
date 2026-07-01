@@ -35,8 +35,8 @@ async function deriveCountries() {
     for (const a of Object.values(act.airports || {})) {
       if (a.cc && a.countryName) COUNTRIES[a.cc] = a.countryName;
     }
-    console.log(`Derived ${Object.keys(COUNTRIES).length} countries from activity.json.`);
-  } catch { console.warn("activity.json not readable — using baseline country list."); }
+    console.log(`Derived ${Object.keys(COUNTRIES).length} countries from activity-index.json.`);
+  } catch { console.warn("activity-index.json not readable — using baseline country list."); }
 }
 
 const IND = {

@@ -94,6 +94,14 @@ def test_gdp_monthly_series_returns_none_when_no_levels_available(bf):
     assert bf.gdp_monthly_series(None, 5.0, [pd.Timestamp(2024, 1, 1)]) is None
 
 
+def test_gdp_monthly_series_returns_none_for_an_empty_month_list_instead_of_crashing(bf):
+    # max() over an empty generator raises ValueError — nothing currently
+    # calls this with an empty month_starts, but it's a public-ish helper
+    # now (fit_predict takes gdp_levels as a param), so a future direct call
+    # with no requested months shouldn't crash the whole build.
+    assert bf.gdp_monthly_series({2024: 100.0}, 5.0, []) is None
+
+
 def test_gdp_monthly_series_treats_a_missing_growth_rate_as_flat(bf):
     # a country can have real levels but no trailing-rate summary (e.g. a
     # brand new entry) — extrapolation should hold flat, not crash.

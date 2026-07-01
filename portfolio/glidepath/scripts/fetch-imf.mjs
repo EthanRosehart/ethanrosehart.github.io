@@ -102,21 +102,23 @@ async function main() {
 
   const values = await fetchLevels(codes);
 
+  const upcomingYear = new Date().getFullYear() + 1;
   const out = {};
   for (const cc of codes) {
     const levels = values[cc];
     if (!levels) continue;
     const rates = growthRates(levels);
     if (!rates.length) continue;
-    out[cc] = {
-      name: countries[cc],
-      // near-term default for the long-term model's GDP lever: the first
-      // projected year's growth, not an average across the horizon — the
-      // most immediately actionable single number.
-      nextYear: rates[0],
-      years: rates, // full horizon, for Prophet's per-year regressor extrapolation
-    };
-    console.log(`  ${cc}  next=${rates[0].year}:${rates[0].pct}%  horizon=${rates.length}yr`);
+    // near-term default for the long-term model's GDP lever: the next
+    // calendar year's growth, not an average across the horizon — the most
+    // immediately actionable single number. `rates[0]` is actually THIS
+    // year's growth (the earliest window has no predecessor to grow from
+    // until periods[1]), so pick the real next-year entry explicitly rather
+    // than assuming index 0 — falling back to it only if IMF's window
+    // somehow doesn't reach a year out.
+    const nextYear = rates.find(r => r.year === upcomingYear) || rates[0];
+    out[cc] = { name: countries[cc], nextYear, years: rates }; // years: full horizon, for Prophet's per-year regressor extrapolation
+    console.log(`  ${cc}  next=${nextYear.year}:${nextYear.pct}%  horizon=${rates.length}yr`);
   }
   if (!Object.keys(out).length) throw new Error("no IMF WEO values parsed for any country — check INDICATOR/payload shape");
 

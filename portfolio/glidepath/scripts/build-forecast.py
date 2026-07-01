@@ -145,7 +145,7 @@ def gdp_monthly_series(annual_levels, trailing_growth_pct, month_starts, future_
 
     `annual_levels`: {year:int -> level:float}. Returns None if empty.
     """
-    if not annual_levels:
+    if not annual_levels or not month_starts:
         return None
     future_annual_rates = future_annual_rates or {}
     anchors = sorted((int(y), float(v)) for y, v in annual_levels.items())
@@ -276,7 +276,7 @@ def forecast_metric(iata, iso2, monthly, horizon, gdp_levels=None, gdp_growth=No
     frames = [f for f in (hol_df, cov_df) if len(f)]
     fit_holidays = pd.concat(frames, ignore_index=True) if frames else hol_df
 
-    m, fc = fit_predict(df, fit_holidays, horizon, gdp_levels, gdp_growth, gdp_future_rates)
+    m, fc = fit_predict(df, fit_holidays, horizon, gdp_levels=gdp_levels, gdp_growth=gdp_growth, gdp_future_rates=gdp_future_rates)
     mape = backtest_mape(df, fit_holidays, gdp_levels=gdp_levels, gdp_growth=gdp_growth, gdp_future_rates=gdp_future_rates)
 
     fut = fc.tail(horizon)

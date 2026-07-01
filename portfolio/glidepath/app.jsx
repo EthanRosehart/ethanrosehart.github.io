@@ -396,7 +396,7 @@ function App(){
                       { name:"World Bank — GDP/capita & population", date:wbDate },
                     ];
                 return (
-                  <span className="chip chip-ok src-tip-wrap">
+                  <span className="chip chip-ok src-tip-wrap" tabIndex={0} role="group" aria-label={(airport?.custom ? "your data" : "3 sources live")+" — focus or hover for source details"}>
                     <span className="dot dot-ok"></span>{airport?.custom ? "your data" : "3 sources live"}
                     <div className="src-tip">
                       <div className="src-tip-title">{airport?.custom ? "What's live" : "Live sources"}</div>

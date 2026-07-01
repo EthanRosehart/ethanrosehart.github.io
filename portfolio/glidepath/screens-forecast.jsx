@@ -72,8 +72,9 @@ function Overview({ airport, history, scenario, go }){
     // fall back to a seasonal index read straight off the observed months
     // rather than hiding the panel.
     const obsSeas = st ? null : GP_observedSeasonality(history, "pax");
+    const seasIdx = st ? st.seasIdx : obsSeas;
     const last = paxY.length?paxY[paxY.length-1].v:0, prev = paxY.length>1?paxY[paxY.length-2].v:last;
-    return { paxY, atmY, cargoY, lt, st, obsSeas, last, prev,
+    return { paxY, atmY, cargoY, lt, st, seasIdx, last, prev,
       hasAtm:atmY.length>0, hasCargo:cargoY.length>0 };
   },[airport, history, scenario]);
 
@@ -138,20 +139,20 @@ function Overview({ airport, history, scenario, go }){
         <div style={{display:"flex",flexDirection:"column",gap:16}}>
           <div className="panel panel-pad">
             <SectionHead kicker="Demand seasonality" title="Share of an average month"/>
-            {(d.st ? d.st.seasIdx : d.obsSeas)
-              ? (()=>{
-                  const idx = d.st ? d.st.seasIdx : d.obsSeas;
-                  return <>
-                    <BarChart labels={MONTHS} height={210} yFmt={v=>v.toFixed(2)+"×"}
-                      tipFmt={v=>(v>=1?"+":"")+Math.round((v-1)*100)+"% vs avg month"}
-                      series={[{ name:"Demand", color:"var(--cyan)", values:idx }]}/>
-                    <div className="method" style={{marginTop:10}}>
-                      <b>Peak —</b> {MONTHS[idx.indexOf(Math.max(...idx))]} runs
-                      {" "}{(Math.max(...idx)/Math.min(...idx)).toFixed(2)}× the quietest month
-                      {!d.st && " — read straight off your observed months, not a fitted model"}.
-                    </div>
-                  </>;
-                })()
+            {d.seasIdx
+              ? <>
+                  <BarChart labels={MONTHS} height={210} yFmt={v=>v.toFixed(2)+"×"}
+                    tipFmt={v=>(v>=1?"+":"")+Math.round((v-1)*100)+"% vs avg month"}
+                    series={[{ name:"Demand", color:"var(--cyan)", values:d.seasIdx }]}/>
+                  <div className="method" style={{marginTop:10}}>
+                    {Math.min(...d.seasIdx) > 0
+                      ? <><b>Peak —</b> {MONTHS[d.seasIdx.indexOf(Math.max(...d.seasIdx))]} runs
+                          {" "}{(Math.max(...d.seasIdx)/Math.min(...d.seasIdx)).toFixed(2)}× the quietest month</>
+                      : <><b>Peak —</b> {MONTHS[d.seasIdx.indexOf(Math.max(...d.seasIdx))]}; at least one month
+                          averages effectively zero, so a peak-to-quietest ratio isn't meaningful</>}
+                    {!d.st && " — read straight off your observed months, not a fitted model"}.
+                  </div>
+                </>
               : <div className="air-meta">Needs a full calendar year of data to show seasonality.</div>}
           </div>
 
@@ -291,7 +292,9 @@ function ShortTerm({ airport, history }){
               ["Method","Meta Prophet · trend + yearly + holidays"],
               ["Seasonality","Multiplicative yearly (Fourier)"],
               ["Holidays",d.st.holidaysTotal+" public · "+macro.label],
-              ...(d.st.gdpRegressor?[["GDP/capita","World Bank actuals + trailing-rate extrapolation"]]:[]),
+              ...(d.st.gdpRegressor?[["GDP/capita", d.st.gdpForecast
+                ? "World Bank actuals + real IMF WEO forecast"
+                : "World Bank actuals + trailing-rate extrapolation"]]:[]),
               ["Shocks","COVID 2020–21 modeled as events"],
               ["Backtest","12-month holdout"],
               ["Accuracy",d.st.mape!=null?("MAPE ±"+d.st.mape+"%"):"—"],
