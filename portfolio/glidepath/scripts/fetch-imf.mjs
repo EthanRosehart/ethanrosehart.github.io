@@ -70,13 +70,25 @@ const YEARS_FWD = 5; // WEO's typical projection horizon
  *  example (.../INDICATOR/COUNTRY?periods=...) is the one actually verified
  *  to work. Throws on a genuine failure for this country; callers treat
  *  that as "no data for this country," never a hard stop. */
-async function fetchCountryRates(cc, periods) {
+async function fetchCountryRates(cc, periods, diag) {
   const url = `${API}/${INDICATOR}/${cc}?periods=${periods.join(",")}`;
   const res = await fetch(url, { headers: { "User-Agent": "glidepath-data-bot" } });
   if (!res.ok) throw new Error(`HTTP ${res.status}`);
   const body = await res.json();
   const rates = body?.values?.[INDICATOR]?.[cc];
-  if (!rates || typeof rates !== "object") throw new Error("unexpected payload shape");
+  if (!rates || typeof rates !== "object") {
+    // diagnostic only, temporary, and only logged once: dump the real
+    // top-level keys/body sample the first time the shape doesn't match
+    // what's assumed, so a CI log shows exactly what came back instead of
+    // guessing blind again.
+    if (diag && !diag.logged) {
+      diag.logged = true;
+      console.error(`IMF ${cc} url:`, url);
+      console.error(`IMF ${cc} response top-level keys:`, body && typeof body === "object" ? Object.keys(body) : typeof body);
+      console.error(`IMF ${cc} response sample:`, JSON.stringify(body).slice(0, 2000));
+    }
+    throw new Error("unexpected payload shape");
+  }
   return rates; // { "2025": 1.8, "2026": 2.1, ... } — already percent growth
 }
 
@@ -84,11 +96,12 @@ async function fetchRates(codes) {
   const now = new Date().getFullYear();
   const periods = [];
   for (let y = now; y <= now + YEARS_FWD; y++) periods.push(y);
+  const diag = { logged: false };
   const values = {};
   const failed = [];
   await Promise.all(codes.map(async (cc) => {
     try {
-      values[cc] = await fetchCountryRates(cc, periods);
+      values[cc] = await fetchCountryRates(cc, periods, diag);
     } catch (e) {
       failed.push(`${cc} (${e.message})`);
     }
