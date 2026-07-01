@@ -1,5 +1,5 @@
 {
-  "generatedAt": "2026-06-30T07:03:17.882Z",
+  "generatedAt": "2026-07-01T07:20:19.732Z",
   "source": "World Bank Open Data — Indicators API (api.worldbank.org/v2)",
   "note": "Committed snapshot. Refreshed nightly by .github/workflows/refresh-data.yml. The browser reads THIS file, never the live API.",
   "indicators": {
@@ -10,251 +10,75 @@
   "countries": {
     "CAN": {
       "name": "Canada",
-      "gdp": 1.6,
-      "gdpcap": -0.2,
-      "pop": 3,
-      "popTotal": 41288599,
-      "year": 2024
+      "gdp": 3.3,
+      "gdpcap": 1.4,
+      "pop": 0.9,
+      "popTotal": 41651653,
+      "year": 2025
     },
     "USA": {
       "name": "United States",
-      "gdp": 2.4,
-      "gdpcap": 1.8,
-      "pop": 1,
-      "popTotal": 340110988,
-      "year": 2024
+      "gdp": 3.3,
+      "gdpcap": 2.7,
+      "pop": 0.5,
+      "popTotal": 341784857,
+      "year": 2025
     },
     "GBR": {
       "name": "United Kingdom",
-      "gdp": 1,
-      "gdpcap": 0.2,
-      "pop": 1.1,
-      "popTotal": 69226000,
-      "year": 2024
+      "gdp": 3.3,
+      "gdpcap": 2.5,
+      "pop": 0.3,
+      "popTotal": 69487000,
+      "year": 2025
     },
     "NLD": {
       "name": "Netherlands",
-      "gdp": 1.6,
-      "gdpcap": 0.8,
-      "pop": 0.7,
-      "popTotal": 17993485,
-      "year": 2024
+      "gdp": 2.7,
+      "gdpcap": 2,
+      "pop": 0.5,
+      "popTotal": 18087633,
+      "year": 2025
     },
     "DEU": {
       "name": "Germany",
-      "gdp": 0,
-      "gdpcap": -0.1,
-      "pop": 0.3,
-      "popTotal": 83516593,
-      "year": 2024
+      "gdp": 0.9,
+      "gdpcap": 0.8,
+      "pop": 0,
+      "popTotal": 83491249,
+      "year": 2025
     },
     "DNK": {
       "name": "Denmark",
-      "gdp": 1.8,
-      "gdpcap": 1.3,
+      "gdp": 2.8,
+      "gdpcap": 2.2,
       "pop": 0.5,
-      "popTotal": 5976992,
-      "year": 2024
+      "popTotal": 6009169,
+      "year": 2025
     },
     "AUT": {
       "name": "Austria",
-      "gdp": 0.5,
-      "gdpcap": -0.2,
-      "pop": 0.5,
-      "popTotal": 9177982,
-      "year": 2024
+      "gdp": 1.9,
+      "gdpcap": 1.2,
+      "pop": 0.3,
+      "popTotal": 9208163,
+      "year": 2025
     },
     "ITA": {
       "name": "Italy",
-      "gdp": 1.3,
-      "gdpcap": 1.6,
+      "gdp": 3.2,
+      "gdpcap": 3.4,
       "pop": -0.1,
-      "popTotal": 58952704,
-      "year": 2024
+      "popTotal": 58915656,
+      "year": 2025
     },
     "POL": {
       "name": "Poland",
-      "gdp": 2.7,
-      "gdpcap": 3.5,
-      "pop": -0.3,
-      "popTotal": 36559233,
-      "year": 2024
-    },
-    "ESP": {
-      "name": "Spain",
-      "gdp": 1.6,
-      "gdpcap": 0.9,
-      "pop": 1,
-      "popTotal": 48848840,
-      "year": 2024
-    },
-    "FIN": {
-      "name": "Finland",
-      "gdp": 0.1,
-      "gdpcap": -0.3,
-      "pop": 0.6,
-      "popTotal": 5619911,
-      "year": 2024
-    },
-    "HUN": {
-      "name": "Hungary",
-      "gdp": 1.4,
-      "gdpcap": 1.6,
-      "pop": -0.3,
-      "popTotal": 9562065,
-      "year": 2024
-    },
-    "CZE": {
-      "name": "Czechia",
-      "gdp": 0.6,
-      "gdpcap": 0.2,
-      "pop": 0.4,
-      "popTotal": 10905028,
-      "year": 2024
-    },
-    "FRA": {
-      "name": "France",
-      "gdp": 1,
-      "gdpcap": 0.6,
-      "pop": 0.3,
-      "popTotal": 68551653,
-      "year": 2024
-    },
-    "PRT": {
-      "name": "Portugal",
-      "gdp": 1.9,
-      "gdpcap": 1.1,
-      "pop": 1.1,
-      "popTotal": 10694681,
-      "year": 2024
-    },
-    "IRL": {
-      "name": "Ireland",
-      "gdp": 6.2,
-      "gdpcap": 4.5,
-      "pop": 1.6,
-      "popTotal": 5395790,
-      "year": 2024
-    },
-    "SWE": {
-      "name": "Sweden",
-      "gdp": 1,
-      "gdpcap": 0.5,
-      "pop": 0.3,
-      "popTotal": 10569709,
-      "year": 2024
-    },
-    "CHE": {
-      "name": "Switzerland",
-      "gdp": 1.7,
-      "gdpcap": 0.7,
-      "pop": 1.3,
-      "popTotal": 9005582,
-      "year": 2024
-    },
-    "GRC": {
-      "name": "Greece",
-      "gdp": 1.8,
-      "gdpcap": 2.5,
-      "pop": 0,
-      "popTotal": 10405134,
-      "year": 2024
-    },
-    "NOR": {
-      "name": "Norway",
-      "gdp": 1.6,
-      "gdpcap": 0.8,
-      "pop": 1,
-      "popTotal": 5572279,
-      "year": 2024
-    },
-    "BGR": {
-      "name": "Bulgaria",
-      "gdp": 2.8,
-      "gdpcap": 3.3,
-      "pop": -0.1,
-      "popTotal": 6441421,
-      "year": 2024
-    },
-    "CYP": {
-      "name": "Cyprus",
-      "gdp": 4.8,
-      "gdpcap": 3.1,
-      "pop": 1,
-      "popTotal": 1358282,
-      "year": 2024
-    },
-    "ISL": {
-      "name": "Iceland",
-      "gdp": 2.3,
-      "gdpcap": 0.9,
-      "pop": 0.2,
-      "popTotal": 386506,
-      "year": 2024
-    },
-    "ROU": {
-      "name": "Romania",
-      "gdp": 1.9,
-      "gdpcap": 2.2,
-      "pop": 0,
-      "popTotal": 19051804,
-      "year": 2024
-    },
-    "LVA": {
-      "name": "Latvia",
-      "gdp": 0.9,
-      "gdpcap": 1.4,
-      "pop": -0.9,
-      "popTotal": 1866124,
-      "year": 2024
-    },
-    "LUX": {
-      "name": "Luxembourg",
-      "gdp": 1.2,
-      "gdpcap": -0.6,
-      "pop": 1.6,
-      "popTotal": 677012,
-      "year": 2024
-    },
-    "LTU": {
-      "name": "Lithuania",
-      "gdp": 2.4,
-      "gdpcap": 1.9,
-      "pop": 0.6,
-      "popTotal": 2888278,
-      "year": 2024
-    },
-    "HRV": {
-      "name": "Croatia",
       "gdp": 3.8,
-      "gdpcap": 4.3,
-      "pop": 0.2,
-      "popTotal": 3866200,
-      "year": 2024
-    },
-    "BEL": {
-      "name": "Belgium",
-      "gdp": 1.6,
-      "gdpcap": 1,
-      "pop": 0.7,
-      "popTotal": 11858610,
-      "year": 2024
-    },
-    "SVK": {
-      "name": "Slovakia",
-      "gdp": 1.5,
-      "gdpcap": 1.7,
-      "pop": -0.1,
-      "popTotal": 5422069,
-      "year": 2024
-    },
-    "SRB": {
-      "name": "Serbia",
-      "gdp": 3.5,
-      "gdpcap": 4.6,
-      "pop": -0.6,
-      "popTotal": 6586476,
-      "year": 2024
+      "gdpcap": 4.4,
+      "pop": -0.3,
+      "popTotal": 36435861,
+      "year": 2025
     }
   }
 }
