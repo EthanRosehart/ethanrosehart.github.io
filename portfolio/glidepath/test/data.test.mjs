@@ -273,3 +273,20 @@ test("GP_registerCustomAirport: survives a later GP_setActivityIndex call — th
   const lt = win.GP_longTerm("C-MYAP", history, win.GP_defaultScenario("C-MYAP"));
   assert.ok(lt, "the long-term model must still run on the restored custom airport's data");
 });
+
+test("GP_removeCustomAirport: a reset app doesn't leave a ghost gateway behind", () => {
+  // liveAirports() (the app's "Select airport" search list) matches on
+  // availableMetrics(), which a stale custom entry would still satisfy —
+  // so the app-wide Reset action has to fully unregister it, not just
+  // clear React state, or the "deleted" gateway would keep showing up.
+  const win = loadDataModule();
+  const pax = monthlySeries(2022, 1, 36, 50000);
+  win.GP_registerCustomAirport("C-GHOST", { name:"Ghost Gateway", cc:"USA", countryName:"United States", region:"Your data", city:"", icao:"", lat:null, lon:null }, { pax });
+  assert.ok(win.GP_liveAirports().find(x => x.iata === "C-GHOST"), "sanity check: it's registered and live");
+
+  win.GP_removeCustomAirport("C-GHOST");
+
+  assert.ok(!win.AIRPORTS.find(x => x.iata === "C-GHOST"), "removed airport must be gone from the catalogue array");
+  assert.ok(!win.GP_liveAirports().find(x => x.iata === "C-GHOST"), "removed airport must no longer be searchable");
+  assert.equal(win.GP_buildHistory("C-GHOST").length, 0, "its series data must be gone too, not just the catalogue entry");
+});

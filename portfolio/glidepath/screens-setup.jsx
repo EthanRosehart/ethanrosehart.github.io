@@ -1,7 +1,7 @@
 /* ============================================================
    screens-setup.jsx — Onboarding (airport select) + Connect data
    ============================================================ */
-const { useState:useStateA, useMemo:useMemoA, useEffect:useEffectA } = React;
+const { useState:useStateA, useMemo:useMemoA, useEffect:useEffectA, useRef:useRefA } = React;
 
 /* simple inline icons */
 const Ico = {
@@ -15,8 +15,11 @@ const Ico = {
   close:   <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><path d="M6 6l12 12M18 6L6 18"/></svg>,
 };
 
-function Onboarding({ onSelect, selected, onUpload }){
+function Onboarding({ onSelect, selected, onUpload, onImportSession }){
   const [q, setQ] = useStateA("");
+  const searchRef = useRefA(null);
+  const [importBusy, setImportBusy] = useStateA(false);
+  const [importError, setImportError] = useStateA(null);
   const live = GP_liveAirports();
   const t = q.trim().toLowerCase();
   const matches = useMemoA(()=>{
@@ -29,6 +32,13 @@ function Onboarding({ onSelect, selected, onUpload }){
   const CAP = t ? 24 : 8;
   const list = matches.slice(0, CAP);
 
+  const handleImportFile = async (file)=>{
+    setImportBusy(true); setImportError(null);
+    const err = await onImportSession(file);
+    setImportBusy(false);
+    if (err) setImportError(err);
+  };
+
   return (
     <div className="content fade-in" style={{maxWidth:860}}>
       <div style={{marginBottom:28}}>
@@ -40,9 +50,15 @@ function Onboarding({ onSelect, selected, onUpload }){
         </p>
       </div>
 
+      <div className="panel panel-pad" style={{marginBottom:22, display:"flex", alignItems:"center", gap:16, flexWrap:"wrap"}}>
+        <button className="btn btn-lg" style={{flex:"1 1 220px",justifyContent:"center"}} onClick={onUpload}>{Ico.upload} Upload your own data</button>
+        <span className="air-meta" style={{flex:"none", fontFamily:"var(--mono)", letterSpacing:".1em"}}>OR</span>
+        <button className="btn btn-lg" style={{flex:"1 1 220px",justifyContent:"center"}} onClick={()=>searchRef.current?.focus()}>{Ico.search} Connect to open-source data</button>
+      </div>
+
       <div className="search" style={{marginBottom:18}}>
         <span style={{width:20,height:20,color:"var(--faint)"}}>{Ico.search}</span>
-        <input autoFocus value={q} onChange={e=>setQ(e.target.value)} placeholder="Search IATA / ICAO / city — try “YTZ”, “Toronto”, “Exeter”…" />
+        <input ref={searchRef} autoFocus value={q} onChange={e=>setQ(e.target.value)} placeholder="Search IATA / ICAO / city — try “YTZ”, “Toronto”, “Exeter”…" />
         <span className="chip mono">{matches.length} of {live.length}</span>
       </div>
 
@@ -83,8 +99,13 @@ function Onboarding({ onSelect, selected, onUpload }){
       )}
 
       <div style={{textAlign:"center", paddingTop:4}}>
-        <span className="air-meta">Don't see your gateway, or want to model somewhere off the public feeds? </span>
-        <button className="btn btn-sm" style={{marginLeft:8}} onClick={onUpload}>{Ico.upload} Upload your own data</button>
+        <span className="air-meta">Already have a Glidepath session file? </span>
+        <label className="btn btn-sm" style={{marginLeft:8, cursor:importBusy?"default":"pointer"}}>
+          {importBusy ? "Importing…" : "Import session"}
+          <input type="file" accept=".json,application/json" style={{display:"none"}} disabled={importBusy}
+            onChange={e => e.target.files[0] && handleImportFile(e.target.files[0])}/>
+        </label>
+        {importError && <div className="caveat fade-in" style={{marginTop:14, maxWidth:520, marginLeft:"auto", marginRight:"auto"}}><b>Couldn't import that file —</b> {importError}</div>}
       </div>
     </div>
   );
@@ -202,6 +223,15 @@ function UploadData({ onDone, onCancel }){
   }, [rows]);
 
   const canSubmit = name.trim().length>0 && code.trim().length>0 && fullYearCount>=1 && !busy;
+  // the numbers can say "ready" while the button next to them stays grey for
+  // an unrelated reason (no gateway name yet, say) — spell out what's still
+  // missing rather than leaving a disabled button unexplained
+  const missing = [];
+  if (!name.trim()) missing.push("a gateway name");
+  if (!code.trim()) missing.push("a short code");
+  if (!rows.length) missing.push("a source file");
+  else if (fullYearCount<1) missing.push("one full calendar year of passengers");
+  const joinList = (arr)=> arr.length<2 ? arr.join("") : arr.length===2 ? arr.join(" and ") : arr.slice(0,-1).join(", ")+", and "+arr[arr.length-1];
 
   const submit = () => {
     const iata = "C-" + code.trim().toUpperCase().replace(/[^A-Z0-9]/g,"").slice(0,10);
@@ -349,9 +379,13 @@ function UploadData({ onDone, onCancel }){
         </div>
       )}
 
-      <div className="panel panel-pad confirm-bar" style={{display:"flex", alignItems:"center", justifyContent:"space-between", gap:20}}>
+      <div className="panel panel-pad confirm-bar" style={{display:"flex", alignItems:"center", justifyContent:"space-between", gap:20, flexWrap:"wrap"}}>
         <button className="btn" onClick={onCancel}>Cancel</button>
-        <button className="btn btn-primary btn-lg" disabled={!canSubmit} onClick={submit}>Build forecast {Ico.arrow}</button>
+        <div style={{display:"flex", alignItems:"center", gap:14, flexWrap:"wrap", justifyContent:"flex-end"}}>
+          {!canSubmit && !busy && missing.length>0 &&
+            <span className="air-meta" style={{color:"var(--bad)"}}>Add {joinList(missing)} above to continue</span>}
+          <button className="btn btn-primary btn-lg" disabled={!canSubmit} onClick={submit}>Build forecast {Ico.arrow}</button>
+        </div>
       </div>
     </div>
   );

@@ -7,6 +7,7 @@ const LS = "glidepath.v1";
 const NAV = [
   { id:"select",   label:"Select airport", group:"Setup", step:1, icon:GP_Ico.pin },
   { id:"connect",  label:"Connect data",   group:"Setup", step:2, icon:GP_Ico.db },
+  { id:"upload",   label:"Upload data",    group:"Setup", icon:GP_Ico.upload }, // alt path to "connect" — see the "or" divider rendered between them
   { id:"overview", label:"Overview",       group:"Forecast", icon:<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><rect x="3" y="3" width="7" height="9" rx="1"/><rect x="14" y="3" width="7" height="5" rx="1"/><rect x="14" y="12" width="7" height="9" rx="1"/><rect x="3" y="16" width="7" height="5" rx="1"/></svg> },
   { id:"short",    label:"Short-term (Prophet)",group:"Forecast", icon:<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><path d="M3 17l5-5 4 3 8-9"/><path d="M21 6v5h-5"/></svg> },
   { id:"long",     label:"Long-term",group:"Forecast", icon:<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><path d="M3 3v18h18"/><path d="M7 14l4-4 3 3 5-6"/></svg> },
@@ -220,6 +221,46 @@ function App(){
     setScreen("overview");
   };
 
+  // start over completely — clears the saved session and, for a custom
+  // gateway, unregisters it too (otherwise it'd linger in AIRPORTS and keep
+  // matching liveAirports() even after the session that built it is gone)
+  const resetApp = ()=>{
+    if (!window.confirm("Start over? This clears the selected gateway, scenario and any uploaded data.")) return;
+    if (airport?.custom) GP_removeCustomAirport(airport.iata);
+    localStorage.removeItem(LS);
+    setAirport(null); setConnected(false); setScenario(null); setCustomPending(false);
+    setScreen("select"); setActVer(v=>v+1); setNavOpen(false);
+  };
+
+  // restore a session saved via Export ▸ Save session — either a custom
+  // gateway (re-registered from its bundled meta+series, same machinery as
+  // finishCustomUpload) or a reference to a catalogue iata (its real data
+  // comes from the live pipeline, so only the scenario needs restoring)
+  const importSession = async (file)=>{
+    let session;
+    try { session = JSON.parse(await file.text()); }
+    catch(e){ return "that doesn't look like a Glidepath session file (invalid JSON)"; }
+    if (!session || session.kind !== "glidepath-session" || !session.airport) {
+      return "that doesn't look like a Glidepath session file";
+    }
+    let a;
+    if (session.airport.custom && session.customAirport){
+      GP_registerCustomAirport(session.customAirport.iata, session.customAirport.meta, session.customAirport.series);
+      a = AIRPORTS.find(x=>x.iata===session.customAirport.iata);
+      if (!a) return "couldn't rebuild the uploaded gateway from that session";
+    } else {
+      a = AIRPORTS.find(x=>x.iata===session.airport.iata);
+      if (!a) return session.airport.iata+" isn't in the current public catalogue — try again in a moment, or re-check the file.";
+    }
+    setAirport(a);
+    setScenario(session.scenario || GP_defaultScenario(a.iata));
+    setConnected(true);
+    setCustomPending(false);
+    setScreen("overview");
+    setActVer(v=>v+1);
+    return null;
+  };
+
   const reachable = (id)=>{
     if (id==="select") return true;
     if (id==="connect") return !!airport || customPending;
@@ -234,6 +275,10 @@ function App(){
     <div className="app">
       {navOpen && <div className="nav-overlay" onClick={()=>setNavOpen(false)}></div>}
       <aside className={"nav"+(navOpen?" open":"")}>
+        <a className="nav-back" href="/" title="Leave Glidepath — back to ethanrosehart.com">
+          <svg viewBox="0 0 24 24" width="12" height="12" fill="none" stroke="currentColor" strokeWidth="2"><path d="M19 12H5M11 18l-6-6 6-6"/></svg>
+          ethanrosehart.com
+        </a>
         <div className="brand">
           <div className="brand-mark"><svg viewBox="0 0 24 24" width="17" height="17" fill="currentColor"><path d="M21 16v-2l-8-5V3.5a1.5 1.5 0 0 0-3 0V9l-8 5v2l8-2.5V19l-2 1.5V22l3.5-1 3.5 1v-1.5L11 19v-5.5z"/></svg></div>
           <div className="brand-name">Glide<span>path</span></div>
@@ -243,15 +288,36 @@ function App(){
           <div key={group}>
             <div className="nav-section">{group}</div>
             {NAV.filter(n=>n.group===group && !(n.id==="short" && airport?.custom)).map(n=>{
-              const active = screen===n.id;
-              const ok = reachable(n.id);
-              const done = (n.id==="select"&&airport) || (n.id==="connect"&&connected);
-              const label = n.id==="connect" && (customPending || airport?.custom) ? "Upload data" : n.label;
+              // "Connect data" and "Upload data" are two alternative routes to
+              // the same step 2 (both land on screen "connect", split by
+              // customPending) — special-cased here rather than through the
+              // generic reachable()/go() so each stays independently visible
+              // and clickable instead of one relabeling itself over the other
+              let active, done, ok, onClick;
+              if (n.id==="connect"){
+                active = screen==="connect" && !customPending;
+                done = connected && !airport?.custom;
+                ok = !!airport && !airport.custom;
+                onClick = ()=>{ if (ok){ setCustomPending(false); setScreen("connect"); setNavOpen(false); } };
+              } else if (n.id==="upload"){
+                active = screen==="connect" && customPending;
+                done = connected && !!airport?.custom;
+                ok = true;
+                onClick = ()=>{ startUpload(); setNavOpen(false); };
+              } else {
+                active = screen===n.id;
+                done = n.id==="select" && !!airport;
+                ok = reachable(n.id);
+                onClick = ()=>go(n.id);
+              }
               return (
-                <div key={n.id} className={"nav-item"+(active?" active":"")+(done&&!active?" done":"")+(ok?"":" nav-disabled")} onClick={()=>go(n.id)}>
-                  {n.step ? <span className="step-n">{done&&!active?"✓":n.step}</span> : <span style={{width:18,display:"grid",placeItems:"center"}}>{n.icon}</span>}
-                  <span>{label}</span>
-                </div>
+                <React.Fragment key={n.id}>
+                  {n.id==="upload" && <div className="nav-or">or</div>}
+                  <div className={"nav-item"+(active?" active":"")+(done&&!active?" done":"")+(ok?"":" nav-disabled")} onClick={onClick}>
+                    {n.step ? <span className="step-n">{done&&!active?"✓":n.step}</span> : <span style={{width:18,display:"grid",placeItems:"center"}}>{n.icon}</span>}
+                    <span>{n.label}</span>
+                  </div>
+                </React.Fragment>
               );
             })}
           </div>
@@ -281,10 +347,6 @@ function App(){
             <button className="icon-btn mobile-only" title="Menu" aria-label="Open navigation" onClick={()=>setNavOpen(true)} style={{flex:"none"}}>
               <svg viewBox="0 0 24 24" width="17" height="17" fill="none" stroke="currentColor" strokeWidth="2"><path d="M3 12h18M3 6h18M3 18h18"/></svg>
             </button>
-            <a className="btn btn-sm" href="/" title="Back to ethanrosehart.com" style={{textDecoration:"none",flex:"none"}}>
-              <svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" strokeWidth="2"><path d="M19 12H5M11 18l-6-6 6-6"/></svg>
-              Back to site
-            </a>
             <div className="topbar-title">
               <div className="eyebrow">{t1}</div>
               <h2>{t2}</h2>
@@ -292,15 +354,23 @@ function App(){
           </div>
           <div style={{display:"flex",alignItems:"center",gap:12}}>
             <span className="topbar-chips" style={{display:"flex",alignItems:"center",gap:12}}>
-              {macroMeta && <span className="chip" title={"World Bank snapshot · "+(macroMeta.source||"")}><span className="dot dot-ok"></span>WB snapshot {new Date(macroMeta.generatedAt).toLocaleDateString("en-CA")}</span>}
               {airport && <span className="chip chip-pink"><span className="dot dot-pink"></span>{airport.iata}{airport.icao?" · "+airport.icao:""}</span>}
-              {connected && <span className="chip chip-ok"><span className="dot dot-ok"></span>{airport?.custom ? "your data" : "3 sources live"}</span>}
+              {connected && (()=>{
+                const wbDate = macroMeta ? new Date(macroMeta.generatedAt).toLocaleDateString("en-CA") : null;
+                const tip = (airport?.custom
+                  ? "Your uploaded monthly figures"
+                  : "OpenFlights airport reference · Eurostat/StatCan/BTS monthly aviation activity")
+                  + " · World Bank population & GDP/capita for macro drivers"
+                  + (wbDate ? " (WB snapshot "+wbDate+")" : "");
+                return <span className="chip chip-ok" title={tip}><span className="dot dot-ok"></span>{airport?.custom ? "your data" : "3 sources live"}</span>;
+              })()}
             </span>
+            {airport && <button className="btn btn-sm" title="Start over — clears the selected gateway and scenario" onClick={resetApp}>Reset</button>}
             {connected && screen!=="export" && <button className="btn btn-primary btn-sm" onClick={()=>{ setScreen("export"); setNavOpen(false); }}>Export</button>}
           </div>
         </div>
 
-        {screen==="select"   && <Onboarding onSelect={selectAirport} selected={airport} onUpload={startUpload}/>}
+        {screen==="select"   && <Onboarding onSelect={selectAirport} selected={airport} onUpload={startUpload} onImportSession={importSession}/>}
         {screen==="connect"  && customPending && <UploadData onDone={finishCustomUpload} onCancel={cancelUpload}/>}
         {screen==="connect"  && !customPending && airport && <ConnectData airport={airport} onDone={finishConnect} alreadyDone={connected} macroMeta={macroMeta} actMeta={actMeta} ofMeta={ofMeta} seriesStatus={seriesStatus}/>}
         {screen!=="select" && screen!=="connect" && connected && airport && !dataReady && (
