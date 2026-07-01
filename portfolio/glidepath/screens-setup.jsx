@@ -196,6 +196,16 @@ function UploadData({ onDone, onCancel }){
 
   const dateColIdx = roles.indexOf("date");
 
+  const downloadTemplate = () => {
+    const rows = [
+      ["Month","Passengers","Movements","Cargo (t)"],
+      ["2024-01","52000","430","26"],
+      ["2024-02","49500","415","25"],
+      ["2024-03","61000","505","30"],
+    ];
+    GP_saveBlob(new Blob([rows.map(r=>r.join(",")).join("\n")], {type:"text/csv;charset=utf-8"}), "glidepath_upload_template.csv");
+  };
+
   return (
     <div className="content fade-in" style={{maxWidth:900}}>
       <div style={{marginBottom:26}}>
@@ -231,12 +241,19 @@ function UploadData({ onDone, onCancel }){
 
       <div className="panel panel-pad" style={{marginBottom:16}}>
         <SectionHead kicker="Source file" title="Upload a CSV or Excel file"/>
+        <p style={{color:"var(--dim)", fontSize:13.5, lineHeight:1.6, marginBottom:16, maxWidth:640}}>
+          One row per month, with a column for the month and at least one for passengers — movements and cargo are
+          optional. Column headers don't have to match exactly: common ones (Month, Date, Passengers, PAX,
+          Movements, Flights, Cargo) are detected automatically, and you can fix the mapping below if we guess
+          wrong. Not sure what that should look like? Grab the template.
+        </p>
         <div style={{display:"flex",alignItems:"center",gap:14,flexWrap:"wrap"}}>
           <label className="btn btn-primary" style={{cursor:"pointer"}}>
             {Ico.upload} {busy ? "Reading…" : "Choose file"}
             <input type="file" accept=".csv,.xlsx,.xls" style={{display:"none"}} disabled={busy}
               onChange={e => e.target.files[0] && onFile(e.target.files[0])}/>
           </label>
+          <button className="btn btn-sm" onClick={downloadTemplate}>Download template (CSV)</button>
           {fileName && !fileError && <span className="air-meta">{fileName} · {rawRows ? rawRows.length-1 : 0} rows read</span>}
         </div>
         {fileError && <div className="caveat fade-in" style={{marginTop:14}}><b>Couldn't read that file —</b> {fileError.replace(/^Couldn't read that file — /,"")}</div>}

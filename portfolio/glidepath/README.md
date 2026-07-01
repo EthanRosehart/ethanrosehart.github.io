@@ -51,9 +51,14 @@ same catalogue and forecasting machinery.
 "Select airport" also offers **Upload your own data**: pick a CSV or Excel
 file (parsed client-side with [SheetJS](https://sheetjs.com), lazy-loaded the
 same way `ExportView` loads it for downloads), confirm/fix the column mapping
-(auto-guessed from the header row), then edit the monthly numbers directly in
-a table before building the forecast. Nothing leaves the browser — there's no
-server for it to go to.
+(auto-guessed from the header row — headers don't need to match exactly, see
+`GP_guessColumnRole()` in `data.jsx` for what it recognizes), then edit the
+monthly numbers directly in a table before building the forecast. Nothing
+leaves the browser — there's no server for it to go to. The upload panel
+itself explains the expected shape and links a one-click "Download template"
+CSV, rather than requiring a rigid predefined schema; the trade-off for that
+flexibility is that a truly unrecognizable header still needs a manual fix in
+the mapping dropdowns.
 
 A custom gateway is registered through `GP_registerCustomAirport()` in
 [`data.jsx`](data.jsx) — the exact same `ACTIVITY_META`/`AIRPORTS` catalogue
