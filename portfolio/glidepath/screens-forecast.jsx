@@ -67,8 +67,14 @@ function Overview({ airport, history, scenario, go }){
     const cargoY = GP_fullYears(history,"cargo");
     const lt = GP_longTerm(airport.iata, history, scenario);
     const st = GP_forecastFor(airport.iata,"pax");
+    // Prophet only fits nightly for the committed public feeds, so a custom
+    // gateway (and any real one Prophet hasn't fit yet) has no `st.seasIdx` —
+    // fall back to a seasonal index read straight off the observed months
+    // rather than hiding the panel.
+    const obsSeas = st ? null : GP_observedSeasonality(history, "pax");
+    const seasIdx = st ? st.seasIdx : obsSeas;
     const last = paxY.length?paxY[paxY.length-1].v:0, prev = paxY.length>1?paxY[paxY.length-2].v:last;
-    return { paxY, atmY, cargoY, lt, st, last, prev,
+    return { paxY, atmY, cargoY, lt, st, seasIdx, last, prev,
       hasAtm:atmY.length>0, hasCargo:cargoY.length>0 };
   },[airport, history, scenario]);
 
@@ -133,17 +139,21 @@ function Overview({ airport, history, scenario, go }){
         <div style={{display:"flex",flexDirection:"column",gap:16}}>
           <div className="panel panel-pad">
             <SectionHead kicker="Demand seasonality" title="Share of an average month"/>
-            {d.st
+            {d.seasIdx
               ? <>
                   <BarChart labels={MONTHS} height={210} yFmt={v=>v.toFixed(2)+"×"}
                     tipFmt={v=>(v>=1?"+":"")+Math.round((v-1)*100)+"% vs avg month"}
-                    series={[{ name:"Demand", color:"var(--cyan)", values:d.st.seasIdx }]}/>
+                    series={[{ name:"Demand", color:"var(--cyan)", values:d.seasIdx }]}/>
                   <div className="method" style={{marginTop:10}}>
-                    <b>Peak —</b> {MONTHS[d.st.seasIdx.indexOf(Math.max(...d.st.seasIdx))]} runs
-                    {" "}{(Math.max(...d.st.seasIdx)/Math.min(...d.st.seasIdx)).toFixed(2)}× the quietest month.
+                    {Math.min(...d.seasIdx) > 0
+                      ? <><b>Peak —</b> {MONTHS[d.seasIdx.indexOf(Math.max(...d.seasIdx))]} runs
+                          {" "}{(Math.max(...d.seasIdx)/Math.min(...d.seasIdx)).toFixed(2)}× the quietest month</>
+                      : <><b>Peak —</b> {MONTHS[d.seasIdx.indexOf(Math.max(...d.seasIdx))]}; at least one month
+                          averages effectively zero, so a peak-to-quietest ratio isn't meaningful</>}
+                    {!d.st && " — read straight off your observed months, not a fitted model"}.
                   </div>
                 </>
-              : <div className="air-meta">No forecast yet for this gateway.</div>}
+              : <div className="air-meta">Needs a full calendar year of data to show seasonality.</div>}
           </div>
 
           {d.lt && d.lt.hasSeg && (()=>{
@@ -282,14 +292,17 @@ function ShortTerm({ airport, history }){
               ["Method","Meta Prophet · trend + yearly + holidays"],
               ["Seasonality","Multiplicative yearly (Fourier)"],
               ["Holidays",d.st.holidaysTotal+" public · "+macro.label],
+              ...(d.st.gdpRegressor?[["GDP/capita", d.st.gdpForecast
+                ? "World Bank actuals + real IMF WEO forecast"
+                : "World Bank actuals + trailing-rate extrapolation"]]:[]),
               ["Shocks","COVID 2020–21 modeled as events"],
               ["Backtest","12-month holdout"],
               ["Accuracy",d.st.mape!=null?("MAPE ±"+d.st.mape+"%"):"—"],
               ["Refresh","Nightly · server-side"],
-            ].map((r,i)=>(
-              <div key={i} style={{display:"flex",justifyContent:"space-between",gap:16,padding:"10px 0",borderBottom:i<6?"1px solid var(--line)":"none"}}>
+            ].map((r,i,arr)=>(
+              <div key={i} style={{display:"flex",justifyContent:"space-between",gap:16,padding:"10px 0",borderBottom:i<arr.length-1?"1px solid var(--line)":"none"}}>
                 <span style={{color:"var(--faint)",fontSize:13}}>{r[0]}</span>
-                <span style={{fontSize:13,textAlign:"right",fontFamily:i>=4&&i<=5?"var(--mono)":"var(--sans)",color:i>=4&&i<=5?"var(--pink-2)":"var(--dim)"}}>{r[1]}</span>
+                <span style={{fontSize:13,textAlign:"right",fontFamily:r[0]==="Backtest"||r[0]==="Accuracy"?"var(--mono)":"var(--sans)",color:r[0]==="Backtest"||r[0]==="Accuracy"?"var(--pink-2)":"var(--dim)"}}>{r[1]}</span>
               </div>
             ))}
           </div>

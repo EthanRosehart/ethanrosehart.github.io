@@ -81,6 +81,43 @@ test("annualize + fullYears: sums monthly values per year, keeps only complete (
   assert.equal(full[0].y, 2024); // 2025 dropped — only 6 of 12 months
 });
 
+test("GP_observedSeasonality: recovers a known monthly shape from two complete years", () => {
+  const win = loadDataModule();
+  // a clean seasonal pattern: January = 50, ramping up to July = 400, back down —
+  // identical in both years, so the index should reproduce it exactly and
+  // average out to 1.0 (no growth trend to confound it).
+  const shape = [50, 100, 150, 200, 300, 350, 400, 350, 300, 200, 150, 100];
+  const history = [];
+  [2024, 2025].forEach(y => shape.forEach((v, m) => history.push({ y, m, pax: v })));
+
+  const idx = win.GP_observedSeasonality(history, "pax");
+  assert.ok(idx, "expected an index from two complete calendar years");
+  assert.equal(idx.length, 12);
+  const overallAvg = shape.reduce((a, b) => a + b, 0) / 12;
+  shape.forEach((v, m) => {
+    assert.ok(Math.abs(idx[m] - v / overallAvg) < 1e-9, `month ${m} index should match the known shape`);
+  });
+  assert.equal(idx.indexOf(Math.max(...idx)), 6, "July (index 6) should be the peak");
+
+  assert.equal(win.GP_observedSeasonality([{ y:2024, m:0, pax:100 }], "pax"), null, "a single month can't produce a seasonal index");
+});
+
+test("GP_observedSeasonality: a real zero-passenger month (e.g. a lockdown) produces an exact 0, not NaN", () => {
+  // a plausible real case for uploaded data: one calendar month genuinely
+  // had zero traffic in every complete year on file. The index itself
+  // should still compute cleanly — it's the UI's peak/quietest *ratio*
+  // display that has to guard against dividing by that 0, not this function.
+  const win = loadDataModule();
+  const history = [];
+  [2024, 2025].forEach(y => {
+    for (let m = 0; m < 12; m++) history.push({ y, m, pax: m === 3 ? 0 : 100 });
+  });
+  const idx = win.GP_observedSeasonality(history, "pax");
+  assert.ok(idx, "a single zero month shouldn't null out the whole index");
+  assert.equal(idx[3], 0, "the zeroed month should be an exact 0 in the index");
+  assert.ok(idx.every(v => Number.isFinite(v)), "every index value must be a finite number, never NaN/Infinity");
+});
+
 test("longTermForecast: base year matches the observed annual total exactly", () => {
   const win = loadDataModule();
   const iata = setupAirport(win, { series: { pax: monthlySeries(2024, 1, 24, 1000) } });
@@ -289,4 +326,21 @@ test("GP_removeCustomAirport: a reset app doesn't leave a ghost gateway behind",
   assert.ok(!win.AIRPORTS.find(x => x.iata === "C-GHOST"), "removed airport must be gone from the catalogue array");
   assert.ok(!win.GP_liveAirports().find(x => x.iata === "C-GHOST"), "removed airport must no longer be searchable");
   assert.equal(win.GP_buildHistory("C-GHOST").length, 0, "its series data must be gone too, not just the catalogue entry");
+});
+
+test("GP_forecastFor: passes gdpRegressor through so the model card can disclose it", () => {
+  const win = loadDataModule();
+  win.GP_setAirportForecast("TST", { pax: { mape: 3.1, forecast: [], gdpRegressor: true } });
+  win.GP_setAirportForecast("OTH", { pax: { mape: 3.1, forecast: [] } }); // no field at all — older/simpler fixture
+  assert.equal(win.GP_forecastFor("TST", "pax").gdpRegressor, true);
+  assert.equal(win.GP_forecastFor("OTH", "pax").gdpRegressor, false, "missing gdpRegressor must coerce to false, not undefined");
+  assert.equal(win.GP_forecastFor("TST", "atm"), null, "a metric this airport has no forecast for is null, not a crash");
+});
+
+test("GP_forecastFor: passes gdpForecast through — the model card can't tell a real IMF forecast from mere extrapolation without it", () => {
+  const win = loadDataModule();
+  win.GP_setAirportForecast("IMF", { pax: { mape: 3.1, forecast: [], gdpRegressor: true, gdpForecast: true } });
+  win.GP_setAirportForecast("EXT", { pax: { mape: 3.1, forecast: [], gdpRegressor: true, gdpForecast: false } });
+  assert.equal(win.GP_forecastFor("IMF", "pax").gdpForecast, true, "a real IMF-driven forecast must say so, not silently read as extrapolation-only");
+  assert.equal(win.GP_forecastFor("EXT", "pax").gdpForecast, false);
 });

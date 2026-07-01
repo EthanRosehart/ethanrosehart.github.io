@@ -174,6 +174,32 @@ function App(){
     return ()=>{ alive = false; };
   },[]);
 
+  // Load the real forward GDP/capita growth forecast (data/imf-weo.json,
+  // IMF World Economic Outlook — see scripts/fetch-imf.mjs) and set it as
+  // gdpcapProj, which the long-term model's GDP lever default prefers over
+  // the World Bank trailing mean when present (see defaultScenario() in
+  // data.jsx). A missing file, or a country IMF doesn't cover, just means
+  // that lever default falls back to the trailing mean, same as before
+  // this existed — never a hard failure.
+  useEffectApp(()=>{
+    let alive = true;
+    fetch("data/imf-weo.json", { cache:"no-cache" })
+      .then(r => r.ok ? r.json() : null)
+      .then(j => {
+        if (!alive || !j || !j.countries) return;
+        Object.keys(j.countries).forEach(cc => {
+          const c = j.countries[cc];
+          if (!c.nextYear || c.nextYear.pct == null) return;
+          GP_ensureMacro(cc, c.name);
+          MACRO[cc].gdpcapProj = c.nextYear.pct;
+          MACRO[cc].gdpcapProjYear = c.nextYear.year;
+        });
+        if (!connectedRef.current && airportRef.current) setScenario(GP_defaultScenario(airportRef.current.iata));
+      })
+      .catch(()=>{});
+    return ()=>{ alive = false; };
+  },[]);
+
   useEffectApp(()=>{
     const payload = { screen, iata:airport?.iata, connected, scenario };
     // a custom airport has no server to re-fetch from on the next visit, so
@@ -356,13 +382,30 @@ function App(){
             <span className="topbar-chips" style={{display:"flex",alignItems:"center",gap:12}}>
               {airport && <span className="chip chip-pink"><span className="dot dot-pink"></span>{airport.iata}{airport.icao?" · "+airport.icao:""}</span>}
               {connected && (()=>{
-                const wbDate = macroMeta ? new Date(macroMeta.generatedAt).toLocaleDateString("en-CA") : null;
-                const tip = (airport?.custom
-                  ? "Your uploaded monthly figures"
-                  : "OpenFlights airport reference · Eurostat/StatCan/BTS monthly aviation activity")
-                  + " · World Bank population & GDP/capita for macro drivers"
-                  + (wbDate ? " (WB snapshot "+wbDate+")" : "");
-                return <span className="chip chip-ok" title={tip}><span className="dot dot-ok"></span>{airport?.custom ? "your data" : "3 sources live"}</span>;
+                const fmtDate = (iso)=> iso ? new Date(iso).toLocaleDateString("en-CA") : "—";
+                const fmtMonth = (ym)=>{ if (!ym) return "—"; const p = ym.split("-"); return MONTHS[+p[1]-1]+" "+p[0]; };
+                const wbDate = macroMeta ? fmtDate(macroMeta.generatedAt) : "—";
+                const rows = airport?.custom
+                  ? [
+                      { name:"Your uploaded data", date:"this session" },
+                      { name:"World Bank — GDP/capita & population", date:wbDate },
+                    ]
+                  : [
+                      { name:"OpenFlights — airport reference", date: ofMeta ? fmtDate(ofMeta.generatedAt) : "—" },
+                      { name:GP_sourceLabel(GP_activityFor(airport.iata).source)+" — monthly aviation activity", date:fmtMonth(GP_activityFor(airport.iata).latest) },
+                      { name:"World Bank — GDP/capita & population", date:wbDate },
+                    ];
+                return (
+                  <span className="chip chip-ok src-tip-wrap" tabIndex={0} role="group" aria-label={(airport?.custom ? "your data" : "3 sources live")+" — focus or hover for source details"}>
+                    <span className="dot dot-ok"></span>{airport?.custom ? "your data" : "3 sources live"}
+                    <div className="src-tip">
+                      <div className="src-tip-title">{airport?.custom ? "What's live" : "Live sources"}</div>
+                      {rows.map((r,i)=>(
+                        <div key={i} className="src-tip-row"><span>{r.name}</span><span className="src-tip-date">{r.date}</span></div>
+                      ))}
+                    </div>
+                  </span>
+                );
               })()}
             </span>
             {airport && <button className="btn btn-sm" title="Start over — clears the selected gateway and scenario" onClick={resetApp}>Reset</button>}

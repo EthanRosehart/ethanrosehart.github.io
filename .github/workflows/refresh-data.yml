@@ -8,6 +8,8 @@ name: Refresh data
 #   series/<IATA>.json    — one airport's monthly pax/movements/cargo, fetched
 #                            by the browser lazily once that gateway is selected
 #   macro.json            — World Bank population & historical GDP/capita
+#   imf-weo.json           — IMF World Economic Outlook forward GDP/capita
+#                            growth forecast (real, not extrapolated)
 #   forecast-meta.json    — shared Meta Prophet model metadata
 #   forecasts/<IATA>.json — one airport's short-term forecast, fetched lazily
 
@@ -50,6 +52,10 @@ jobs:
       - name: Fetch macro snapshot from World Bank
         run: node portfolio/glidepath/scripts/fetch-data.mjs
         continue-on-error: true   # macro covers whatever countries activity found
+
+      - name: Fetch forward GDP/capita forecast from IMF WEO
+        run: node portfolio/glidepath/scripts/fetch-imf.mjs
+        continue-on-error: true   # build-forecast.py falls back to trailing-rate extrapolation without it
 
       - name: Set up Python
         uses: actions/setup-python@v5

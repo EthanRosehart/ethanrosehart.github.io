@@ -74,15 +74,43 @@ ISO codes, region and display name ride on each airport in
 Pulls three World Bank indicators for every country present in
 `activity-index.json`:
 
-| Field    | World Bank indicator   | Reduction                       | Feeds            |
-|----------|------------------------|---------------------------------|------------------|
-| `gdp`    | `NY.GDP.MKTP.KD.ZG`    | trailing 5-yr mean              | reference        |
-| `gdpcap` | `NY.GDP.PCAP.KD.ZG`    | trailing 5-yr mean              | GDP/capita lever |
-| `pop`    | `SP.POP.TOTL`          | latest year-over-year % change  | population lever |
+| Field           | World Bank indicator   | Reduction                       | Feeds                        |
+|-----------------|------------------------|----------------------------------|------------------------------|
+| `gdp`           | `NY.GDP.MKTP.KD.ZG`    | trailing 5-yr mean               | reference                    |
+| `gdpcap`        | `NY.GDP.PCAP.KD.ZG`    | trailing 5-yr mean                | GDP/capita lever + regressor extrapolation rate |
+| `gdpcapSeries`  | `NY.GDP.PCAP.KD`       | full yearly level series, untouched | Prophet's GDP/capita regressor (`build-forecast.py`) |
+| `pop`           | `SP.POP.TOTL`          | latest year-over-year % change   | population lever              |
 
 The loader overlays these over the `MACRO` table in `data.jsx`, creating a
 default entry (`GP_ensureMacro`) for any country not already listed, so the
 long-term elasticity lever reflects live macro for every catalogue airport.
+`gdpcapSeries` is the one field kept as real annual levels rather than
+reduced to a single number — `build-forecast.py` needs actual history to
+interpolate, not just a summary growth rate (see below). Country coverage
+here is derived from the real airport catalogue (`activity-index.json`),
+not a hardcoded list — a stale filename bug quietly limited this to 9
+countries for a while; fixed, now ~30.
+
+### Forward GDP forecast — `data/imf-weo.json` (`scripts/fetch-imf.mjs`)
+World Bank's Indicators API is historical-actuals only — it has no GDP
+*forecast* product. IMF's **World Economic Outlook** (WEO, refreshed every
+April/October) does: real GDP/capita growth projections 2–5 years out, per
+country. Pulled via IMF's plain-JSON DataMapper API (`NGDPRPC` — real
+GDP/capita, constant prices, national currency; growth is derived from
+consecutive years' levels) rather than OECD's SDMX Economic Outlook feed,
+which was tried three separate times for this same purpose and dropped
+after persistent HTTP 500s (see git history on the now-deleted
+`fetch-oecd.mjs`) — IMF's API has no dataflow version or key-shape to guess
+at. A country IMF doesn't cover is never a hard failure: both consumers
+below fall back to their pre-existing behavior.
+
+This feeds two places:
+- **The long-term model's GDP lever default** (`gdpcapProj` in `data.jsx`'s
+  `MACRO` table, merged in by `app.jsx`) — a real forecast now, not a dead
+  field; falls back to the World Bank trailing mean (`gdpcap`) for a
+  country IMF doesn't cover.
+- **Prophet's GDP/capita regressor**, for the specific future years IMF
+  covers — see below.
 
 ### Short-term forecasts — `data/forecast-meta.json` + `data/forecasts/<IATA>.json`
 (`scripts/build-forecast.py`)
@@ -106,9 +134,25 @@ trend-uncertainty band. Nothing is dropped: every observed month still trains th
 model and appears on the actuals chart. In CI this cut median passenger backtest
 MAPE from ~16% to ~5%.
 
+When a **GDP/capita** series is available for the airport's country
+(`gdpcapSeries` above), it rides along as a Prophet `extra_regressor` —
+`gdp_monthly_series()` anchors each real annual level at that year's
+midpoint and linearly interpolates between anchors for the training
+window. For the forecast horizon, each future year uses the real IMF WEO
+rate for that year where one exists (`imf-weo.json` above), falling back
+to compounding the trailing growth rate (`gdpcap`) only for a year IMF
+doesn't cover — which, absent any IMF data at all, is every future year,
+same disclosed-extrapolation behavior as before IMF was wired in. Every
+metric's forecast JSON carries `gdpRegressor` (the regressor was used) and
+`gdpForecast` (at least one covered year was a real IMF rate, not just
+extrapolated) flags; the Short-term screen's model card shows the
+GDP/capita row whenever `gdpRegressor` is set. A country with no
+`gdpcapSeries` at all just fits without the regressor, same as before.
+
 > Income elasticity, tourism and fuel remain model assumptions in the long-term
-> lever (no clean single public series). Passengers, movements, cargo and macro
-> drivers are the wired real feeds.
+> lever (no clean single public series for either). Passengers, movements,
+> cargo, macro drivers and GDP/capita — history *and*, via IMF, a real
+> forecast — are the wired real feeds.
 
 ## Run it locally
 ```bash
@@ -116,6 +160,7 @@ node scripts/fetch-openflights.mjs # airports.json (OpenFlights full reference)
 node scripts/fetch-activity.mjs    # activity-index.json + series/<IATA>.json (Eurostat + StatCan) + trims airports.json
 node scripts/fetch-bts.mjs         # activity-index.json + series/<IATA>.json (US BTS — currently a no-op)
 node scripts/fetch-data.mjs        # macro.json (World Bank, no key)
+node scripts/fetch-imf.mjs         # imf-weo.json (IMF WEO forward GDP/capita forecast, no key)
 pip install -r scripts/requirements.txt
 python scripts/build-forecast.py   # forecast-meta.json + forecasts/<IATA>.json (Meta Prophet)
 ```

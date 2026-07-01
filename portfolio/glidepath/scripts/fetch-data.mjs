@@ -18,11 +18,11 @@ import { fileURLToPath } from "node:url";
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const OUT = resolve(__dirname, "..", "data", "macro.json");
-const ACTIVITY = resolve(__dirname, "..", "data", "activity.json");
+const ACTIVITY = resolve(__dirname, "..", "data", "activity-index.json");
 
 /* ISO3 -> friendly name. The live set is derived from the airports that
-   actually carry data (activity.json); this baseline guarantees coverage
-   even on a cold checkout before the activity feed has run. */
+   actually carry data (activity-index.json); this baseline guarantees
+   coverage even on a cold checkout before the activity feed has run. */
 const COUNTRIES = {
   CAN: "Canada", USA: "United States", GBR: "United Kingdom",
   NLD: "Netherlands", DEU: "Germany", DNK: "Denmark",
@@ -35,14 +35,15 @@ async function deriveCountries() {
     for (const a of Object.values(act.airports || {})) {
       if (a.cc && a.countryName) COUNTRIES[a.cc] = a.countryName;
     }
-    console.log(`Derived ${Object.keys(COUNTRIES).length} countries from activity.json.`);
-  } catch { console.warn("activity.json not readable — using baseline country list."); }
+    console.log(`Derived ${Object.keys(COUNTRIES).length} countries from activity-index.json.`);
+  } catch { console.warn("activity-index.json not readable — using baseline country list."); }
 }
 
 const IND = {
-  gdp:    "NY.GDP.MKTP.KD.ZG",   // real GDP growth (annual %)
-  gdpcap: "NY.GDP.PCAP.KD.ZG",   // real GDP per capita growth (annual %)
-  pop:    "SP.POP.TOTL",         // total population
+  gdp:      "NY.GDP.MKTP.KD.ZG", // real GDP growth (annual %)
+  gdpcap:   "NY.GDP.PCAP.KD.ZG", // real GDP per capita growth (annual %)
+  gdpLevel: "NY.GDP.PCAP.KD",    // real GDP per capita, level (constant 2015 US$)
+  pop:      "SP.POP.TOTL",       // total population
 };
 
 const API = "https://api.worldbank.org/v2";
@@ -77,9 +78,10 @@ const trailingMean = (series, n = 5) => {
 async function main() {
   await deriveCountries();
   console.log("Fetching World Bank indicators for", Object.keys(COUNTRIES).length, "countries…");
-  const [gdp, gdpcap, pop] = await Promise.all([
+  const [gdp, gdpcap, gdpLevel, pop] = await Promise.all([
     fetchIndicator(IND.gdp),
     fetchIndicator(IND.gdpcap),
+    fetchIndicator(IND.gdpLevel),
     fetchIndicator(IND.pop),
   ]);
 
@@ -89,6 +91,12 @@ async function main() {
     const last = popSeries[popSeries.length - 1];
     const prev = popSeries[popSeries.length - 2];
     const popGrowth = last && prev ? round1(((last.value / prev.value) - 1) * 100) : null;
+    // real yearly GDP/capita levels (not just the trailing-mean growth rate
+    // above) — World Bank has no GDP forecast product, so build-forecast.py
+    // uses this history plus the trailing growth rate to extrapolate forward
+    // for Prophet's regressor; see gdp_monthly_series() there.
+    const levelSeries = gdpLevel[cc] || [];
+    const gdpcapSeries = Object.fromEntries(levelSeries.map((r) => [r.year, r.value]));
     countries[cc] = {
       name: COUNTRIES[cc],
       gdp: trailingMean(gdp[cc] || []),
@@ -96,8 +104,9 @@ async function main() {
       pop: popGrowth,
       popTotal: last ? last.value : null,
       year: last ? last.year : null,
+      gdpcapSeries: Object.keys(gdpcapSeries).length ? gdpcapSeries : null,
     };
-    console.log(`  ${cc}  gdp=${countries[cc].gdp}  gdpcap=${countries[cc].gdpcap}  pop=${countries[cc].pop}%  (${countries[cc].year})`);
+    console.log(`  ${cc}  gdp=${countries[cc].gdp}  gdpcap=${countries[cc].gdpcap}  pop=${countries[cc].pop}%  (${countries[cc].year})  gdpcapSeries[${levelSeries.length}yr]`);
   }
 
   const out = {
@@ -107,6 +116,7 @@ async function main() {
     indicators: {
       gdp: "NY.GDP.MKTP.KD.ZG · real GDP growth, trailing 5-yr mean (%)",
       gdpcap: "NY.GDP.PCAP.KD.ZG · real GDP per capita growth, trailing 5-yr mean (%)",
+      gdpcapSeries: "NY.GDP.PCAP.KD · real GDP per capita, level (constant 2015 US$), by year — real World Bank actuals only, no forecast; build-forecast.py extrapolates forward from this using the trailing growth rate above",
       pop: "SP.POP.TOTL · population, latest year-over-year growth (%)",
     },
     countries,

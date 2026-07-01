@@ -34,17 +34,38 @@ same catalogue and forecasting machinery.
   (passengers / movements / cargo). The 2020–21 COVID collapse is modeled as
   explicit monthly events rather than deleted, so it doesn't distort
   seasonality or inflate the uncertainty band while every observed month
-  still trains the model. The browser only renders precomputed output — no
-  forecasting happens client-side. See
-  [`scripts/build-forecast.py`](scripts/build-forecast.py).
+  still trains the model. Where a real GDP/capita history is on file for the
+  airport's country, it rides along as an `extra_regressor` — real World
+  Bank annual levels, interpolated monthly for training; for the horizon,
+  each future year uses a real **IMF World Economic Outlook** growth
+  forecast where one's published for that year, falling back to
+  extrapolating the trailing World Bank rate only for years IMF doesn't
+  cover. (World Bank alone publishes no GDP forecast product — OECD does,
+  but its SDMX API was tried three times for this and dropped after
+  persistent HTTP 500s; IMF's plain-JSON API sidesteps that entirely.)
+  Every forecast's `gdpRegressor`/`gdpForecast` flags disclose whether the
+  regressor ran and whether a real forecast (vs. only extrapolation) drove
+  it; see `gdp_monthly_series()` in
+  [`scripts/build-forecast.py`](scripts/build-forecast.py). The browser only
+  renders precomputed output — no forecasting happens client-side.
 - **Long-term (strategic):** an elasticity model —
   `g = GDPpc·ε + pop + 0.5·tourism + lcc − 0.18·fuel` — compounding the real
   observed base year on its own seasonal shape. Movements track passengers
   less an up-gauging drag; cargo rides a damped share of the same demand
-  trend plus its own growth shift. See `longTermForecast()` in
-  [`data.jsx`](data.jsx).
+  trend plus its own growth shift. The GDP/capita lever's default is that
+  same real IMF forecast when published, falling back to the World Bank
+  trailing mean otherwise (`gdpcapProj`/`gdpcap` in `data.jsx`'s `MACRO`
+  table). See `longTermForecast()` in [`data.jsx`](data.jsx).
 - Both models only render for a metric when the gateway actually publishes
   it — there's no interpolation or backfill for a series that doesn't exist.
+- **Demand seasonality** (the "share of an average month" chart on Overview)
+  normally reads Prophet's fitted yearly component. For a gateway with no
+  Prophet forecast — every custom/uploaded one, or a real gateway Prophet
+  hasn't fit yet — `GP_observedSeasonality()` in `data.jsx` computes the same
+  1.0-centered index directly from the observed months (each calendar
+  month's average share of an average month, across every complete calendar
+  year present), so the panel always has something real to show instead of
+  hiding.
 
 ## Bring your own data
 
@@ -214,9 +235,10 @@ same functions `app.jsx` and the screens call — so a regression in the
 elasticity model, event shocks, or segment reconciliation gets caught
 here rather than by a visitor. The Python suite covers `build-forecast.py`'s
 pure-logic helpers (series framing, seasonal index, the COVID dummy-event
-window, holiday-date snapping); the actual Prophet fit is comparatively
-low-risk (it's a well-tested library) and is exercised for real against
-live data by the nightly run instead of being re-fit in CI.
+window, holiday-date snapping, the GDP/capita regressor's interpolation and
+extrapolation math); the actual Prophet fit is comparatively low-risk (it's
+a well-tested library) and is exercised for real against live data by the
+nightly run instead of being re-fit in CI.
 
 ## Deploying
 
@@ -245,7 +267,8 @@ to `main` and trigger that same redeploy: the nightly data refresh
 ## Credits / provenance
 
 OpenFlights (airport reference) · World Bank Open Data (GDP/capita,
-population) · Eurostat `avia_paoa`/`avia_gooa` (EU/EFTA passenger,
-movement, cargo) · Statistics Canada WDS (CATSA screened-passenger proxy,
-aircraft movements) · Meta Prophet (short-term forecasting). Full detail in
+population) · IMF World Economic Outlook (forward GDP/capita forecast) ·
+Eurostat `avia_paoa`/`avia_gooa` (EU/EFTA passenger, movement, cargo) ·
+Statistics Canada WDS (CATSA screened-passenger proxy, aircraft
+movements) · Meta Prophet (short-term forecasting). Full detail in
 [`data/README.md`](data/README.md).
