@@ -67,8 +67,13 @@ function Overview({ airport, history, scenario, go }){
     const cargoY = GP_fullYears(history,"cargo");
     const lt = GP_longTerm(airport.iata, history, scenario);
     const st = GP_forecastFor(airport.iata,"pax");
+    // Prophet only fits nightly for the committed public feeds, so a custom
+    // gateway (and any real one Prophet hasn't fit yet) has no `st.seasIdx` —
+    // fall back to a seasonal index read straight off the observed months
+    // rather than hiding the panel.
+    const obsSeas = st ? null : GP_observedSeasonality(history, "pax");
     const last = paxY.length?paxY[paxY.length-1].v:0, prev = paxY.length>1?paxY[paxY.length-2].v:last;
-    return { paxY, atmY, cargoY, lt, st, last, prev,
+    return { paxY, atmY, cargoY, lt, st, obsSeas, last, prev,
       hasAtm:atmY.length>0, hasCargo:cargoY.length>0 };
   },[airport, history, scenario]);
 
@@ -133,17 +138,21 @@ function Overview({ airport, history, scenario, go }){
         <div style={{display:"flex",flexDirection:"column",gap:16}}>
           <div className="panel panel-pad">
             <SectionHead kicker="Demand seasonality" title="Share of an average month"/>
-            {d.st
-              ? <>
-                  <BarChart labels={MONTHS} height={210} yFmt={v=>v.toFixed(2)+"×"}
-                    tipFmt={v=>(v>=1?"+":"")+Math.round((v-1)*100)+"% vs avg month"}
-                    series={[{ name:"Demand", color:"var(--cyan)", values:d.st.seasIdx }]}/>
-                  <div className="method" style={{marginTop:10}}>
-                    <b>Peak —</b> {MONTHS[d.st.seasIdx.indexOf(Math.max(...d.st.seasIdx))]} runs
-                    {" "}{(Math.max(...d.st.seasIdx)/Math.min(...d.st.seasIdx)).toFixed(2)}× the quietest month.
-                  </div>
-                </>
-              : <div className="air-meta">No forecast yet for this gateway.</div>}
+            {(d.st ? d.st.seasIdx : d.obsSeas)
+              ? (()=>{
+                  const idx = d.st ? d.st.seasIdx : d.obsSeas;
+                  return <>
+                    <BarChart labels={MONTHS} height={210} yFmt={v=>v.toFixed(2)+"×"}
+                      tipFmt={v=>(v>=1?"+":"")+Math.round((v-1)*100)+"% vs avg month"}
+                      series={[{ name:"Demand", color:"var(--cyan)", values:idx }]}/>
+                    <div className="method" style={{marginTop:10}}>
+                      <b>Peak —</b> {MONTHS[idx.indexOf(Math.max(...idx))]} runs
+                      {" "}{(Math.max(...idx)/Math.min(...idx)).toFixed(2)}× the quietest month
+                      {!d.st && " — read straight off your observed months, not a fitted model"}.
+                    </div>
+                  </>;
+                })()
+              : <div className="air-meta">Needs a full calendar year of data to show seasonality.</div>}
           </div>
 
           {d.lt && d.lt.hasSeg && (()=>{

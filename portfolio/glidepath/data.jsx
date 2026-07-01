@@ -318,6 +318,28 @@ function annualize(history, key){
 }
 function fullYears(history, key){ return annualize(history, key).filter(r => r.n === 12); }
 
+/* a Prophet-free seasonal index, read straight off the observed months —
+   each calendar month's average share of an average month, across every
+   complete calendar year present. Prophet only fits nightly for the
+   committed public feeds, so a custom/uploaded gateway (and any real one
+   Prophet hasn't fit yet) has no `seasonal12`; this gives the "Demand
+   seasonality" chart something real to show instead of hiding the panel.
+   Same 1.0-centered shape as Prophet's fitted seasonal12, just averaged
+   from the raw data rather than modeled. */
+function observedSeasonality(history, key){
+  const completeYears = new Set(fullYears(history, key).map(r => r.y));
+  if (!completeYears.size) return null;
+  const sums = Array(12).fill(0), counts = Array(12).fill(0);
+  history.forEach(r => {
+    if (r[key] == null || !completeYears.has(r.y)) return;
+    sums[r.m] += r[key]; counts[r.m] += 1;
+  });
+  const monthAvg = sums.map((s, i) => s / counts[i]);
+  const overall = monthAvg.reduce((a, b) => a + b, 0) / 12;
+  if (!overall) return null;
+  return monthAvg.map(v => v / overall);
+}
+
 /* ============================================================
    LONG-TERM STRATEGIC MODEL  (elasticity, monthly, real base)
    demand growth gₜ = gdpPerCap·ε + pop + tourism·τ + lcc − yieldDrag
@@ -518,6 +540,7 @@ const fmt = {
 Object.assign(window, {
   AIRPORTS, MACRO, MONTHS, METRIC_META,
   GP_buildHistory:buildHistory, GP_annualize:annualize, GP_fullYears:fullYears,
+  GP_observedSeasonality:observedSeasonality,
   GP_longTerm:longTermForecast, GP_defaultScenario:defaultScenario,
   GP_forecastFor:forecastFor, GP_hasForecast:hasForecast,
   GP_availableMetrics:availableMetrics, GP_liveAirports:liveAirports,

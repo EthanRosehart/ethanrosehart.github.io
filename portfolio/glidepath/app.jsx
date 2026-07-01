@@ -356,13 +356,30 @@ function App(){
             <span className="topbar-chips" style={{display:"flex",alignItems:"center",gap:12}}>
               {airport && <span className="chip chip-pink"><span className="dot dot-pink"></span>{airport.iata}{airport.icao?" · "+airport.icao:""}</span>}
               {connected && (()=>{
-                const wbDate = macroMeta ? new Date(macroMeta.generatedAt).toLocaleDateString("en-CA") : null;
-                const tip = (airport?.custom
-                  ? "Your uploaded monthly figures"
-                  : "OpenFlights airport reference · Eurostat/StatCan/BTS monthly aviation activity")
-                  + " · World Bank population & GDP/capita for macro drivers"
-                  + (wbDate ? " (WB snapshot "+wbDate+")" : "");
-                return <span className="chip chip-ok" title={tip}><span className="dot dot-ok"></span>{airport?.custom ? "your data" : "3 sources live"}</span>;
+                const fmtDate = (iso)=> iso ? new Date(iso).toLocaleDateString("en-CA") : "—";
+                const fmtMonth = (ym)=>{ if (!ym) return "—"; const p = ym.split("-"); return MONTHS[+p[1]-1]+" "+p[0]; };
+                const wbDate = macroMeta ? fmtDate(macroMeta.generatedAt) : "—";
+                const rows = airport?.custom
+                  ? [
+                      { name:"Your uploaded data", date:"this session" },
+                      { name:"World Bank — GDP/capita & population", date:wbDate },
+                    ]
+                  : [
+                      { name:"OpenFlights — airport reference", date: ofMeta ? fmtDate(ofMeta.generatedAt) : "—" },
+                      { name:GP_sourceLabel(GP_activityFor(airport.iata).source)+" — monthly aviation activity", date:fmtMonth(GP_activityFor(airport.iata).latest) },
+                      { name:"World Bank — GDP/capita & population", date:wbDate },
+                    ];
+                return (
+                  <span className="chip chip-ok src-tip-wrap">
+                    <span className="dot dot-ok"></span>{airport?.custom ? "your data" : "3 sources live"}
+                    <div className="src-tip">
+                      <div className="src-tip-title">{airport?.custom ? "What's live" : "Live sources"}</div>
+                      {rows.map((r,i)=>(
+                        <div key={i} className="src-tip-row"><span>{r.name}</span><span className="src-tip-date">{r.date}</span></div>
+                      ))}
+                    </div>
+                  </span>
+                );
               })()}
             </span>
             {airport && <button className="btn btn-sm" title="Start over — clears the selected gateway and scenario" onClick={resetApp}>Reset</button>}

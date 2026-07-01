@@ -81,6 +81,27 @@ test("annualize + fullYears: sums monthly values per year, keeps only complete (
   assert.equal(full[0].y, 2024); // 2025 dropped — only 6 of 12 months
 });
 
+test("GP_observedSeasonality: recovers a known monthly shape from two complete years", () => {
+  const win = loadDataModule();
+  // a clean seasonal pattern: January = 50, ramping up to July = 400, back down —
+  // identical in both years, so the index should reproduce it exactly and
+  // average out to 1.0 (no growth trend to confound it).
+  const shape = [50, 100, 150, 200, 300, 350, 400, 350, 300, 200, 150, 100];
+  const history = [];
+  [2024, 2025].forEach(y => shape.forEach((v, m) => history.push({ y, m, pax: v })));
+
+  const idx = win.GP_observedSeasonality(history, "pax");
+  assert.ok(idx, "expected an index from two complete calendar years");
+  assert.equal(idx.length, 12);
+  const overallAvg = shape.reduce((a, b) => a + b, 0) / 12;
+  shape.forEach((v, m) => {
+    assert.ok(Math.abs(idx[m] - v / overallAvg) < 1e-9, `month ${m} index should match the known shape`);
+  });
+  assert.equal(idx.indexOf(Math.max(...idx)), 6, "July (index 6) should be the peak");
+
+  assert.equal(win.GP_observedSeasonality([{ y:2024, m:0, pax:100 }], "pax"), null, "a single month can't produce a seasonal index");
+});
+
 test("longTermForecast: base year matches the observed annual total exactly", () => {
   const win = loadDataModule();
   const iata = setupAirport(win, { series: { pax: monthlySeries(2024, 1, 24, 1000) } });

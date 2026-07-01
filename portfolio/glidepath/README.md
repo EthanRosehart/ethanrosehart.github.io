@@ -45,6 +45,14 @@ same catalogue and forecasting machinery.
   [`data.jsx`](data.jsx).
 - Both models only render for a metric when the gateway actually publishes
   it — there's no interpolation or backfill for a series that doesn't exist.
+- **Demand seasonality** (the "share of an average month" chart on Overview)
+  normally reads Prophet's fitted yearly component. For a gateway with no
+  Prophet forecast — every custom/uploaded one, or a real gateway Prophet
+  hasn't fit yet — `GP_observedSeasonality()` in `data.jsx` computes the same
+  1.0-centered index directly from the observed months (each calendar
+  month's average share of an average month, across every complete calendar
+  year present), so the panel always has something real to show instead of
+  hiding.
 
 ## Bring your own data
 
