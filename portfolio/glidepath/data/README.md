@@ -112,6 +112,15 @@ This feeds two places:
 - **Prophet's GDP/capita regressor**, for the specific future years IMF
   covers — see below.
 
+The **Connect data** screen shows IMF as a fourth row alongside OpenFlights,
+aviation activity and World Bank, and the topbar's "sources live" tooltip
+counts it too — but only when this specific airport's country actually has
+IMF coverage (`MACRO[cc].gdpcapProj != null`), not just whenever the fetch
+itself succeeds. A country the WEO doesn't cover shows an amber "No
+coverage" row rather than red/blocking, and the count reads "3 sources
+live" instead of "4" — coverage gaps are a normal, disclosed case here, not
+an error.
+
 ### Short-term forecasts — `data/forecast-meta.json` + `data/forecasts/<IATA>.json`
 (`scripts/build-forecast.py`)
 
