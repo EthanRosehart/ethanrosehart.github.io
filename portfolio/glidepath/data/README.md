@@ -116,7 +116,8 @@ node scripts/fetch-openflights.mjs # airports.json (OpenFlights full reference)
 node scripts/fetch-activity.mjs    # activity-index.json + series/<IATA>.json (Eurostat + StatCan) + trims airports.json
 node scripts/fetch-bts.mjs         # activity-index.json + series/<IATA>.json (US BTS — currently a no-op)
 node scripts/fetch-data.mjs        # macro.json (World Bank, no key)
-python scripts/build-forecast.py   # forecast-meta.json + forecasts/<IATA>.json (Meta Prophet; pip install prophet holidays pandas)
+pip install -r scripts/requirements.txt
+python scripts/build-forecast.py   # forecast-meta.json + forecasts/<IATA>.json (Meta Prophet)
 ```
 Node 20+. Each rewrites its snapshot under `data/`. Commit the result, or let the
 Action do it.

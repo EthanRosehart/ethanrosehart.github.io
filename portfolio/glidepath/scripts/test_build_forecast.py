@@ -1,0 +1,116 @@
+#!/usr/bin/env python3
+# =============================================================================
+# test_build_forecast.py — tests for build-forecast.py's pure-logic helpers
+#
+# Covers the functions that don't require an actual Prophet fit (series_frame,
+# seasonal12, covid_events, monthly_holidays, prune_stale, load_airport_series)
+# — the model-fitting path (fit_predict/backtest_mape/forecast_metric) is
+# exercised by the nightly CI run against real data instead, since fitting
+# Prophet per test would make this suite slow and non-deterministic-ish.
+#
+# Run:  pytest scripts/test_build_forecast.py
+#       (needs: pip install prophet holidays pandas pytest)
+# =============================================================================
+import importlib.util
+import json
+import os
+import sys
+
+import pandas as pd
+import pytest
+
+HERE = os.path.dirname(os.path.abspath(__file__))
+
+
+def _load_module():
+    """build-forecast.py has a hyphen in its name, so it can't be imported
+    with a normal `import` statement — load it by file path instead."""
+    spec = importlib.util.spec_from_file_location("build_forecast", os.path.join(HERE, "build-forecast.py"))
+    mod = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(mod)
+    return mod
+
+
+@pytest.fixture(scope="module")
+def bf():
+    return _load_module()
+
+
+def test_series_frame_sorts_and_drops_nulls(bf):
+    df = bf.series_frame({"2024-03": 300, "2024-01": 100, "2024-02": None})
+    assert list(df["ds"]) == [pd.Timestamp(2024, 1, 1), pd.Timestamp(2024, 3, 1)]
+    assert list(df["y"]) == [100.0, 300.0]
+
+
+def test_series_frame_empty_or_all_null_returns_none(bf):
+    assert bf.series_frame({}) is None
+    assert bf.series_frame({"2024-01": None, "2024-02": None}) is None
+
+
+def test_seasonal12_returns_twelve_values_reflecting_the_pattern(bf):
+    # January always 2x every other month's value -> index[0] should be ~2x
+    # the other months, and the whole thing should average out around 1.0.
+    rows = []
+    for year in (2022, 2023, 2024):
+        for month in range(1, 13):
+            v = 200 if month == 1 else 100
+            rows.append({"ds": pd.Timestamp(year, month, 1), "y": v})
+    df = pd.DataFrame(rows)
+    idx = bf.seasonal12(df)
+    assert len(idx) == 12
+    assert idx[0] > 1.5   # January over-indexes
+    assert idx[5] < 1.2   # a normal month sits near 1.0
+
+
+def test_seasonal12_falls_back_to_full_history_when_recent_window_is_thin(bf):
+    # under a year of data -> the "last 3 years" filter would leave < 12 rows,
+    # so it must fall back to using everything rather than erroring.
+    df = pd.DataFrame([{"ds": pd.Timestamp(2024, m, 1), "y": 100} for m in range(1, 7)])
+    idx = bf.seasonal12(df)
+    assert len(idx) == 12
+
+
+def test_covid_events_covers_the_acute_window_when_the_series_spans_it(bf):
+    df = pd.DataFrame([{"ds": pd.Timestamp(2019, 1, 1) + pd.DateOffset(months=i), "y": 100} for i in range(48)])  # 2019-01..2022-12
+    events = bf.covid_events(df)
+    # COVID_START/COVID_END = 2020-03..2021-12 inclusive = 22 months
+    assert len(events) == 22
+    assert events["ds"].min() == pd.Timestamp(2020, 3, 1)
+    assert events["ds"].max() == pd.Timestamp(2021, 12, 1)
+    assert all(events["holiday"].str.startswith("covid_"))
+
+
+def test_covid_events_empty_when_series_is_entirely_outside_the_window(bf):
+    df = pd.DataFrame([{"ds": pd.Timestamp(2022, m, 1), "y": 100} for m in range(1, 13)])
+    events = bf.covid_events(df)
+    assert len(events) == 0
+
+
+def test_monthly_holidays_snaps_dates_to_the_first_of_the_month(bf):
+    hol_df, names = bf.monthly_holidays("CA", [2024])
+    assert len(hol_df) > 0
+    assert len(names) > 0
+    assert all(d.day == 1 for d in hol_df["ds"])
+    assert set(hol_df.columns) >= {"holiday", "ds"}
+
+
+def test_monthly_holidays_falls_back_gracefully_for_an_unknown_country(bf):
+    hol_df, names = bf.monthly_holidays("ZZ", [2024])
+    assert list(hol_df.columns) == ["holiday", "ds"]
+    assert len(hol_df) == 0
+    assert names == []
+
+
+def test_load_airport_series_reads_and_returns_none_when_missing(bf, tmp_path, monkeypatch):
+    monkeypatch.setattr(bf, "SERIES_DIR", str(tmp_path))
+    (tmp_path / "TST.json").write_text(json.dumps({"series": {"pax": {"2024-01": 1000}}}))
+    assert bf.load_airport_series("TST") == {"pax": {"2024-01": 1000}}
+    assert bf.load_airport_series("NOPE") is None
+
+
+def test_prune_stale_removes_only_files_outside_the_keep_set(bf, tmp_path, monkeypatch):
+    for code in ("AAA", "BBB", "CCC"):
+        (tmp_path / f"{code}.json").write_text("{}")
+    bf.prune_stale(str(tmp_path), ["AAA", "CCC"])
+    remaining = sorted(p.name for p in tmp_path.iterdir())
+    assert remaining == ["AAA.json", "CCC.json"]

@@ -134,6 +134,26 @@ rebuilds it in CI and commits the result back to `main` (same bot-commit
 pattern as the nightly data refresh), so the author workflow stays
 edit-and-push even though the site ships a precompiled bundle.
 
+## Testing
+
+```bash
+node --test                                     # data.jsx: the elasticity model, annualization, formatters
+pip install -r scripts/requirements.txt
+pytest scripts/test_build_forecast.py -v        # build-forecast.py: series framing, seasonality, COVID window, holidays
+```
+
+[`.github/workflows/test-glidepath.yml`](../../.github/workflows/test-glidepath.yml)
+runs both suites on every push/PR touching `portfolio/glidepath/`.
+`test/data.test.mjs` loads `data.jsx` itself (not a copy) into a `node:vm`
+sandbox and exercises it through its real public `window.GP_*` API — the
+same functions `app.jsx` and the screens call — so a regression in the
+elasticity model, event shocks, or segment reconciliation gets caught
+here rather than by a visitor. The Python suite covers `build-forecast.py`'s
+pure-logic helpers (series framing, seasonal index, the COVID dummy-event
+window, holiday-date snapping); the actual Prophet fit is comparatively
+low-risk (it's a well-tested library) and is exercised for real against
+live data by the nightly run instead of being re-fit in CI.
+
 ## Deploying
 
 Part of the root [ethanrosehart.github.io](../../README.md) GitHub Pages
@@ -149,8 +169,6 @@ to `main` and trigger that same redeploy: the nightly data refresh
   run the Socrata catalog exposes no working monthly segment dataset, so no
   US airports currently ship in `data/activity-index.json`. See
   [`data/README.md`](data/README.md) for status.
-- **No automated tests.** Correctness of the forecasting math and data
-  pipeline is currently verified by manual review / CI-log inspection only.
 - Charts are hand-rolled SVG with no text/table fallback for screen
   readers — fine for a portfolio demo, worth revisiting for a
   production-grade dashboard.

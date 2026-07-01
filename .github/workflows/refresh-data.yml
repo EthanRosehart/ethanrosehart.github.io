@@ -55,9 +55,10 @@ jobs:
         uses: actions/setup-python@v5
         with:
           python-version: "3.11"
+          cache: "pip"
 
       - name: Install forecasting deps (Prophet + holidays)
-        run: pip install prophet holidays pandas
+        run: pip install -r portfolio/glidepath/scripts/requirements.txt
 
       - name: Build short-term forecasts (Meta Prophet)
         run: python portfolio/glidepath/scripts/build-forecast.py

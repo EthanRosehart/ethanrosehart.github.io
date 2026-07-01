@@ -1,0 +1,6 @@
+# Pinned so the nightly forecast build and the CI test suite both run
+# against the same known-good versions. Bump deliberately, not implicitly.
+pandas==3.0.3
+prophet==1.3.0
+holidays==0.99
+pytest==9.1.1
