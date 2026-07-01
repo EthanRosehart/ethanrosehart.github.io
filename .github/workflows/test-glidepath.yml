@@ -1,0 +1,52 @@
+name: Test Glidepath
+
+# Runs the Glidepath test suites on every push/PR that touches the app or
+# its data pipeline: Node's built-in test runner against the forecasting
+# math in data.jsx, and pytest against build-forecast.py's pure-logic
+# helpers (series framing, seasonality, COVID-window events, holiday
+# snapping — not a full Prophet fit, which the nightly run already
+# exercises against real data).
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - "portfolio/glidepath/**"
+      - ".github/workflows/test-glidepath.yml"
+  pull_request:
+    paths:
+      - "portfolio/glidepath/**"
+      - ".github/workflows/test-glidepath.yml"
+  workflow_dispatch: {}
+
+permissions:
+  contents: read   # read-only — this workflow only runs tests, never commits
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+
+      - name: Run data.jsx tests (node --test)
+        working-directory: portfolio/glidepath
+        run: node --test   # auto-discovers test/*.test.mjs
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: "pip"
+
+      - name: Install test dependencies
+        run: pip install -r portfolio/glidepath/scripts/requirements.txt
+
+      - name: Run build-forecast.py tests (pytest)
+        working-directory: portfolio/glidepath
+        run: pytest scripts/test_build_forecast.py -v

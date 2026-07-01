@@ -3,10 +3,14 @@
 # build-forecast.py  —  Glidepath short-term tactical model (Meta Prophet)
 #
 # Runs server-side in .github/workflows/refresh-data.yml (never in the browser).
-# Reads the real monthly series committed by the Node fetchers
-# (data/activity.json) and fits a Meta Prophet model per airport per metric,
-# with country public holidays as regressors. Writes data/forecast.json, which
-# the browser renders directly — no forecasting happens client-side.
+# Reads the real monthly series committed by the Node fetchers — the airport
+# catalogue in data/activity-index.json plus each airport's own
+# data/series/<IATA>.json — and fits a Meta Prophet model per airport per
+# metric, with country public holidays as regressors. Writes one
+# data/forecasts/<IATA>.json per airport (fetched by the browser only once
+# that gateway is selected) plus a small shared data/forecast-meta.json
+# (generatedAt/model/library/interval/horizon). No forecasting happens
+# client-side — the browser renders these directly.
 #
 # Holidays come from the open-source `holidays` package (vacanza, MIT, 250
 # country codes) — the same source Prophet's add_country_holidays uses. Because
@@ -40,8 +44,10 @@ except Exception as e:  # pragma: no cover
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 DATA = os.path.normpath(os.path.join(HERE, "..", "data"))
-ACTIVITY = os.path.join(DATA, "activity.json")
-OUT = os.path.join(DATA, "forecast.json")
+ACTIVITY = os.path.join(DATA, "activity-index.json")
+SERIES_DIR = os.path.join(DATA, "series")
+FORECASTS_DIR = os.path.join(DATA, "forecasts")
+META_OUT = os.path.join(DATA, "forecast-meta.json")
 
 HORIZON = 24            # months forecast (UI offers 12 / 24)
 INTERVAL = 0.80         # prediction interval width -> P10..P90 band
@@ -223,26 +229,51 @@ def forecast_metric(iata, iso2, monthly, horizon):
     }
 
 
+def load_airport_series(iata):
+    """{ series: {...}, paxSeg?: {...} } from data/series/<IATA>.json, or None."""
+    path = os.path.join(SERIES_DIR, f"{iata}.json")
+    try:
+        with open(path, "r", encoding="utf-8") as f:
+            doc = json.load(f)
+    except (OSError, json.JSONDecodeError):
+        return None
+    series = doc.get("series")
+    return series if isinstance(series, dict) else None
+
+
+def prune_stale(dir_path, keep_iatas):
+    """Delete any <IATA>.json in dir_path not in keep_iatas."""
+    if not os.path.isdir(dir_path):
+        return
+    keep = set(keep_iatas)
+    for fname in os.listdir(dir_path):
+        if fname.endswith(".json") and fname[:-5] not in keep:
+            try:
+                os.remove(os.path.join(dir_path, fname))
+            except OSError:
+                pass
+
+
 def main():
     with open(ACTIVITY, "r", encoding="utf-8") as f:
         activity = json.load(f)
     airports_in = activity.get("airports", {})
 
-    airports_out = {}
+    os.makedirs(FORECASTS_DIR, exist_ok=True)
+
+    airports_written = []
     n_series = 0
     for iata, a in airports_in.items():
         iso2 = a.get("country") or COUNTRY.get(iata)
         if not iso2 or not a.get("observed"):
             continue
+        series = load_airport_series(iata)
+        if not series:
+            print(f"  {iata}: no data/series/{iata}.json — skipped", file=sys.stderr)
+            continue
         metrics = {}
         for metric in METRICS:
-            # activity.json may store one series under "monthly" (legacy = pax)
-            # or a per-metric "series": { pax:{...}, atm:{...}, cargo:{...} }.
-            monthly = None
-            if isinstance(a.get("series"), dict) and metric in a["series"]:
-                monthly = a["series"][metric]
-            elif metric == "pax" and isinstance(a.get("monthly"), dict):
-                monthly = a["monthly"]
+            monthly = series.get(metric)
             if not monthly:
                 continue
             try:
@@ -257,24 +288,28 @@ def main():
                       f"{res['mape']}%  holidays[{res['holidays_total']}] "
                       f"top={res['holidays'][:3]}")
         if metrics:
-            airports_out[iata] = {"country": iso2, "metrics": metrics}
+            with open(os.path.join(FORECASTS_DIR, f"{iata}.json"), "w", encoding="utf-8") as f:
+                json.dump(metrics, f, separators=(",", ":"))
+                f.write("\n")
+            airports_written.append(iata)
 
-    out = {
+    prune_stale(FORECASTS_DIR, airports_written)
+
+    meta = {
         "generatedAt": datetime.now(timezone.utc).isoformat(),
         "model": "Meta Prophet (additive trend + multiplicative yearly + country holidays + COVID 2020-21 events)",
         "library": f"prophet {__import__('prophet').__version__}, holidays {holidays_pkg.__version__}",
         "interval": INTERVAL,
         "horizon": HORIZON,
-        "note": ("Short-term forecasts. Fit nightly by "
-                 ".github/workflows/refresh-data.yml on the real observed series; "
-                 "the browser renders these directly."),
-        "airports": airports_out,
+        "note": ("Short-term forecasts. Fit nightly by .github/workflows/refresh-data.yml "
+                 "on the real observed series. Per-airport output lives in "
+                 "data/forecasts/<IATA>.json, fetched by the browser once that gateway "
+                 "is selected; this file only carries the shared model metadata."),
     }
-    os.makedirs(DATA, exist_ok=True)
-    with open(OUT, "w", encoding="utf-8") as f:
-        json.dump(out, f, separators=(",", ":"))
+    with open(META_OUT, "w", encoding="utf-8") as f:
+        json.dump(meta, f, separators=(",", ":"))
         f.write("\n")
-    print(f"Wrote {OUT} — {len(airports_out)} airports, {n_series} series.")
+    print(f"Wrote {FORECASTS_DIR}/ — {len(airports_written)} airports, {n_series} series. Wrote {META_OUT}.")
 
 
 if __name__ == "__main__":

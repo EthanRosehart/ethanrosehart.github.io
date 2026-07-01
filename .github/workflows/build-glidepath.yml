@@ -1,0 +1,60 @@
+name: Build Glidepath
+
+# Precompiles Glidepath's JSX (portfolio/glidepath/*.jsx) into
+# portfolio/glidepath/dist/app.bundle.js via esbuild, so the site ships a
+# minified, pre-transpiled bundle instead of shipping the Babel Standalone
+# compiler to every visitor's browser. Mirrors refresh-data.yml's pattern:
+# the bot commits the rebuilt bundle straight back to main, which
+# GitHub Pages then redeploys automatically. Author workflow stays
+# buildless — edit a .jsx file, push, CI builds it.
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - "portfolio/glidepath/*.jsx"
+      - "portfolio/glidepath/build.mjs"
+      - "portfolio/glidepath/package.json"
+      - "portfolio/glidepath/package-lock.json"
+  workflow_dispatch: {}   # allow manual "Run workflow" from the Actions tab
+
+permissions:
+  contents: write          # needed to commit the rebuilt bundle
+
+concurrency:
+  group: build-glidepath
+  cancel-in-progress: false
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+          cache: "npm"
+          cache-dependency-path: portfolio/glidepath/package-lock.json
+
+      - name: Install build dependencies
+        working-directory: portfolio/glidepath
+        run: npm ci
+
+      - name: Build bundle
+        working-directory: portfolio/glidepath
+        run: npm run build
+
+      - name: Commit if changed
+        run: |
+          git config user.name  "glidepath-bot"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add portfolio/glidepath/dist/
+          if git diff --staged --quiet; then
+            echo "No change in bundle — nothing to commit."
+          else
+            git commit -m "chore(build): rebuild Glidepath bundle [skip ci]"
+            git push
+          fi

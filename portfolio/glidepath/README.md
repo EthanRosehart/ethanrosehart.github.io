@@ -46,11 +46,11 @@ of those sources.
 
 ## Architecture
 
-Static site, **no build step**: React 18 + Babel Standalone are loaded from
-a CDN and JSX is transpiled in the browser at load time. This keeps the repo
-trivially deployable on GitHub Pages (just static files) at the cost of a
-slower first paint than a bundled/minified build — see
-[Known limitations](#known-limitations).
+React 18 (production build, from a CDN). The app's own six `.jsx` files are
+precompiled by [`build.mjs`](build.mjs) (esbuild) into a single minified
+`dist/app.bundle.js` — the browser never downloads a JSX compiler, only that
+one plain-JS file. See [Building](#building) for how the bundle gets
+rebuilt.
 
 ```
 index.html
@@ -60,14 +60,26 @@ index.html
 ├── screens-forecast.jsx  Overview + Short-term tactical (Prophet)
 ├── screens-strategic.jsx Long-term + Scenario builder + Event simulator + Export
 ├── app.jsx               shell, nav, routing (in-memory + localStorage), data loading
-└── styles.css            dark/pink design system
+├── styles.css            dark/pink design system
+├── build.mjs             esbuild: JSX → JS + minify, per file, then concatenate (see below)
+└── dist/app.bundle.js    committed build output index.html actually loads
 ```
 
-All six `.jsx` files are loaded as separate `<script type="text/babel">`
-tags (no ES modules, no bundler), so they share one global scope — later
-files close over `const`s declared in earlier ones (e.g. `AIRPORTS`, `MACRO`
-from `data.jsx`) or read them off `window` (the `GP_*` exports at the bottom
-of each file). Load order in `index.html` matters.
+The six `.jsx` files intentionally share **one global scope** — there's no
+ES module graph between them. Later files close over `const`s declared in
+earlier ones (e.g. `AIRPORTS`, `MACRO` from `data.jsx`) or read them off
+`window` (the `GP_*` exports at the bottom of each file); load order matters
+(`data.jsx` → `charts.jsx` → `screens-setup.jsx` → `screens-forecast.jsx` →
+`screens-strategic.jsx` → `app.jsx`). `build.mjs` preserves that on purpose:
+it transforms each file **individually** (esbuild's `transform()`, never its
+bundler) and concatenates the results in load order — the same shape as six
+separate `<script>` tags, just precompiled and minified. This matters for
+correctness, not just style: esbuild's minifier only renames identifiers it
+can prove are local to a function, so top-level names crossing file
+boundaries (`AIRPORTS`, `GP_Ico`, ...) survive unchanged after minification;
+bundling the files together as an ES module graph instead would risk
+tree-shaking code that looks "unused" within a single file but is actually
+consumed by a later one.
 
 State is a handful of `useState`s in `App` (`app.jsx`), persisted to
 `localStorage` (key `glidepath.v1`) so a reload resumes on the same screen,
@@ -79,9 +91,14 @@ Everything the app reads is a **committed JSON snapshot** under
 [`data/`](data/), refreshed nightly by
 [`.github/workflows/refresh-data.yml`](../../.github/workflows/refresh-data.yml)
 on a GitHub Actions runner (server-side, no CORS/API-key issues) and served
-same-origin to the browser. See **[`data/README.md`](data/README.md)** for
-the full pipeline: sources, field shapes, per-market coverage (Eurostat /
-StatCan / BTS), and how to run each fetcher locally.
+same-origin to the browser. Data is split into a small **index** (catalogue
+metadata, loaded on every visit) and **per-airport files** (the actual
+monthly series and forecast, fetched lazily once a visitor selects that
+gateway — wired into the "Connect data" screen's progress state, so that
+step reflects the real fetch rather than a fixed animation). See
+**[`data/README.md`](data/README.md)** for the full pipeline: file shapes,
+per-market coverage (Eurostat / StatCan / BTS), and how to run each fetcher
+locally.
 
 ## Running locally
 
@@ -94,41 +111,64 @@ python3 -m http.server 8000
 # or: npx serve .
 ```
 
-Then open `http://localhost:8000/`. The committed `data/*.json` snapshots
-are used as-is — no API keys or local pipeline run needed to browse the app.
+Then open `http://localhost:8000/`. The committed `dist/app.bundle.js` and
+`data/*.json` snapshots are used as-is — no build, API keys, or local
+pipeline run needed just to browse the app.
 
 To refresh the data snapshots locally (Node 20+, plus Python 3.11 with
 `prophet`/`holidays`/`pandas` for the forecast step), see
 [`data/README.md`](data/README.md#run-it-locally).
 
+## Building
+
+```bash
+npm install         # esbuild only — one devDependency
+npm run build        # writes dist/app.bundle.js
+npm run watch         # rebuilds on every .jsx save, for active development
+```
+
+The committed `dist/app.bundle.js` is what `index.html` actually loads, so
+if you edit a `.jsx` file, either run `npm run build` before committing or
+just push — [`.github/workflows/build-glidepath.yml`](../../.github/workflows/build-glidepath.yml)
+rebuilds it in CI and commits the result back to `main` (same bot-commit
+pattern as the nightly data refresh), so the author workflow stays
+edit-and-push even though the site ships a precompiled bundle.
+
+## Testing
+
+```bash
+node --test                                     # data.jsx: the elasticity model, annualization, formatters
+pip install -r scripts/requirements.txt
+pytest scripts/test_build_forecast.py -v        # build-forecast.py: series framing, seasonality, COVID window, holidays
+```
+
+[`.github/workflows/test-glidepath.yml`](../../.github/workflows/test-glidepath.yml)
+runs both suites on every push/PR touching `portfolio/glidepath/`.
+`test/data.test.mjs` loads `data.jsx` itself (not a copy) into a `node:vm`
+sandbox and exercises it through its real public `window.GP_*` API — the
+same functions `app.jsx` and the screens call — so a regression in the
+elasticity model, event shocks, or segment reconciliation gets caught
+here rather than by a visitor. The Python suite covers `build-forecast.py`'s
+pure-logic helpers (series framing, seasonal index, the COVID dummy-event
+window, holiday-date snapping); the actual Prophet fit is comparatively
+low-risk (it's a well-tested library) and is exercised for real against
+live data by the nightly run instead of being re-fit in CI.
+
 ## Deploying
 
 Part of the root [ethanrosehart.github.io](../../README.md) GitHub Pages
-site — any push to `main` redeploys automatically. The nightly workflow
-commits refreshed `data/*.json` snapshots directly to `main`, which
-triggers the same redeploy.
+site — any push to `main` redeploys automatically. Two bots commit straight
+to `main` and trigger that same redeploy: the nightly data refresh
+(`refresh-data.yml`) and, on any `.jsx` change, the bundle rebuild
+(`build-glidepath.yml`).
 
 ## Known limitations
 
-- **No build step.** Babel Standalone transpiles ~150KB of JSX in-browser on
-  every load, and `index.html` currently loads the **development** builds
-  of React/ReactDOM from unpkg — larger and slower than the production
-  builds. A lightweight bundler (esbuild/Vite) would let this ship minified,
-  pre-transpiled, and on the production React build, at the cost of adding
-  a build step to an otherwise buildless static site.
-- **Full data payload on load.** `app.jsx` fetches all of
-  `airports.json` + `activity.json` + `forecast.json` + `macro.json`
-  (~1.4MB combined) on mount regardless of which airport is picked, since
-  the airport catalogue itself is derived from `activity.json`. Splitting
-  per-airport series into separate files (fetched only after airport
-  selection) would cut the initial payload substantially.
 - **US coverage is defined but not populated.** `scripts/fetch-bts.mjs`
   discovers and fetches BTS T-100 data by design, but as of the last nightly
   run the Socrata catalog exposes no working monthly segment dataset, so no
-  US airports currently ship in `activity.json`. See
+  US airports currently ship in `data/activity-index.json`. See
   [`data/README.md`](data/README.md) for status.
-- **No automated tests.** Correctness of the forecasting math and data
-  pipeline is currently verified by manual review / CI-log inspection only.
 - Charts are hand-rolled SVG with no text/table fallback for screen
   readers — fine for a portfolio demo, worth revisiting for a
   production-grade dashboard.

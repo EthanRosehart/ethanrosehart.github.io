@@ -62,15 +62,16 @@ function App(){
   // GDP-growth lever default falls back to the real World Bank GDP/capita
   // figure (data/macro.json), so no projection layer is needed.
 
-  // Load the committed monthly activity snapshot (data/activity.json) — the
-  // real observed series the whole app renders. Same-origin, no CORS.
+  // Load the airport catalogue index (data/activity-index.json) — metadata
+  // for every gateway (no series; that's fetched lazily once selected, see
+  // the effect below). Same-origin, no CORS.
   useEffectApp(()=>{
     let alive = true;
-    fetch("data/activity.json", { cache:"no-cache" })
+    fetch("data/activity-index.json", { cache:"no-cache" })
       .then(r => r.ok ? r.json() : null)
       .then(j => {
         if (!alive || !j) return;
-        GP_setActivity(j);       // also (re)builds the AIRPORTS catalogue
+        GP_setActivityIndex(j);  // (re)builds the AIRPORTS catalogue
         setActMeta(j);
         // restore a returning user's saved airport now the catalogue exists
         if (saved.iata && !airport) {
@@ -83,22 +84,51 @@ function App(){
     return ()=>{ alive = false; };
   },[]);
 
-  // Load the precomputed Meta Prophet forecasts (data/forecast.json), fit
-  // nightly server-side on the observed series. The browser only renders them.
+  // Meta Prophet's shared model metadata (data/forecast-meta.json) — small,
+  // loaded once. Each airport's actual forecast is fetched lazily below.
   const [fcMeta, setFcMeta] = useStateApp(window.GP_FORECAST_META || null);
   useEffectApp(()=>{
     let alive = true;
-    fetch("data/forecast.json", { cache:"no-cache" })
+    fetch("data/forecast-meta.json", { cache:"no-cache" })
       .then(r => r.ok ? r.json() : null)
-      .then(j => {
-        if (!alive || !j) return;
-        GP_setForecast(j);
-        setFcMeta(j);
-        setActVer(v => v + 1);
-      })
+      .then(j => { if (alive && j) { GP_setForecastMeta(j); setFcMeta(j); } })
       .catch(()=>{});
     return ()=>{ alive = false; };
   },[]);
+
+  // Once a gateway is selected, fetch ITS OWN monthly series + forecast —
+  // data/series/<IATA>.json and data/forecasts/<IATA>.json — rather than
+  // downloading every airport's numbers up front. seriesStatus drives both
+  // the real (non-simulated) progress on the Connect data screen and the
+  // "Build forecast" gate, so a visitor can never reach a data screen before
+  // this airport's real numbers are actually in memory.
+  const [seriesStatus, setSeriesStatus] = useStateApp({ iata:null, loading:false, ready:false, error:false });
+  useEffectApp(()=>{
+    if (!airport) return;
+    const iata = airport.iata;
+    if (GP_hasAirportSeries(iata)) { setSeriesStatus({ iata, loading:false, ready:true, error:false }); return; }
+    let alive = true;
+    setSeriesStatus({ iata, loading:true, ready:false, error:false });
+    fetch(`data/series/${iata}.json`, { cache:"no-cache" })
+      .then(r => r.ok ? r.json() : Promise.reject(new Error("series HTTP "+r.status)))
+      .then(seriesJson => {
+        if (!alive) return null;
+        GP_setAirportSeries(iata, seriesJson);
+        // the forecast is best-effort — some gateways don't clear Prophet's
+        // minimum history yet, and a missing one is already handled by the
+        // screens ("No forecast available"), so a 404 here isn't fatal.
+        return fetch(`data/forecasts/${iata}.json`, { cache:"no-cache" }).then(r => r.ok ? r.json() : null).catch(()=>null);
+      })
+      .then(forecastJson => {
+        if (!alive) return;
+        if (forecastJson) GP_setAirportForecast(iata, forecastJson);
+        setActVer(v => v + 1);
+        setSeriesStatus({ iata, loading:false, ready:true, error:false });
+      })
+      .catch(()=>{ if (alive) setSeriesStatus({ iata, loading:false, ready:false, error:true }); });
+    return ()=>{ alive = false; };
+  },[airport]);
+  const dataReady = !!airport && seriesStatus.iata===airport.iata && seriesStatus.ready;
 
   // Load the committed macro snapshot (data/macro.json) and merge the real
   // World Bank figures over the embedded baselines. Same-origin fetch, so no
@@ -223,13 +253,18 @@ function App(){
         </div>
 
         {screen==="select"   && <Onboarding onSelect={selectAirport} selected={airport}/>}
-        {screen==="connect"  && airport && <ConnectData airport={airport} onDone={finishConnect} alreadyDone={connected} macroMeta={macroMeta} actMeta={actMeta} ofMeta={ofMeta}/>}
-        {screen==="overview" && airport && connected && scenario && <Overview airport={airport} history={history} scenario={scenario} go={go}/>}
-        {screen==="short"    && airport && connected && <ShortTerm airport={airport} history={history}/>}
-        {screen==="long"     && airport && connected && scenario && <LongTerm airport={airport} history={history} scenario={scenario} go={go}/>}
-        {screen==="scenario" && airport && connected && scenario && <Scenario airport={airport} history={history} scenario={scenario} setScenario={setScenario}/>}
-        {screen==="events"   && airport && connected && scenario && <EventSim airport={airport} history={history} scenario={scenario} setScenario={setScenario}/>}
-        {screen==="export"   && airport && connected && scenario && <ExportView airport={airport} history={history} scenario={scenario}/>}
+        {screen==="connect"  && airport && <ConnectData airport={airport} onDone={finishConnect} alreadyDone={connected} macroMeta={macroMeta} actMeta={actMeta} ofMeta={ofMeta} seriesStatus={seriesStatus}/>}
+        {screen!=="select" && screen!=="connect" && connected && airport && !dataReady && (
+          <div className="content fade-in"><div className="panel panel-pad"><div className="air-meta">
+            {seriesStatus.error ? `Couldn't load ${airport.iata}'s data — check your connection and reload.` : `Loading ${airport.iata} data…`}
+          </div></div></div>
+        )}
+        {screen==="overview" && airport && connected && dataReady && scenario && <Overview airport={airport} history={history} scenario={scenario} go={go}/>}
+        {screen==="short"    && airport && connected && dataReady && <ShortTerm airport={airport} history={history}/>}
+        {screen==="long"     && airport && connected && dataReady && scenario && <LongTerm airport={airport} history={history} scenario={scenario} go={go}/>}
+        {screen==="scenario" && airport && connected && dataReady && scenario && <Scenario airport={airport} history={history} scenario={scenario} setScenario={setScenario}/>}
+        {screen==="events"   && airport && connected && dataReady && scenario && <EventSim airport={airport} history={history} scenario={scenario} setScenario={setScenario}/>}
+        {screen==="export"   && airport && connected && dataReady && scenario && <ExportView airport={airport} history={history} scenario={scenario}/>}
       </main>
     </div>
   );

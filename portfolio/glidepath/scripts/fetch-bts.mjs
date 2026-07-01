@@ -5,14 +5,21 @@
  * Discovers a MONTHLY T-100 segment dataset on data.bts.gov (the
  * "summary by origin airport" table r495-tyji is annual only), then
  * aggregates passengers / freight / departures by month for each US
- * airport. Merges into data/activity.json. Best-effort + verbose.
+ * airport. Runs after fetch-activity.mjs and shares its split layout:
+ * updates this script's own entries in data/activity-index.json and
+ * writes data/series/<IATA>.json per US airport, leaving the
+ * eurostat/statcan entries fetch-activity.mjs owns untouched.
+ * Best-effort + verbose.
  * ============================================================ */
-import { writeFile, readFile } from "node:fs/promises";
+import { writeFile, readFile, mkdir, unlink } from "node:fs/promises";
 import { dirname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
+import { lastFullYearTotal, metricsIn } from "./_util.mjs";
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
-const OUT = resolve(__dirname, "..", "data", "activity.json");
+const DATA = resolve(__dirname, "..", "data");
+const OUT = resolve(DATA, "activity-index.json");
+const SERIES_DIR = resolve(DATA, "series");
 const US = ["BUR", "PVU", "PSP", "BZN"];
 const UA = { "User-Agent": "glidepath-data-bot" };
 const LB_TO_T = 0.000453592;
@@ -78,15 +85,19 @@ async function seriesFor(id, m, code) {
   return { pax, atm, cargo };
 }
 
+async function loadJSON(path) { try { return JSON.parse(await readFile(path, "utf8")); } catch { return null; } }
+
 async function main() {
-  let data; try { data = JSON.parse(await readFile(OUT, "utf8")); } catch { data = { airports: {} }; }
-  data.airports = data.airports || {};
+  const indexDoc = await loadJSON(OUT);
+  const airports = indexDoc?.airports || {};
 
   const cands = await discover();
   const picked = await pickDataset(cands);
-  if (!picked) { console.error("  [bts] no monthly T-100 dataset with origin/month/pax found — US absent"); await writeFile(OUT, JSON.stringify(data) + "\n", "utf8"); return; }
+  if (!picked) { console.error("  [bts] no monthly T-100 dataset with origin/month/pax found — US absent"); return; }
   console.log(`  [bts] using dataset ${picked.id}`);
 
+  await mkdir(SERIES_DIR, { recursive: true });
+  let live = 0;
   for (const code of US) {
     try {
       const s = await seriesFor(picked.id, picked.m, code);
@@ -94,14 +105,27 @@ async function main() {
       for (const k of ["pax", "atm", "cargo"]) if (Object.keys(s[k]).length >= 12) series[k] = s[k];
       if (series.pax) {
         const pk = Object.keys(series.pax).sort();
-        data.airports[code] = { observed: true, source: "bts", rep_airp: code, months: pk.length, latest: pk[pk.length - 1], series, monthly: series.pax };
+        airports[code] = {
+          observed: true, source: "bts", rep_airp: code,
+          months: pk.length, latest: pk[pk.length - 1],
+          metrics: metricsIn(series), hasPaxSeg: false,
+          annualPax: lastFullYearTotal(series.pax),
+        };
+        await writeFile(resolve(SERIES_DIR, `${code}.json`), JSON.stringify({ series }) + "\n", "utf8");
+        live++;
         console.log(`  ${code}  bts  pax ${pk.length}mo (latest ${pk[pk.length - 1]}) atm ${Object.keys(series.atm || {}).length} cargo ${Object.keys(series.cargo || {}).length}`);
-      } else { console.warn(`  ${code}  bts  insufficient pax (${Object.keys(s.pax).length}mo)`); delete data.airports[code]; }
+      } else {
+        console.warn(`  ${code}  bts  insufficient pax (${Object.keys(s.pax).length}mo)`);
+        delete airports[code];
+        await unlink(resolve(SERIES_DIR, `${code}.json`)).catch(() => {});
+      }
     } catch (e) { console.warn(`  ${code}  bts failed (${e.message})`); }
   }
 
-  await writeFile(OUT, JSON.stringify(data) + "\n", "utf8");
-  console.log("BTS merge done.");
+  if (!indexDoc) { console.warn("  [bts] no existing activity-index.json to update — skipping index write"); return; }
+  indexDoc.airports = airports;
+  await writeFile(OUT, JSON.stringify(indexDoc) + "\n", "utf8");
+  console.log(`BTS merge done — ${live} US airports live.`);
 }
 
 main().catch((e) => { console.error("BTS failed:", e.message); process.exit(1); });

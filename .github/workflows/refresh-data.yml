@@ -1,13 +1,15 @@
 name: Refresh data
 
-# Pulls fresh public data and commits the snapshots to
-# portfolio/glidepath/data/*.json. GitHub Pages redeploys automatically, so
-# the Glidepath app always serves last night's numbers — fetched server-side
-# here, never from the visitor's browser.
-#   airports.json  — OpenFlights authoritative airport reference
-#   activity.json  — Eurostat / StatCan monthly pax / movements / cargo by airport
-#   macro.json     — World Bank population & historical GDP/capita
-#   forecast.json  — Meta Prophet short-term forecasts (built from activity.json)
+# Pulls fresh public data and commits the snapshots to portfolio/glidepath/data/.
+# GitHub Pages redeploys automatically, so the Glidepath app always serves last
+# night's numbers — fetched server-side here, never from the visitor's browser.
+#   airports.json         — OpenFlights authoritative airport reference
+#   activity-index.json   — airport catalogue metadata (no series)
+#   series/<IATA>.json    — one airport's monthly pax/movements/cargo, fetched
+#                            by the browser lazily once that gateway is selected
+#   macro.json            — World Bank population & historical GDP/capita
+#   forecast-meta.json    — shared Meta Prophet model metadata
+#   forecasts/<IATA>.json — one airport's short-term forecast, fetched lazily
 
 on:
   schedule:
@@ -53,9 +55,10 @@ jobs:
         uses: actions/setup-python@v5
         with:
           python-version: "3.11"
+          cache: "pip"
 
       - name: Install forecasting deps (Prophet + holidays)
-        run: pip install prophet holidays pandas
+        run: pip install -r portfolio/glidepath/scripts/requirements.txt
 
       - name: Build short-term forecasts (Meta Prophet)
         run: python portfolio/glidepath/scripts/build-forecast.py
@@ -65,7 +68,7 @@ jobs:
         run: |
           git config user.name  "glidepath-bot"
           git config user.email "github-actions[bot]@users.noreply.github.com"
-          git add portfolio/glidepath/data/*.json
+          git add portfolio/glidepath/data/
           if git diff --staged --quiet; then
             echo "No change in data — nothing to commit."
           else
