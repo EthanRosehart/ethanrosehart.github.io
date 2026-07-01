@@ -1,7 +1,7 @@
 /* ============================================================
    app.jsx — shell, navigation, state, persistence
    ============================================================ */
-const { useState:useStateApp, useEffect:useEffectApp, useMemo:useMemoApp } = React;
+const { useState:useStateApp, useEffect:useEffectApp, useMemo:useMemoApp, useRef:useRefApp } = React;
 const LS = "glidepath.v1";
 
 const NAV = [
@@ -34,13 +34,20 @@ function App(){
   const [actVer, setActVer] = useStateApp(0);
   const [navOpen, setNavOpen] = useStateApp(false);   // mobile drawer
 
+  // kept current via effects below so async callbacks (fetch .then) can read
+  // live state instead of the value closed over when the effect first ran
+  const airportRef = useRefApp(airport);
+  const connectedRef = useRefApp(connected);
+  useEffectApp(()=>{ airportRef.current = airport; },[airport]);
+  useEffectApp(()=>{ connectedRef.current = connected; },[connected]);
+
   const history = useMemoApp(()=> airport ? GP_buildHistory(airport.iata) : null, [airport, actVer]);
 
   // OpenFlights reference (data/airports.json) — enrich the data-driven
   // catalogue with authoritative identifiers/coords. Same-origin, no CORS.
   useEffectApp(()=>{
     let alive = true;
-    fetch("data/airports.json", { cache:"no-store" })
+    fetch("data/airports.json", { cache:"no-cache" })
       .then(r => r.ok ? r.json() : null)
       .then(j => {
         if (!alive || !j || !j.airports) return;
@@ -59,7 +66,7 @@ function App(){
   // real observed series the whole app renders. Same-origin, no CORS.
   useEffectApp(()=>{
     let alive = true;
-    fetch("data/activity.json", { cache:"no-store" })
+    fetch("data/activity.json", { cache:"no-cache" })
       .then(r => r.ok ? r.json() : null)
       .then(j => {
         if (!alive || !j) return;
@@ -81,7 +88,7 @@ function App(){
   const [fcMeta, setFcMeta] = useStateApp(window.GP_FORECAST_META || null);
   useEffectApp(()=>{
     let alive = true;
-    fetch("data/forecast.json", { cache:"no-store" })
+    fetch("data/forecast.json", { cache:"no-cache" })
       .then(r => r.ok ? r.json() : null)
       .then(j => {
         if (!alive || !j) return;
@@ -98,7 +105,7 @@ function App(){
   // CORS; if it fails we silently keep the built-in defaults.
   useEffectApp(()=>{
     let alive = true;
-    fetch("data/macro.json", { cache:"no-store" })
+    fetch("data/macro.json", { cache:"no-cache" })
       .then(r => r.ok ? r.json() : null)
       .then(j => {
         if (!alive || !j || !j.countries) return;
@@ -114,7 +121,9 @@ function App(){
         setMacroMeta(window.GP_MACRO_META);
         // refresh the working scenario to the live baseline only while still in
         // setup — never clobber a returning user's saved what-if assumptions.
-        if (!connected && airport) setScenario(GP_defaultScenario(airport.iata));
+        // Reads the refs (not the closed-over state) since this callback can
+        // resolve well after the effect first ran, once the user has moved on.
+        if (!connectedRef.current && airportRef.current) setScenario(GP_defaultScenario(airportRef.current.iata));
       })
       .catch(()=>{});
     return ()=>{ alive = false; };
