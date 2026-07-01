@@ -79,9 +79,14 @@ Everything the app reads is a **committed JSON snapshot** under
 [`data/`](data/), refreshed nightly by
 [`.github/workflows/refresh-data.yml`](../../.github/workflows/refresh-data.yml)
 on a GitHub Actions runner (server-side, no CORS/API-key issues) and served
-same-origin to the browser. See **[`data/README.md`](data/README.md)** for
-the full pipeline: sources, field shapes, per-market coverage (Eurostat /
-StatCan / BTS), and how to run each fetcher locally.
+same-origin to the browser. Data is split into a small **index** (catalogue
+metadata, loaded on every visit) and **per-airport files** (the actual
+monthly series and forecast, fetched lazily once a visitor selects that
+gateway — wired into the "Connect data" screen's progress state, so that
+step reflects the real fetch rather than a fixed animation). See
+**[`data/README.md`](data/README.md)** for the full pipeline: file shapes,
+per-market coverage (Eurostat / StatCan / BTS), and how to run each fetcher
+locally.
 
 ## Running locally
 
@@ -118,16 +123,10 @@ triggers the same redeploy.
   bundler (esbuild/Vite) would precompile that ahead of time and let the
   browser skip downloading a compiler entirely, at the cost of adding an
   actual build step to an otherwise buildless static site.
-- **Full data payload on load.** `app.jsx` fetches all of
-  `airports.json` + `activity.json` + `forecast.json` + `macro.json`
-  (~1.4MB combined) on mount regardless of which airport is picked, since
-  the airport catalogue itself is derived from `activity.json`. Splitting
-  per-airport series into separate files (fetched only after airport
-  selection) would cut the initial payload substantially.
 - **US coverage is defined but not populated.** `scripts/fetch-bts.mjs`
   discovers and fetches BTS T-100 data by design, but as of the last nightly
   run the Socrata catalog exposes no working monthly segment dataset, so no
-  US airports currently ship in `activity.json`. See
+  US airports currently ship in `data/activity-index.json`. See
   [`data/README.md`](data/README.md) for status.
 - **No automated tests.** Correctness of the forecasting math and data
   pipeline is currently verified by manual review / CI-log inspection only.

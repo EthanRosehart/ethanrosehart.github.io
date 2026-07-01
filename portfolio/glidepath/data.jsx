@@ -1,16 +1,18 @@
 /* ============================================================
    data.jsx — real datasets + forecast access
    No synthetic series. Monthly activity (passengers / movements /
-   cargo) comes from public sources via the nightly pipeline
-   (data/activity.json); the short-term forecast is Meta Prophet,
-   precomputed server-side (data/forecast.json). The long-term
-   strategic model compounds the real base year with public macro
-   drivers. Everything here is exposed on window for the other
-   babel modules.
+   cargo) comes from public sources via the nightly pipeline. The
+   catalogue loads from a small index (data/activity-index.json,
+   metadata only); each airport's actual monthly series
+   (data/series/<IATA>.json) and short-term Prophet forecast
+   (data/forecasts/<IATA>.json) are fetched lazily, once that gateway
+   is selected — see app.jsx. The long-term strategic model compounds
+   the real base year with public macro drivers. Everything here is
+   exposed on window for the other babel modules.
    ============================================================ */
 
 /* ---- airport catalogue (built at runtime, not hand-curated) ---
-   AIRPORTS is filled from data/activity.json — every airport our
+   AIRPORTS is filled from data/activity-index.json — every airport our
    public feeds actually carry monthly data for — and enriched with
    the OpenFlights reference (data/airports.json). It stays the same
    array object (mutated in place) so the other babel modules that
@@ -43,10 +45,11 @@ const MONTHS = ["Jan","Feb","Mar","Apr","May","Jun","Jul","Aug","Sep","Oct","Nov
 const METRIC_KEYS = ["pax","atm","cargo"];
 
 /* ============================================================
-   OBSERVED ACTIVITY  (data/activity.json, real, same-origin)
-   iata -> { pax:{ "YYYY-MM":n }, atm:{...}, cargo:{...} }
-   Supports the new per-metric "series" shape and the legacy
-   passengers-only "monthly" shape.
+   OBSERVED ACTIVITY
+   data/activity-index.json — catalogue metadata only (no series), loaded
+   once on app mount. data/series/<IATA>.json — the actual monthly numbers
+   for one airport, iata -> { pax:{ "YYYY-MM":n }, atm:{...}, cargo:{...} },
+   fetched lazily once that gateway is selected (see app.jsx).
    ============================================================ */
 const OBSERVED = {};
 /* optional passenger composition by travel segment, iata -> { domestic:{"YYYY-MM":n},
@@ -60,21 +63,20 @@ const PAX_SEGMENTS = [
   { k:"international", label:"International",  color:"var(--violet)" },
 ];
 let ACTIVITY_META = null;
-function setActivity(json){
-  for (const k in OBSERVED) delete OBSERVED[k];
-  for (const k in SEGMENTS) delete SEGMENTS[k];
-  if (!json || !json.airports) return;
-  Object.keys(json.airports).forEach(iata => {
-    const a = json.airports[iata];
-    if (!a || !a.observed) return;
-    if (a.series && typeof a.series === "object") OBSERVED[iata] = a.series;
-    else if (a.monthly) OBSERVED[iata] = { pax: a.monthly };
-    if (a.paxSeg && typeof a.paxSeg === "object") SEGMENTS[iata] = a.paxSeg;
-  });
+/* the catalogue index — metadata for every airport, no series. Safe to call
+   again (e.g. a re-fetch) since it doesn't touch already-loaded OBSERVED. */
+function setActivityIndex(json){
   ACTIVITY_META = json;
   window.GP_ACTIVITY_META = json;
   rebuildAirports();
 }
+/* one airport's real monthly series, fetched lazily once selected. */
+function setAirportSeries(iata, json){
+  if (json && json.series && typeof json.series === "object") OBSERVED[iata] = json.series;
+  if (json && json.paxSeg && typeof json.paxSeg === "object") SEGMENTS[iata] = json.paxSeg;
+  else delete SEGMENTS[iata];
+}
+function hasAirportSeries(iata){ return !!OBSERVED[iata]; }
 
 /* segment keys that actually carry monthly data for an airport, in canonical
    order. Used to drive the shape-builder levers and segment view. */
@@ -114,23 +116,28 @@ function rebuildAirports(){
       elev: (r.elev_ft != null ? r.elev_ft : null),
       tz: r.tz || null,
       region: a.region || "—",
+      // metadata-only fields from the index — available immediately, before
+      // this airport's own series/forecast has been fetched
+      metrics: a.metrics || [],
+      hasPaxSeg: !!a.hasPaxSeg,
+      annualPax: a.annualPax ?? null,
     });
   });
   AIRPORTS.sort((x, y) => (x.region === y.region ? x.name.localeCompare(y.name) : x.region.localeCompare(y.region)));
   window.GP_AIRPORTS = AIRPORTS;
 }
+/* which metrics (pax/atm/cargo) a gateway carries — from the index, so this
+   is known immediately, before its series has been fetched. */
 function availableMetrics(iata){
-  const s = OBSERVED[iata]; if (!s) return [];
-  return METRIC_KEYS.filter(m => s[m] && Object.keys(s[m]).length);
+  const a = ACTIVITY_META && ACTIVITY_META.airports ? ACTIVITY_META.airports[iata] : null;
+  return (a && a.metrics) || [];
 }
 function activityFor(iata){
   const a = ACTIVITY_META && ACTIVITY_META.airports ? ACTIVITY_META.airports[iata] : null;
-  const s = OBSERVED[iata];
-  if (!a || !s || !s.pax) return { observed:false, source:"none", months:0, metrics:[] };
-  const paxKeys = Object.keys(s.pax);
-  return { observed:!!a.observed, source:a.source, rep:a.rep_airp,
-    months: a.months || paxKeys.length,
-    latest: paxKeys.sort().pop() || null,
+  if (!a || !a.observed) return { observed:false, source:"none", months:0, metrics:[] };
+  return { observed:true, source:a.source, rep:a.rep_airp,
+    months: a.months || 0,
+    latest: a.latest || null,
     metrics: availableMetrics(iata) };
 }
 /* airports we can actually show — real passenger data present */
@@ -149,17 +156,20 @@ function sourceBadge(src){
 }
 
 /* ============================================================
-   PROPHET FORECASTS  (data/forecast.json, precomputed nightly)
+   PROPHET FORECASTS, precomputed nightly.
+   data/forecast-meta.json — shared model metadata (generatedAt, interval,
+   horizon), loaded once on mount. data/forecasts/<IATA>.json — one
+   airport's forecast per metric, fetched lazily once selected:
    iata -> metric -> { mape, seasonal12, holidays, forecast[] }
    ============================================================ */
 const FORECASTS = {};
 let FORECAST_META = null;
-function setForecast(json){
-  for (const k in FORECASTS) delete FORECASTS[k];
-  if (!json || !json.airports) return;
-  Object.keys(json.airports).forEach(iata => { FORECASTS[iata] = json.airports[iata].metrics || {}; });
+function setForecastMeta(json){
   FORECAST_META = json;
   window.GP_FORECAST_META = json;
+}
+function setAirportForecast(iata, json){
+  FORECASTS[iata] = json || {};
 }
 function hasForecast(iata, key){
   const a = FORECASTS[iata];
@@ -404,6 +414,8 @@ Object.assign(window, {
   GP_availableMetrics:availableMetrics, GP_liveAirports:liveAirports,
   GP_sourceLabel:sourceLabel, GP_sourceBadge:sourceBadge,
   GP_segmentsFor:segmentsFor, GP_PAX_SEGMENTS:PAX_SEGMENTS,
-  GP_fmt:fmt, GP_setActivity:setActivity, GP_activityFor:activityFor, GP_setForecast:setForecast,
+  GP_fmt:fmt, GP_activityFor:activityFor,
+  GP_setActivityIndex:setActivityIndex, GP_setAirportSeries:setAirportSeries, GP_hasAirportSeries:hasAirportSeries,
+  GP_setForecastMeta:setForecastMeta, GP_setAirportForecast:setAirportForecast,
   GP_setReference:setReference, GP_rebuildAirports:rebuildAirports, GP_ensureMacro:ensureMacro,
 });

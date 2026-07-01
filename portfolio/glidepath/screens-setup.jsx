@@ -1,7 +1,7 @@
 /* ============================================================
    screens-setup.jsx — Onboarding (airport select) + Connect data
    ============================================================ */
-const { useState:useStateA, useEffect:useEffectA, useMemo:useMemoA } = React;
+const { useState:useStateA, useMemo:useMemoA } = React;
 
 /* simple inline icons */
 const Ico = {
@@ -54,7 +54,7 @@ function Onboarding({ onSelect, selected }){
             </div>
             {selected?.iata===a.iata
               ? <span style={{width:22,height:22,color:"var(--pink)"}}>{Ico.check}</span>
-              : <span className="air-meta">{(()=>{const fy=GP_fullYears(GP_buildHistory(a.iata),"pax");return fy.length?GP_fmt.k1(fy[fy.length-1].v)+"/yr":a.region;})()}</span>}
+              : <span className="air-meta">{a.annualPax ? GP_fmt.k1(a.annualPax)+"/yr" : a.region}</span>}
           </div>
         ))}
       </div>
@@ -73,7 +73,7 @@ function Onboarding({ onSelect, selected }){
             <div style={{width:54,height:54,borderRadius:12,background:"var(--pink-soft)",border:"1px solid var(--pink-line)",display:"grid",placeItems:"center",color:"var(--pink-2)",fontFamily:"var(--mono)",fontWeight:700,fontSize:18}}>{selected.iata}</div>
             <div>
               <div style={{fontSize:17,fontWeight:600}}>{selected.name}</div>
-              <div className="air-meta" style={{marginTop:3}}>{selected.icao} · {selected.lat!=null?selected.lat.toFixed(3):"—"}, {selected.lon!=null?selected.lon.toFixed(3):"—"} · {selected.region} · {(()=>{const fy=GP_fullYears(GP_buildHistory(selected.iata),"pax");return fy.length?GP_fmt.k1(fy[fy.length-1].v)+" PAX/yr":"—";})()}</div>
+              <div className="air-meta" style={{marginTop:3}}>{selected.icao} · {selected.lat!=null?selected.lat.toFixed(3):"—"}, {selected.lon!=null?selected.lon.toFixed(3):"—"} · {selected.region} · {selected.annualPax ? GP_fmt.k1(selected.annualPax)+" PAX/yr" : "—"}</div>
             </div>
           </div>
           <button className="btn btn-primary btn-lg" onClick={()=>onSelect(selected, true)}>Connect data {Ico.arrow}</button>
@@ -90,26 +90,26 @@ const SOURCES = [
   { id:"worldbank",   abbr:"WB", name:"World Bank Open Data", desc:"Population & historical GDP/capita — catchment driver", rows:"Indicators API", live:true, wired:true, kind:"macro" },
 ];
 
-function ConnectData({ airport, onDone, alreadyDone, macroMeta, actMeta, ofMeta }){
+/* progress/status here track the REAL fetches (App loads OpenFlights +
+   World Bank once on mount, and this airport's own series once selected) —
+   there's no simulated timer. "activity" is the one row genuinely still in
+   flight when this screen first shows, since it's fetched lazily per
+   airport rather than preloaded like the other two. */
+function ConnectData({ airport, onDone, alreadyDone, macroMeta, actMeta, ofMeta, seriesStatus }){
   const wb = macroMeta && macroMeta.countries ? macroMeta.countries[airport.cc] : null;
   const of = ofMeta && ofMeta.airports ? ofMeta.airports[airport.iata] : null;
   const act = (typeof GP_activityFor==="function") ? GP_activityFor(airport.iata) : null;
-  const [progress, setProgress] = useStateA(alreadyDone ? SOURCES.map(()=>100) : SOURCES.map(()=>0));
-  const [done, setDone] = useStateA(!!alreadyDone);
+  const forThisAirport = seriesStatus && seriesStatus.iata === airport.iata;
+  const activityReady = alreadyDone || (forThisAirport && seriesStatus.ready);
+  const activityError = forThisAirport && seriesStatus.error;
 
-  useEffectA(()=>{
-    if (alreadyDone) return;
-    const start = performance.now();
-    const durations = SOURCES.map((_,i)=> 700 + i*520 + Math.random()*300);
-    const total = Math.max(...durations);
-    const id = setInterval(()=>{
-      const el = performance.now()-start;
-      const next = durations.map(d => Math.min(100, Math.round((el/d)*100)));
-      setProgress(next);
-      if (el >= total){ setProgress(SOURCES.map(()=>100)); setDone(true); clearInterval(id); }
-    }, 60);
-    return ()=> clearInterval(id);
-  },[]);
+  const rowStatus = [
+    ofMeta ? "connected" : "syncing",
+    activityError ? "error" : activityReady ? "connected" : "syncing",
+    macroMeta ? "connected" : "syncing",
+  ];
+  const progress = [ ofMeta?100:0, activityError?100:activityReady?100:55, macroMeta?100:0 ];
+  const done = rowStatus.every(s => s==="connected");
 
   return (
     <div className="content fade-in" style={{maxWidth:820}}>
@@ -124,7 +124,7 @@ function ConnectData({ airport, onDone, alreadyDone, macroMeta, actMeta, ofMeta 
 
       <div className="grid" style={{gap:12, marginBottom:24}}>
         {SOURCES.map((s,i)=>{
-          const p = progress[i], ok = p>=100;
+          const p = progress[i], status = rowStatus[i], ok = status==="connected", err = status==="error";
           // the aviation feed badge reflects the actual provider for this
           // gateway — AVIA (Eurostat), CAN (Statistics Canada), BTS (US DOT)
           const ico = s.kind==="activity" && act ? GP_sourceBadge(act.source) : s.abbr;
@@ -137,7 +137,9 @@ function ConnectData({ airport, onDone, alreadyDone, macroMeta, actMeta, ofMeta 
                   {s.live && <span className="chip chip-ok" style={{fontSize:9.5, padding:"2px 7px"}}>LIVE</span>}
                 </div>
                 <div style={{fontSize:12.5, color:"var(--faint)", marginTop:2}}>
-                  {s.kind==="macro" && ok && wb
+                  {err
+                    ? <span style={{color:"var(--bad)"}}>Couldn't reach the {s.name} feed — check your connection and reload.</span>
+                    : s.kind==="macro" && ok && wb
                     ? <span>{wb.name}: population <b style={{color:"var(--cyan)"}}>{(wb.pop>=0?"+":"")+wb.pop}%</b> · GDP/capita <b style={{color:"var(--cyan)"}}>{(wb.gdpcap>=0?"+":"")+wb.gdpcap}%</b> ({wb.year})</span>
                     : s.kind==="openflights" && ok && of
                     ? <span>{of.icao} · {of.lat!=null?of.lat.toFixed(3):"—"}, {of.lon!=null?of.lon.toFixed(3):"—"} · verified against {ofMeta?ofMeta.count:""} reference airports</span>
@@ -147,10 +149,12 @@ function ConnectData({ airport, onDone, alreadyDone, macroMeta, actMeta, ofMeta 
                         : <span>No public monthly feed for {airport.iata} — series reconstructed from anchors</span>)
                     : s.desc}
                 </div>
-                <div className="src-bar"><i style={{width:p+"%"}}></i></div>
+                <div className="src-bar"><i style={{width:p+"%", background: err?"var(--bad)":undefined}}></i></div>
               </div>
               <div style={{textAlign:"right", minWidth:120}}>
-                {ok
+                {err
+                  ? <div style={{display:"flex",alignItems:"center",gap:7,justifyContent:"flex-end",color:"var(--bad)",fontSize:13,fontWeight:600}}><span className="dot" style={{background:"var(--bad)"}}></span>Failed</div>
+                  : ok
                   ? (s.kind==="activity" && act && !act.observed
                       ? <div style={{display:"flex",alignItems:"center",gap:7,justifyContent:"flex-end",color:"var(--amber)",fontSize:13,fontWeight:600}}><span className="dot" style={{background:"var(--amber)"}}></span>Modeled</div>
                       : <div style={{display:"flex",alignItems:"center",gap:7,justifyContent:"flex-end",color:"var(--ok)",fontSize:13,fontWeight:600}}><span className="dot dot-ok"></span>Connected</div>)
@@ -173,12 +177,12 @@ function ConnectData({ airport, onDone, alreadyDone, macroMeta, actMeta, ofMeta 
         borderColor: done?"var(--pink-line)":"var(--line)", background: done?"var(--pink-soft)":"var(--bg-1)"}}>
         <div style={{display:"flex",alignItems:"center",gap:14}}>
           <span style={{width:38,height:38,borderRadius:10,display:"grid",placeItems:"center",
-            background: done?"var(--pink)":"var(--bg-2)", color: done?"#12030a":"var(--faint)"}}>
-            {done ? Ico.check : <span className="spin" style={{width:18,height:18}}>{Ico.search}</span>}
+            background: done?"var(--pink)":activityError?"var(--bad)":"var(--bg-2)", color: done?"#12030a":activityError?"#2a0a0a":"var(--faint)"}}>
+            {done ? Ico.check : activityError ? "!" : <span className="spin" style={{width:18,height:18}}>{Ico.search}</span>}
           </span>
           <div>
-            <div style={{fontWeight:600, fontSize:15}}>{done ? (act && act.observed ? `Dataset ready — ${act.months} months of observed passengers` : "Dataset ready — 132 months assembled") : "Reconciling feeds…"}</div>
-            <div className="air-meta" style={{marginTop:3}}>{done ? (act && act.observed ? `${GP_sourceLabel(act.source)} passengers drive the forecasts · movements, seats & cargo aligned to ${airport.iata}` : "PAX · ATM · cargo · seats · macro drivers, all aligned to "+airport.iata) : "Cross-checking units, gaps and outliers"}</div>
+            <div style={{fontWeight:600, fontSize:15}}>{done ? (act && act.observed ? `Dataset ready — ${act.months} months of observed passengers` : "Dataset ready — 132 months assembled") : activityError ? "Couldn't load this gateway's data" : "Reconciling feeds…"}</div>
+            <div className="air-meta" style={{marginTop:3}}>{done ? (act && act.observed ? `${GP_sourceLabel(act.source)} passengers drive the forecasts · movements, seats & cargo aligned to ${airport.iata}` : "PAX · ATM · cargo · seats · macro drivers, all aligned to "+airport.iata) : activityError ? "Try reloading the page" : "Cross-checking units, gaps and outliers"}</div>
           </div>
         </div>
         <button className="btn btn-primary btn-lg" disabled={!done} onClick={onDone}>Build forecast {Ico.arrow}</button>

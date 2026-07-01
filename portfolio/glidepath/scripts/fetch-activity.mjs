@@ -2,14 +2,20 @@
 /* ============================================================
  * fetch-activity.mjs — Glidepath monthly activity snapshot
  *
- * Pulls EVERY airport our public sources expose monthly data for —
- * no hand-curated airport list. Writes the per-metric shape into
- * data/activity.json:
- *   airports[IATA] = { observed, source, rep_airp, country(ISO2),
- *                      cc(ISO3), countryName, region, name, city,
- *                      icao, lat, lon, months, latest,
- *                      series:{ pax:{"YYYY-MM":n}, atm:{...}, cargo:{...} },
- *                      monthly:<alias of series.pax> }
+ * Pulls EVERY airport our public sources expose monthly data for — no
+ * hand-curated airport list. Writes a SPLIT layout so the browser never
+ * has to download every airport's numbers just to show the picker:
+ *
+ *   data/activity-index.json          — catalogue metadata, no series:
+ *     airports[IATA] = { observed, source, rep_airp, country(ISO2),
+ *                        cc(ISO3), countryName, region, name, city,
+ *                        icao, lat, lon, months, latest,
+ *                        metrics:["pax","atm","cargo"], hasPaxSeg,
+ *                        annualPax (last full calendar year, for the
+ *                        picker's "68.0M/yr" summary) }
+ *   data/series/<IATA>.json           — one file per airport, fetched by
+ *     the browser only once that gateway is selected:
+ *       { series:{ pax:{"YYYY-MM":n}, atm:{...}, cargo:{...} }, paxSeg? }
  *
  *   • Europe → Eurostat avia_paoa (passengers + flights) and avia_gooa
  *              (freight, tonnes), pulled for ALL reporting airports in a
@@ -17,12 +23,16 @@
  *              OpenFlights reference (data/airports.json).
  *   • Canada → StatCan WDS 23-10-0312 (screened passengers, monthly) +
  *              23-10-0008 (aircraft movements), resolved by airport name.
- *   • US     → fetch-bts.mjs (separate), merged in.
+ *   • US     → fetch-bts.mjs (separate), maintains its own entries in the
+ *              same index + series directory; this script only touches
+ *              the airports it computes (eurostat ∪ statcan) and leaves
+ *              BTS-sourced entries untouched.
  *
- * Best-effort + per-metric: a failure keeps the last good series and never
- * injects synthetic data. Airports are kept only when they carry enough
- * real monthly passenger history; the busiest are capped to keep the
- * nightly Prophet build bounded.
+ * Best-effort + per-metric: a failure keeps the last good series (read
+ * back from the previous data/series/<IATA>.json) and never injects
+ * synthetic data. Airports are kept only when they carry enough real
+ * monthly passenger history; the busiest are capped to keep the nightly
+ * Prophet build bounded.
  *
  * Run locally:  node scripts/fetch-activity.mjs
  * ============================================================ */
@@ -30,10 +40,12 @@
 import { writeFile, readFile, mkdir } from "node:fs/promises";
 import { dirname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
+import { lastFullYearTotal, metricsIn, pruneDir } from "./_util.mjs";
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const DATA = resolve(__dirname, "..", "data");
-const OUT = resolve(DATA, "activity.json");
+const OUT = resolve(DATA, "activity-index.json");
+const SERIES_DIR = resolve(DATA, "series");
 const REF = resolve(DATA, "airports.json");
 const UA = { "User-Agent": "glidepath-data-bot" };
 
@@ -233,11 +245,21 @@ async function statcanSeries(pid, coord) {
 
 /* ============================================================ */
 async function loadJSON(path) { try { return JSON.parse(await readFile(path, "utf8")); } catch { return null; } }
-function prevSeries(prev, iata, metric) {
-  const a = prev?.airports?.[iata]; if (!a) return null;
-  if (a.series?.[metric] && Object.keys(a.series[metric]).length) return a.series[metric];
-  if (metric === "pax" && a.monthly && Object.keys(a.monthly).length) return a.monthly;
-  return null;
+
+/* previous per-airport series, read from data/series/<IATA>.json (not the
+   index, which no longer carries series) — cached per-iata since a couple
+   of metrics may ask for the same airport's file */
+const _prevSeriesCache = new Map();
+async function prevAirportSeries(iata) {
+  if (_prevSeriesCache.has(iata)) return _prevSeriesCache.get(iata);
+  const doc = await loadJSON(resolve(SERIES_DIR, `${iata}.json`));
+  const val = doc?.series || null;
+  _prevSeriesCache.set(iata, val);
+  return val;
+}
+async function prevSeries(iata, metric) {
+  const s = await prevAirportSeries(iata);
+  return (s && s[metric] && Object.keys(s[metric]).length) ? s[metric] : null;
 }
 const recent12 = (m) => Object.keys(m).sort().slice(-12).reduce((t, k) => t + (m[k] || 0), 0);
 
@@ -299,7 +321,7 @@ async function main() {
     for (const metric of ["pax", "atm", "cargo"]) {
       const m = euData[metric]?.[icao]?.monthly;
       if (m && Object.keys(m).length >= 12) { series[metric] = m; live++; }
-      else { const kept = prevSeries(prev, iata, metric); if (kept) series[metric] = kept; }
+      else { const kept = await prevSeries(iata, metric); if (kept) series[metric] = kept; }
     }
     if (!series.pax || Object.keys(series.pax).length < MIN_MONTHS) continue;
     const paxSeg = {};
@@ -336,7 +358,7 @@ async function main() {
       }
       if (got) { series[metric] = got; live++; }
       else {
-        const kept = prevSeries(prev, iata, metric);
+        const kept = await prevSeries(iata, metric);
         if (kept) series[metric] = kept;
         console.warn(`  ${iata}/${metric} statcan failed (${lastErr ? lastErr.message : "no data"})${kept ? " — kept previous" : ""}`);
       }
@@ -366,34 +388,57 @@ async function main() {
   }
   console.log(`  statcan: wrote ${caN} airports`);
 
-  /* ---------- carry over US/BTS airports owned by fetch-bts.mjs ---------- */
-  if (prev?.airports) for (const k of Object.keys(prev.airports)) {
-    if (!airports[k] && prev.airports[k]?.source === "bts") airports[k] = prev.airports[k];
+  /* ---------- split into index metadata + per-airport series files ----------
+     This script owns the eurostat ∪ statcan airports; BTS-sourced entries
+     (maintained independently by fetch-bts.mjs, which runs after this script
+     in the workflow) are carried over from the previous index untouched. */
+  const btsCarry = {};
+  if (prev?.airports) for (const [k, v] of Object.entries(prev.airports)) {
+    if (v?.source === "bts") btsCarry[k] = v;
   }
+
+  await mkdir(DATA, { recursive: true });
+  await mkdir(SERIES_DIR, { recursive: true });
+
+  const indexAirports = { ...btsCarry };
+  for (const [iata, a] of Object.entries(airports)) {
+    const { series, monthly, paxSeg, ...meta } = a;
+    indexAirports[iata] = {
+      ...meta,
+      metrics: metricsIn(series),
+      hasPaxSeg: !!(paxSeg && Object.keys(paxSeg).length >= 2),
+      annualPax: lastFullYearTotal(series.pax),
+    };
+    await writeFile(
+      resolve(SERIES_DIR, `${iata}.json`),
+      JSON.stringify({ series, ...(paxSeg && Object.keys(paxSeg).length >= 2 ? { paxSeg } : {}) }) + "\n",
+      "utf8"
+    );
+  }
+  await pruneDir(SERIES_DIR, Object.keys(indexAirports));
 
   const out = {
     generatedAt: new Date().toISOString(),
-    note: "Monthly activity (passengers / movements / cargo) by airport. Refreshed nightly; read same-origin by the browser. No synthetic data.",
+    note: "Monthly activity (passengers / movements / cargo) catalogue by airport — metadata only. Per-airport series live in data/series/<IATA>.json, fetched by the browser once that gateway is selected. Refreshed nightly; read same-origin. No synthetic data.",
     sources: {
       eurostat: "Eurostat avia_paoa (PAS_CRD pax + NAT/INTL split, CAF_PAS flights) + avia_gooa (FRM_LD_NLD cargo, tonnes) — all reporting airports",
       statcan: "Statistics Canada WDS 23-10-0312 (screened pax, by domestic/transborder/international sector), 23-10-0296 (aircraft movements; 23-10-0008 fallback)",
       bts: "US DOT BTS T-100 (fetch-bts.mjs)",
     },
-    airports,
+    airports: indexAirports,
   };
-  await mkdir(DATA, { recursive: true });
   await writeFile(OUT, JSON.stringify(out) + "\n", "utf8");
 
   /* trim airports.json to just the catalogue, so the browser load stays small */
   if (refDoc) {
     const trimmed = {};
-    for (const iata of Object.keys(airports)) if (ref[iata]) trimmed[iata] = ref[iata];
+    for (const iata of Object.keys(indexAirports)) if (ref[iata]) trimmed[iata] = ref[iata];
     refDoc.airports = trimmed; refDoc.count = Object.keys(trimmed).length;
     refDoc.note = "Airport reference trimmed to the airports that carry data (full set is rebuilt nightly by fetch-openflights.mjs).";
     await writeFile(REF, JSON.stringify(refDoc) + "\n", "utf8");
   }
 
-  console.log(`Wrote ${OUT} — ${Object.keys(airports).length} airports, ${live} live metric-series.`);
+  console.log(`Wrote ${OUT} — ${Object.keys(indexAirports).length} airports (${Object.keys(airports).length} eurostat/statcan + ${Object.keys(btsCarry).length} carried BTS), ${live} live metric-series.`);
 }
 
 main().catch((err) => { console.error("Activity snapshot failed:", err.message); process.exit(1); });

@@ -10,17 +10,22 @@ monthly activity for it.
 ┌──────────────────────────┐     nightly cron (03:17 UTC)
 │ GitHub Action runner      │ ── fetch ──▶ OpenFlights · Eurostat · StatCan
 │ scripts/*.mjs + *.py      │ ◀── JSON ──   World Bank · (Prophet, server-side)
-             │ git commit data/*.json
+             │ git commit data/
              ▼
 ┌──────────────────────────┐
 │ Repo  →  GitHub Pages     │  (auto-redeploy on push)
-             │ same-origin fetch("data/*.json")
+             │ same-origin fetch()
              ▼
 ┌──────────────────────────┐
-│ Browser (index.html)      │  builds its airport catalogue from the snapshots;
-│ app.jsx loader            │  falls back to nothing if a file is missing
-└──────────────────────────┘
+│ Browser (index.html)      │  loads the small index files on mount to build
+│ app.jsx loader            │  the airport catalogue; fetches one airport's own
+└──────────────────────────┘  series/forecast only once that gateway is selected
 ```
+
+Data is split into a small **index** (catalogue metadata, loaded on every page
+visit) and **per-airport files** (the actual monthly numbers, fetched lazily —
+only for the airport a visitor selects). This keeps the initial page load to a
+few tens of KB instead of downloading every airport's history up front.
 
 The pipeline runs in this order (see `.github/workflows/refresh-data.yml`):
 `fetch-openflights` → `fetch-activity` → `fetch-bts` → `fetch-data` →
@@ -35,10 +40,24 @@ for every airport with both an IATA and ICAO code. `fetch-activity.mjs` uses it
 to map the ICAO codes the aviation feeds report back to IATA, then **trims** the
 file down to just the airports that carry data, so the browser load stays small.
 
-### Monthly activity — `data/activity.json` (`scripts/fetch-activity.mjs`)
-Real monthly **passengers / movements / cargo** by airport. **This is the series
-the forecasts run on.** The browser builds its entire airport catalogue from this
-file (enriched by `airports.json`); there is no hand-curated airport list.
+### Monthly activity — `data/activity-index.json` + `data/series/<IATA>.json`
+(`scripts/fetch-activity.mjs`, `scripts/fetch-bts.mjs`)
+
+Real monthly **passengers / movements / cargo** by airport. **This is the
+series the forecasts run on.** `activity-index.json` holds catalogue metadata
+only (source, months, latest, which metrics are available, and a precomputed
+`annualPax` figure for the picker's "68.0M/yr" summary) — no series data, so
+the browser can build its entire airport catalogue (enriched by
+`airports.json`) from one small file; there is no hand-curated airport list.
+Each airport's actual monthly numbers live in their own
+`data/series/<IATA>.json`, fetched by the browser only once that gateway is
+selected.
+
+`fetch-activity.mjs` owns the Eurostat/StatCan-sourced entries; `fetch-bts.mjs`
+runs after it and separately maintains its own (currently empty, see below)
+entries in the same index + `series/` directory, so the two scripts never
+clobber each other's airports. Both prune `series/<IATA>.json` files for
+airports that drop out of their respective sets.
 
 | Market | Source | Notes |
 |--------|--------|-------|
@@ -48,10 +67,12 @@ file (enriched by `airports.json`); there is no hand-curated airport list.
 
 Eurostat airport codes are `<geo>_<ICAO>` (e.g. `ES_LEMD`, `AT_LOWG`); the geo
 prefix gives the country (`EL`→GR, `UK`→GB, else ISO-3166 alpha-2). The country,
-ISO codes, region and display name ride on each airport in `activity.json`.
+ISO codes, region and display name ride on each airport in
+`activity-index.json`.
 
 ### Macro drivers — `data/macro.json` (`scripts/fetch-data.mjs`)
-Pulls three World Bank indicators for every country present in `activity.json`:
+Pulls three World Bank indicators for every country present in
+`activity-index.json`:
 
 | Field    | World Bank indicator   | Reduction                       | Feeds            |
 |----------|------------------------|---------------------------------|------------------|
@@ -63,12 +84,19 @@ The loader overlays these over the `MACRO` table in `data.jsx`, creating a
 default entry (`GP_ensureMacro`) for any country not already listed, so the
 long-term elasticity lever reflects live macro for every catalogue airport.
 
-### Short-term forecasts — `data/forecast.json` (`scripts/build-forecast.py`)
+### Short-term forecasts — `data/forecast-meta.json` + `data/forecasts/<IATA>.json`
+(`scripts/build-forecast.py`)
+
 Meta **Prophet** (additive trend + multiplicative yearly seasonality + country
 public holidays, via the `holidays` package) fit **server-side** per airport per
-metric on the real `activity.json` series. The browser renders these directly —
-no forecasting happens client-side. Each airport's ISO-2 country (for the holiday
-calendar) is read from `activity.json`.
+metric on the real series in `data/series/<IATA>.json`. `forecast-meta.json`
+holds only the shared model metadata (generatedAt, model, library, interval,
+horizon) — tiny, loaded once. Each airport's actual forecast output lives in
+its own `data/forecasts/<IATA>.json`, fetched by the browser only once that
+gateway is selected (the same lazy pattern as the activity series). The
+browser renders these directly — no forecasting happens client-side. Each
+airport's ISO-2 country (for the holiday calendar) is read from
+`activity-index.json`.
 
 The **COVID collapse (2020-03 → 2021-12)** is modeled as one explicit dummy
 event per month rather than fed in as ordinary data — Prophet attributes the
@@ -85,10 +113,10 @@ MAPE from ~16% to ~5%.
 ## Run it locally
 ```bash
 node scripts/fetch-openflights.mjs # airports.json (OpenFlights full reference)
-node scripts/fetch-activity.mjs    # activity.json (Eurostat + StatCan) + trims airports.json
-node scripts/fetch-bts.mjs         # activity.json (US BTS — currently a no-op)
-node scripts/fetch-data.mjs        # macro.json    (World Bank, no key)
-python scripts/build-forecast.py   # forecast.json (Meta Prophet; pip install prophet holidays pandas)
+node scripts/fetch-activity.mjs    # activity-index.json + series/<IATA>.json (Eurostat + StatCan) + trims airports.json
+node scripts/fetch-bts.mjs         # activity-index.json + series/<IATA>.json (US BTS — currently a no-op)
+node scripts/fetch-data.mjs        # macro.json (World Bank, no key)
+python scripts/build-forecast.py   # forecast-meta.json + forecasts/<IATA>.json (Meta Prophet; pip install prophet holidays pandas)
 ```
 Node 20+. Each rewrites its snapshot under `data/`. Commit the result, or let the
 Action do it.
