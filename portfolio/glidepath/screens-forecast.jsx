@@ -291,14 +291,15 @@ function ShortTerm({ airport, history }){
               ["Method","Meta Prophet · trend + yearly + holidays"],
               ["Seasonality","Multiplicative yearly (Fourier)"],
               ["Holidays",d.st.holidaysTotal+" public · "+macro.label],
+              ...(d.st.gdpRegressor?[["GDP/capita","World Bank actuals + trailing-rate extrapolation"]]:[]),
               ["Shocks","COVID 2020–21 modeled as events"],
               ["Backtest","12-month holdout"],
               ["Accuracy",d.st.mape!=null?("MAPE ±"+d.st.mape+"%"):"—"],
               ["Refresh","Nightly · server-side"],
-            ].map((r,i)=>(
-              <div key={i} style={{display:"flex",justifyContent:"space-between",gap:16,padding:"10px 0",borderBottom:i<6?"1px solid var(--line)":"none"}}>
+            ].map((r,i,arr)=>(
+              <div key={i} style={{display:"flex",justifyContent:"space-between",gap:16,padding:"10px 0",borderBottom:i<arr.length-1?"1px solid var(--line)":"none"}}>
                 <span style={{color:"var(--faint)",fontSize:13}}>{r[0]}</span>
-                <span style={{fontSize:13,textAlign:"right",fontFamily:i>=4&&i<=5?"var(--mono)":"var(--sans)",color:i>=4&&i<=5?"var(--pink-2)":"var(--dim)"}}>{r[1]}</span>
+                <span style={{fontSize:13,textAlign:"right",fontFamily:r[0]==="Backtest"||r[0]==="Accuracy"?"var(--mono)":"var(--sans)",color:r[0]==="Backtest"||r[0]==="Accuracy"?"var(--pink-2)":"var(--dim)"}}>{r[1]}</span>
               </div>
             ))}
           </div>

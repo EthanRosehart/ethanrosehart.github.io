@@ -290,7 +290,7 @@ function forecastFor(iata, key){
   const forecast = (m.forecast || []).map(r => ({ ...r, label:`${MONTHS[r.m]} ${String(r.y).slice(2)}` }));
   return { forecast, mape:m.mape, seasIdx:m.seasonal12 || Array(12).fill(1),
     holidays:m.holidays || [], holidaysTotal:m.holidays_total || 0,
-    latest:m.latest, monthsHistory:m.months_history };
+    latest:m.latest, monthsHistory:m.months_history, gdpRegressor:!!m.gdpRegressor };
 }
 
 /* ============================================================

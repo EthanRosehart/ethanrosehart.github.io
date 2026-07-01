@@ -3,8 +3,9 @@
 # test_build_forecast.py — tests for build-forecast.py's pure-logic helpers
 #
 # Covers the functions that don't require an actual Prophet fit (series_frame,
-# seasonal12, covid_events, monthly_holidays, prune_stale, load_airport_series)
-# — the model-fitting path (fit_predict/backtest_mape/forecast_metric) is
+# seasonal12, covid_events, monthly_holidays, gdp_monthly_series, prune_stale,
+# load_airport_series) — the model-fitting path (fit_predict/backtest_mape/
+# forecast_metric) is
 # exercised by the nightly CI run against real data instead, since fitting
 # Prophet per test would make this suite slow and non-deterministic-ish.
 #
@@ -45,6 +46,39 @@ def test_series_frame_sorts_and_drops_nulls(bf):
 def test_series_frame_empty_or_all_null_returns_none(bf):
     assert bf.series_frame({}) is None
     assert bf.series_frame({"2024-01": None, "2024-02": None}) is None
+
+
+def test_gdp_monthly_series_interpolates_between_known_years(bf):
+    # 5% flat annual growth, anchored at July 1 of each year -> the midpoint
+    # between two anchors (Jan 1) should land exactly halfway.
+    levels = {2022: 100.0, 2023: 105.0, 2024: 110.25}
+    months = [pd.Timestamp(2023, 1, 1), pd.Timestamp(2022, 7, 1), pd.Timestamp(2024, 7, 1)]
+    out = bf.gdp_monthly_series(levels, 5.0, months)
+    assert out[0] == pytest.approx(102.5)   # halfway between the 2022 and 2023 anchors
+    assert out[1] == pytest.approx(100.0)   # exact anchor
+    assert out[2] == pytest.approx(110.25)  # exact anchor
+
+
+def test_gdp_monthly_series_extrapolates_past_the_known_years(bf):
+    # World Bank publishes no GDP forecast — extrapolation past the last
+    # known year has to compound the given trailing growth rate, not just
+    # flat-line or error out.
+    levels = {2022: 100.0, 2023: 105.0, 2024: 110.25}
+    out = bf.gdp_monthly_series(levels, 5.0, [pd.Timestamp(2025, 7, 1), pd.Timestamp(2021, 7, 1)])
+    assert out[0] == pytest.approx(110.25 * 1.05, rel=1e-6)  # one year past the last anchor
+    assert out[1] == pytest.approx(100.0 / 1.05, rel=1e-6)   # one year before the first anchor
+
+
+def test_gdp_monthly_series_returns_none_when_no_levels_available(bf):
+    assert bf.gdp_monthly_series({}, 5.0, [pd.Timestamp(2024, 1, 1)]) is None
+    assert bf.gdp_monthly_series(None, 5.0, [pd.Timestamp(2024, 1, 1)]) is None
+
+
+def test_gdp_monthly_series_treats_a_missing_growth_rate_as_flat(bf):
+    # a country can have real levels but no trailing-rate summary (e.g. a
+    # brand new entry) — extrapolation should hold flat, not crash.
+    out = bf.gdp_monthly_series({2023: 100.0}, None, [pd.Timestamp(2025, 7, 1)])
+    assert out[0] == pytest.approx(100.0)
 
 
 def test_seasonal12_returns_twelve_values_reflecting_the_pattern(bf):

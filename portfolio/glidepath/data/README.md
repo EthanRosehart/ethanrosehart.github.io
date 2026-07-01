@@ -74,15 +74,19 @@ ISO codes, region and display name ride on each airport in
 Pulls three World Bank indicators for every country present in
 `activity-index.json`:
 
-| Field    | World Bank indicator   | Reduction                       | Feeds            |
-|----------|------------------------|---------------------------------|------------------|
-| `gdp`    | `NY.GDP.MKTP.KD.ZG`    | trailing 5-yr mean              | reference        |
-| `gdpcap` | `NY.GDP.PCAP.KD.ZG`    | trailing 5-yr mean              | GDP/capita lever |
-| `pop`    | `SP.POP.TOTL`          | latest year-over-year % change  | population lever |
+| Field           | World Bank indicator   | Reduction                       | Feeds                        |
+|-----------------|------------------------|----------------------------------|------------------------------|
+| `gdp`           | `NY.GDP.MKTP.KD.ZG`    | trailing 5-yr mean               | reference                    |
+| `gdpcap`        | `NY.GDP.PCAP.KD.ZG`    | trailing 5-yr mean                | GDP/capita lever + regressor extrapolation rate |
+| `gdpcapSeries`  | `NY.GDP.PCAP.KD`       | full yearly level series, untouched | Prophet's GDP/capita regressor (`build-forecast.py`) |
+| `pop`           | `SP.POP.TOTL`          | latest year-over-year % change   | population lever              |
 
 The loader overlays these over the `MACRO` table in `data.jsx`, creating a
 default entry (`GP_ensureMacro`) for any country not already listed, so the
 long-term elasticity lever reflects live macro for every catalogue airport.
+`gdpcapSeries` is the one field kept as real annual levels rather than
+reduced to a single number — `build-forecast.py` needs actual history to
+interpolate, not just a summary growth rate (see below).
 
 ### Short-term forecasts — `data/forecast-meta.json` + `data/forecasts/<IATA>.json`
 (`scripts/build-forecast.py`)
@@ -106,9 +110,21 @@ trend-uncertainty band. Nothing is dropped: every observed month still trains th
 model and appears on the actuals chart. In CI this cut median passenger backtest
 MAPE from ~16% to ~5%.
 
+When a **GDP/capita** series is available for the airport's country
+(`gdpcapSeries` above), it rides along as a Prophet `extra_regressor` —
+`gdp_monthly_series()` anchors each real annual level at that year's
+midpoint, linearly interpolates between anchors for the training window,
+and extrapolates past the last known year by compounding the trailing
+growth rate (`gdpcap`) at a monthly rate. World Bank publishes no GDP
+*forecast* product, so this is disclosed as an extrapolation of real data,
+not fed to the model as if it were a third-party projection — every
+metric's forecast JSON carries a `gdpRegressor: true/false` flag, and the
+Short-term screen's model card shows it when present. A country with no
+`gdpcapSeries` yet just fits without the regressor, same as before.
+
 > Income elasticity, tourism and fuel remain model assumptions in the long-term
-> lever (no clean single public series). Passengers, movements, cargo and macro
-> drivers are the wired real feeds.
+> lever (no clean single public series for either). Passengers, movements,
+> cargo, macro drivers and (for Prophet) GDP/capita are the wired real feeds.
 
 ## Run it locally
 ```bash

@@ -34,9 +34,14 @@ same catalogue and forecasting machinery.
   (passengers / movements / cargo). The 2020–21 COVID collapse is modeled as
   explicit monthly events rather than deleted, so it doesn't distort
   seasonality or inflate the uncertainty band while every observed month
-  still trains the model. The browser only renders precomputed output — no
-  forecasting happens client-side. See
-  [`scripts/build-forecast.py`](scripts/build-forecast.py).
+  still trains the model. Where a real GDP/capita history is on file for the
+  airport's country, it rides along as an `extra_regressor` — real World
+  Bank annual levels, interpolated monthly for training and extrapolated
+  forward (at the trailing growth rate) for the horizon, since World Bank
+  itself publishes no GDP forecast. Every forecast's `gdpRegressor` flag
+  discloses whether it was used; see `gdp_monthly_series()` in
+  [`scripts/build-forecast.py`](scripts/build-forecast.py). The browser only
+  renders precomputed output — no forecasting happens client-side.
 - **Long-term (strategic):** an elasticity model —
   `g = GDPpc·ε + pop + 0.5·tourism + lcc − 0.18·fuel` — compounding the real
   observed base year on its own seasonal shape. Movements track passengers
@@ -222,9 +227,10 @@ same functions `app.jsx` and the screens call — so a regression in the
 elasticity model, event shocks, or segment reconciliation gets caught
 here rather than by a visitor. The Python suite covers `build-forecast.py`'s
 pure-logic helpers (series framing, seasonal index, the COVID dummy-event
-window, holiday-date snapping); the actual Prophet fit is comparatively
-low-risk (it's a well-tested library) and is exercised for real against
-live data by the nightly run instead of being re-fit in CI.
+window, holiday-date snapping, the GDP/capita regressor's interpolation and
+extrapolation math); the actual Prophet fit is comparatively low-risk (it's
+a well-tested library) and is exercised for real against live data by the
+nightly run instead of being re-fit in CI.
 
 ## Deploying
 

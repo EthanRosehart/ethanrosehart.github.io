@@ -311,3 +311,12 @@ test("GP_removeCustomAirport: a reset app doesn't leave a ghost gateway behind",
   assert.ok(!win.GP_liveAirports().find(x => x.iata === "C-GHOST"), "removed airport must no longer be searchable");
   assert.equal(win.GP_buildHistory("C-GHOST").length, 0, "its series data must be gone too, not just the catalogue entry");
 });
+
+test("GP_forecastFor: passes gdpRegressor through so the model card can disclose it", () => {
+  const win = loadDataModule();
+  win.GP_setAirportForecast("TST", { pax: { mape: 3.1, forecast: [], gdpRegressor: true } });
+  win.GP_setAirportForecast("OTH", { pax: { mape: 3.1, forecast: [] } }); // no field at all — older/simpler fixture
+  assert.equal(win.GP_forecastFor("TST", "pax").gdpRegressor, true);
+  assert.equal(win.GP_forecastFor("OTH", "pax").gdpRegressor, false, "missing gdpRegressor must coerce to false, not undefined");
+  assert.equal(win.GP_forecastFor("TST", "atm"), null, "a metric this airport has no forecast for is null, not a crash");
+});
