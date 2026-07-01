@@ -95,9 +95,9 @@ countries for a while; fixed, now ~30.
 World Bank's Indicators API is historical-actuals only — it has no GDP
 *forecast* product. IMF's **World Economic Outlook** (WEO, refreshed every
 April/October) does: real GDP/capita growth projections 2–5 years out, per
-country. Pulled via IMF's plain-JSON DataMapper API (`NGDPRPC` — real
-GDP/capita, constant prices, national currency; growth is derived from
-consecutive years' levels) rather than OECD's SDMX Economic Outlook feed,
+country. Pulled via IMF's plain-JSON DataMapper API (`NGDPRPC_PCH` — real
+per-capita GDP growth, IMF's own precomputed annual % change series) rather
+than OECD's SDMX Economic Outlook feed,
 which was tried three separate times for this same purpose and dropped
 after persistent HTTP 500s (see git history on the now-deleted
 `fetch-oecd.mjs`) — IMF's API has no dataflow version or key-shape to guess

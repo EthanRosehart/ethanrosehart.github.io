@@ -8,14 +8,14 @@
  * an extrapolation of history — unlike the trailing-rate extrapolation
  * build-forecast.py falls back to for a country this file doesn't cover.
  *
- * Uses NGDPRPC (real GDP per capita, constant prices, national currency)
- * rather than an aggregate growth indicator: the long-term model's "gdp"
- * lever is specifically PER-CAPITA growth — population growth is already
- * a separate additive term (see defaultScenario() in data.jsx) — so
- * feeding it aggregate growth would double-count population. Growth
- * rates are derived from consecutive years' levels, which also sidesteps
- * any currency conversion: levels stay in national currency; only the
- * ratio between consecutive years is used.
+ * Uses NGDPRPC_PCH (real per-capita GDP growth, IMF's own precomputed
+ * percent-change series) rather than an aggregate growth indicator: the
+ * long-term model's "gdp" lever is specifically PER-CAPITA growth —
+ * population growth is already a separate additive term (see
+ * defaultScenario() in data.jsx) — so feeding it aggregate growth would
+ * double-count population. The API returns the growth rate directly, so
+ * there's no level-to-percent derivation (and no currency conversion to
+ * worry about either).
  *
  * Deliberately NOT OECD's SDMX Economic Outlook endpoint: that was tried
  * three separate times for this exact purpose (see git history on the
@@ -59,95 +59,52 @@ async function deriveCountries() {
   return countries;
 }
 
-const INDICATOR = "NGDPRPC"; // real GDP per capita, constant prices (national currency)
+const INDICATOR = "NGDPRPC_PCH"; // real per-capita GDP growth, % change (IMF's own precomputed series)
 const API = "https://www.imf.org/external/datamapper/api/v1";
-const YEARS_BACK = 1; // one actual year further back, so the first projected year has a predecessor to grow from
-const YEARS_FWD = 5;  // WEO's typical projection horizon
+const YEARS_FWD = 5; // WEO's typical projection horizon
 
 /** One request per country: batching multiple countries into a single path
- *  doesn't appear to be supported by the real API — a semicolon-joined
- *  segment silently fell through to the root {"api":{"version":...}}
- *  response, and a slash-joined multi-segment path 404'd. The documented
- *  single-country example (.../INDICATOR/COUNTRY?periods=...) is the one
- *  actually verified to work. Throws on a genuine failure for this country;
- *  callers treat that as "no data for this country," never a hard stop. */
-async function fetchCountryLevels(cc, periods, diag) {
+ *  isn't supported by the real API — a semicolon-joined segment silently
+ *  fell through to the root {"api":{"version":...}} response, and a
+ *  slash-joined multi-segment path 404'd. The documented single-country
+ *  example (.../INDICATOR/COUNTRY?periods=...) is the one actually verified
+ *  to work. Throws on a genuine failure for this country; callers treat
+ *  that as "no data for this country," never a hard stop. */
+async function fetchCountryRates(cc, periods) {
   const url = `${API}/${INDICATOR}/${cc}?periods=${periods.join(",")}`;
   const res = await fetch(url, { headers: { "User-Agent": "glidepath-data-bot" } });
   if (!res.ok) throw new Error(`HTTP ${res.status}`);
   const body = await res.json();
-  const levels = body?.values?.[INDICATOR]?.[cc];
-  if (!levels || typeof levels !== "object") {
-    // diagnostic only, temporary, and only logged once: dump the real
-    // top-level keys/body sample the first time the shape doesn't match
-    // what's assumed, so a CI log shows exactly what came back instead of
-    // guessing blind again.
-    if (diag && !diag.logged) {
-      diag.logged = true;
-      console.error(`IMF ${cc} response top-level keys:`, body && typeof body === "object" ? Object.keys(body) : typeof body);
-      console.error(`IMF ${cc} response sample:`, JSON.stringify(body).slice(0, 1500));
-    }
-    throw new Error("unexpected payload shape");
-  }
-  return levels; // { "2025": 12345.6, "2026": ..., ... }
+  const rates = body?.values?.[INDICATOR]?.[cc];
+  if (!rates || typeof rates !== "object") throw new Error("unexpected payload shape");
+  return rates; // { "2025": 1.8, "2026": 2.1, ... } — already percent growth
 }
 
-async function fetchLevels(codes) {
+async function fetchRates(codes) {
   const now = new Date().getFullYear();
   const periods = [];
-  for (let y = now - YEARS_BACK; y <= now + YEARS_FWD; y++) periods.push(y);
-  const diag = { logged: false };
+  for (let y = now; y <= now + YEARS_FWD; y++) periods.push(y);
   const values = {};
   const failed = [];
   await Promise.all(codes.map(async (cc) => {
     try {
-      values[cc] = await fetchCountryLevels(cc, periods, diag);
+      values[cc] = await fetchCountryRates(cc, periods);
     } catch (e) {
       failed.push(`${cc} (${e.message})`);
     }
   }));
   if (failed.length) console.warn(`IMF: no data for ${failed.length}/${codes.length} countries — ${failed.slice(0, 5).join(", ")}${failed.length > 5 ? ", …" : ""}`);
-  return values; // { CC: { "2025": 12345.6, "2026": ..., ... }, ... }
+  return values; // { CC: { "2025": 1.8, "2026": 2.1, ... }, ... }
 }
 
 const round1 = (n) => Math.round(n * 10) / 10;
 
-/** {"2025": level, "2026": level, ...} -> [{year, pct}] ascending, one entry
- *  per year that has both itself and its predecessor's level (the earliest
- *  year in the window, with no predecessor in this response, is dropped
- *  rather than guessed at). */
-function growthRates(levelsByYear) {
-  const years = Object.keys(levelsByYear).map(Number).sort((a, b) => a - b);
-  const out = [];
-  for (let i = 1; i < years.length; i++) {
-    const y0 = years[i - 1], y1 = years[i];
-    const v0 = levelsByYear[y0], v1 = levelsByYear[y1];
-    if (v0 == null || v1 == null || v0 === 0) continue;
-    out.push({ year: y1, pct: round1(((v1 / v0) - 1) * 100) });
-  }
-  return out;
-}
-
-/** Diagnostic only, temporary: the real /indicators list, filtered to
- *  anything that looks GDP/capita-related, so the right ID can be
- *  confirmed from a CI log instead of guessed at again — this sandbox
- *  can't reach imf.org directly to check it directly. */
-async function logCandidateIndicators() {
-  try {
-    const res = await fetch(`${API}/indicators`, { headers: { "User-Agent": "glidepath-data-bot" } });
-    if (!res.ok) { console.warn(`indicators list: HTTP ${res.status}`); return; }
-    const body = await res.json();
-    const all = body?.indicators && typeof body.indicators === "object" ? body.indicators : body;
-    const entries = Object.entries(all || {});
-    const hits = entries.filter(([id, meta]) => {
-      const label = (meta && (meta.label || meta.description)) || "";
-      return /gdp/i.test(id) && (/capita/i.test(id) || /capita/i.test(label));
-    });
-    console.log(`indicators list: ${entries.length} total, ${hits.length} GDP/capita candidates:`);
-    for (const [id, meta] of hits.slice(0, 20)) console.log(`  ${id}: ${(meta && (meta.label || meta.description)) || ""}`);
-  } catch (e) {
-    console.warn("indicators list fetch failed:", e.message);
-  }
+/** {"2025": pct, "2026": pct, ...} -> [{year, pct}] ascending. */
+function toSortedRates(pctByYear) {
+  return Object.keys(pctByYear)
+    .map(Number)
+    .sort((a, b) => a - b)
+    .map((year) => ({ year, pct: round1(pctByYear[year]) }));
 }
 
 async function main() {
@@ -155,21 +112,19 @@ async function main() {
   const codes = Object.keys(countries);
   console.log(`Fetching IMF WEO (${INDICATOR}) for ${codes.length} countries…`);
 
-  const values = await fetchLevels(codes);
-  if (!Object.keys(values).length) await logCandidateIndicators();
+  const values = await fetchRates(codes);
 
   const upcomingYear = new Date().getFullYear() + 1;
   const out = {};
   for (const cc of codes) {
-    const levels = values[cc];
-    if (!levels) continue;
-    const rates = growthRates(levels);
+    const pctByYear = values[cc];
+    if (!pctByYear) continue;
+    const rates = toSortedRates(pctByYear);
     if (!rates.length) continue;
     // near-term default for the long-term model's GDP lever: the next
     // calendar year's growth, not an average across the horizon — the most
-    // immediately actionable single number. `rates[0]` is actually THIS
-    // year's growth (the earliest window has no predecessor to grow from
-    // until periods[1]), so pick the real next-year entry explicitly rather
+    // immediately actionable single number. `rates[0]` is this (current)
+    // year's growth, so pick the real next-year entry explicitly rather
     // than assuming index 0 — falling back to it only if IMF's window
     // somehow doesn't reach a year out.
     const nextYear = rates.find(r => r.year === upcomingYear) || rates[0];
@@ -181,7 +136,7 @@ async function main() {
   const result = {
     generatedAt: new Date().toISOString(),
     source: "IMF World Economic Outlook (DataMapper API, www.imf.org/external/datamapper) — real GDP/capita growth forecast",
-    indicator: `${INDICATOR} · real GDP per capita, constant prices, national currency — growth computed between consecutive years' levels`,
+    indicator: `${INDICATOR} · real per-capita GDP growth (annual % change), as published by IMF WEO`,
     note: ("Genuine forward-looking forecast (WEO, refreshed each April/October), not an extrapolation of history. "
       + "Feeds the long-term model's GDP lever default (gdpcapProj) and, per year, Prophet's GDP/capita regressor "
       + "beyond the last observed year, in build-forecast.py. A country missing here falls back to the trailing "
