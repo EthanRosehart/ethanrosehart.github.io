@@ -73,7 +73,15 @@ async function fetchLevels(codes) {
   if (!res.ok) throw new Error(`IMF ${INDICATOR}: HTTP ${res.status}`);
   const body = await res.json();
   const values = body?.values?.[INDICATOR];
-  if (!values || typeof values !== "object") throw new Error(`IMF ${INDICATOR}: unexpected payload shape`);
+  if (!values || typeof values !== "object") {
+    // diagnostic only, temporary: the DataMapper response shape wasn't what
+    // was assumed (docs/examples elsewhere show `values.<INDICATOR>`) — dump
+    // the real top-level keys and a truncated body so the next run's CI log
+    // shows exactly what came back, instead of guessing again blind.
+    console.error("IMF response top-level keys:", body && typeof body === "object" ? Object.keys(body) : typeof body);
+    console.error("IMF response sample:", JSON.stringify(body).slice(0, 1500));
+    throw new Error(`IMF ${INDICATOR}: unexpected payload shape`);
+  }
   return values; // { CC: { "2025": 12345.6, "2026": ..., ... }, ... }
 }
 
