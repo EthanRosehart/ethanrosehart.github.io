@@ -202,6 +202,29 @@ test("GP_guessColumnRole: maps common spreadsheet headers to a role", () => {
   assert.equal(win.GP_guessColumnRole("Notes"), "ignore");
 });
 
+test("GP_guessColumnRoles: a lone unrecognized column next to a date column is assumed to be passengers", () => {
+  const win = loadDataModule();
+  const roles = win.GP_guessColumnRoles(["Month", "Count"]);
+  assert.equal(roles[0], "date");
+  assert.equal(roles[1], "pax", "a lone unrecognized column should default to passengers, not stay ignored");
+});
+
+test("GP_guessColumnRoles: stays conservative when more than one column is ambiguous", () => {
+  const win = loadDataModule();
+  const roles = win.GP_guessColumnRoles(["Month", "Foo", "Bar"]);
+  assert.equal(roles[0], "date");
+  assert.equal(roles[1], "ignore", "genuine ambiguity (two unrecognized columns) should be left for the user, not guessed");
+  assert.equal(roles[2], "ignore");
+});
+
+test("GP_guessColumnRoles: doesn't override a column that's already clearly recognized", () => {
+  const win = loadDataModule();
+  const roles = win.GP_guessColumnRoles(["Month", "Passengers", "Notes"]);
+  assert.equal(roles[0], "date");
+  assert.equal(roles[1], "pax");
+  assert.equal(roles[2], "ignore", "the fallback only applies when nothing matched pax by name");
+});
+
 test("GP_registerCustomAirport: a user-uploaded gateway drives the same long-term model as a catalogue airport, with no Prophet forecast", () => {
   const win = loadDataModule();
   win.GP_setActivityIndex({ airports: {} }); // simulate the real catalogue not carrying this gateway

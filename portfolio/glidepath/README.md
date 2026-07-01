@@ -24,7 +24,7 @@ same catalogue and forecasting machinery.
 | **Long-term** | 10/15/25-year strategic trajectory from the elasticity model, with a growth-driver decomposition. |
 | **Baseline assumptions** | Lever panel (GDP, elasticity, population, tourism, fuel/yield, LCC stimulation, plus movements/cargo/segment levers where the gateway carries that data) with live scenario-vs-baseline impact. |
 | **Event simulator** | Add time-bound shocks (a pandemic, a route collapse, a trade dispute) that dent or lift demand — full recovery or permanent re-baseline — and see them ride on top of the scenario. |
-| **Export** | Generates a real PPTX deck, XLSX workbook, Word-openable DOCX brief, or a dependency-free CSV extract of everything above. |
+| **Export** | Generates a real PPTX deck, XLSX workbook, Word-openable DOCX brief, or a dependency-free CSV extract — including the scenario assumptions, the segment breakdown, and any shock events, not just the headline trajectory. |
 
 ## Forecasting methodology
 
@@ -51,9 +51,19 @@ same catalogue and forecasting machinery.
 "Select airport" also offers **Upload your own data**: pick a CSV or Excel
 file (parsed client-side with [SheetJS](https://sheetjs.com), lazy-loaded the
 same way `ExportView` loads it for downloads), confirm/fix the column mapping
-(auto-guessed from the header row), then edit the monthly numbers directly in
-a table before building the forecast. Nothing leaves the browser — there's no
-server for it to go to.
+(auto-guessed from the header row — headers don't need to match exactly, see
+`GP_guessColumnRoles()` in `data.jsx` for what it recognizes, including
+falling back to "passengers" for a lone unrecognized column like a plain
+"Count" header when nothing else on the sheet could be it), then edit the
+monthly numbers directly in a table before building the forecast. Every
+non-empty sheet in a workbook is read, not just the first — if there's more
+than one, a picker lets you combine them all (the common case: the same
+monthly series split across tabs, e.g. by year) or pick a single one. Nothing
+leaves the browser — there's no server for it to go to, and the panel says so.
+The upload panel itself explains the expected shape and links a one-click
+"Download template" CSV, rather than requiring a rigid predefined schema; the
+trade-off for that flexibility is that a truly unrecognizable header still
+needs a manual fix in the mapping dropdowns.
 
 A custom gateway is registered through `GP_registerCustomAirport()` in
 [`data.jsx`](data.jsx) — the exact same `ACTIVITY_META`/`AIRPORTS` catalogue

@@ -493,6 +493,8 @@ function ExportView({ airport, history, scenario }){
     ...(hasCargo ? [SHAPE_LEVERS.cargo] : []),
     ...segLevers];
   const assumptions = allLevers.map(l=>({ name:l.name, value:(scenario[l.k] ?? 0), unit:l.unit }));
+  const events = Array.isArray(scenario.events) ? scenario.events.filter(e=>e&&e.start) : [];
+  const segLabelOf = (k)=> k==="all" ? "All traffic" : (d.lt.segLabels[d.lt.segKeys.indexOf(k)] || k);
   const stamp = new Date().toLocaleDateString("en-CA");
   const fileBase = `glidepath_${airport.iata}_${new Date().toISOString().slice(0,10)}`;
 
@@ -500,14 +502,24 @@ function ExportView({ airport, history, scenario }){
   const genCSV = ()=>{
     let csv = "GLIDEPATH FORECAST — "+airport.name+" ("+airport.iata+")\n";
     csv += "generated,"+stamp+"\n\n";
-    const cols = ["passengers", ...(hasAtm?["movements"]:[]), ...(hasCargo?["cargo_t"]:[])];
-    const rowVals = r => [r.pax, ...(hasAtm?[r.atm]:[]), ...(hasCargo?[r.cargo]:[])].join(",");
-    csv += "ANNUAL LONG-TERM FORECAST (roll-up)\n";
+    csv += "SCENARIO ASSUMPTIONS\n";
+    csv += "driver,value,unit\n";
+    assumptions.forEach(a=> csv += `"${a.name}",${a.value},${a.unit}\n`);
+    const segCols = d.lt.hasSeg ? d.lt.segLabels.map(l=>`"${l} passengers"`) : [];
+    const cols = ["passengers", ...(hasAtm?["movements"]:[]), ...(hasCargo?["cargo_t"]:[]), ...segCols];
+    const rowVals = r => [r.pax, ...(hasAtm?[r.atm]:[]), ...(hasCargo?[r.cargo]:[]),
+      ...(d.lt.hasSeg ? d.lt.segKeys.map(k=> (r.seg&&r.seg[k]) ?? "") : [])].join(",");
+    csv += "\nANNUAL LONG-TERM FORECAST (roll-up)\n";
     csv += "year,"+cols.join(",")+"\n";
     d.lt.rows.forEach(r=> csv += `${r.y},${rowVals(r)}\n`);
     csv += "\nMONTHLY LONG-TERM FORECAST\n";
     csv += "month,"+cols.join(",")+"\n";
     d.lt.months.forEach(r=> csv += `${r.date},${rowVals(r)}\n`);
+    if (events.length){
+      csv += "\nSHOCK EVENTS\n";
+      csv += "label,start,affects,peak_pct,length_mo,recovery_mo,permanent\n";
+      events.forEach(ev=> csv += `"${ev.label}",${ev.start},"${segLabelOf(ev.target||"all")}",${ev.peak??0},${ev.length??ev.hold??0},${ev.permanent?"":(ev.recovery??0)},${ev.permanent?"yes":"no"}\n`);
+    }
     if (d.st){
       csv += "\nMONTHLY SHORT-TERM FORECAST (passengers · Prophet)\n";
       csv += "month,forecast,low,high\n";
@@ -539,13 +551,15 @@ function ExportView({ airport, history, scenario }){
     ];
     XLSX.utils.book_append_sheet(wb, XLSX.utils.aoa_to_sheet(summary), "Summary");
 
-    const ltHead = ["Year","Passengers", ...(hasAtm?["Movements"]:[]), ...(hasCargo?["Cargo (t)"]:[])];
-    const ltRow = (r,key) => [r[key], r.pax, ...(hasAtm?[r.atm]:[]), ...(hasCargo?[r.cargo]:[])];
+    const segHeadCols = d.lt.hasSeg ? d.lt.segLabels.map(l=>l+" pax") : [];
+    const ltHead = ["Year","Passengers", ...(hasAtm?["Movements"]:[]), ...(hasCargo?["Cargo (t)"]:[]), ...segHeadCols];
+    const ltRow = (r,key) => [r[key], r.pax, ...(hasAtm?[r.atm]:[]), ...(hasCargo?[r.cargo]:[]),
+      ...(d.lt.hasSeg ? d.lt.segKeys.map(k=> (r.seg&&r.seg[k]) ?? "") : [])];
     const ltAoa = [ltHead];
     d.lt.rows.forEach(r=> ltAoa.push(ltRow(r,"y")));
     XLSX.utils.book_append_sheet(wb, XLSX.utils.aoa_to_sheet(ltAoa), "Long-term annual");
 
-    const ltmHead = ["Month","Passengers", ...(hasAtm?["Movements"]:[]), ...(hasCargo?["Cargo (t)"]:[])];
+    const ltmHead = ["Month","Passengers", ...(hasAtm?["Movements"]:[]), ...(hasCargo?["Cargo (t)"]:[]), ...segHeadCols];
     const ltmAoa = [ltmHead];
     d.lt.months.forEach(r=> ltmAoa.push(ltRow(r,"date")));
     XLSX.utils.book_append_sheet(wb, XLSX.utils.aoa_to_sheet(ltmAoa), "Long-term monthly");
@@ -554,6 +568,12 @@ function ExportView({ airport, history, scenario }){
       const stAoa = [["Month","Forecast PAX","Low (P10)","High (P90)"]];
       d.st.forecast.forEach(r=> stAoa.push([r.date, r.v, r.lo, r.hi]));
       XLSX.utils.book_append_sheet(wb, XLSX.utils.aoa_to_sheet(stAoa), "Short-term monthly");
+    }
+
+    if (events.length){
+      const evAoa = [["Label","Start","Affects","Peak (%)","Length (mo)","Recovery (mo)","Permanent"]];
+      events.forEach(ev=> evAoa.push([ev.label, ev.start, segLabelOf(ev.target||"all"), ev.peak??0, ev.length??ev.hold??0, ev.permanent?"—":(ev.recovery??0), ev.permanent?"Yes":"No"]));
+      XLSX.utils.book_append_sheet(wb, XLSX.utils.aoa_to_sheet(evAoa), "Events");
     }
 
     const histHead = ["Month","Passengers", ...(hasAtm?["Movements"]:[]), ...(hasCargo?["Cargo (t)"]:[])];
@@ -621,6 +641,18 @@ function ExportView({ airport, history, scenario }){
     ]);
     s.addTable([head,...body], { x:0.6, y:1.3, w:12.1, fontSize:10, border:{type:"solid",color:"333744",pt:0.5}, fill:{color:PANEL}, align:"right", valign:"middle" });
 
+    // 3.5 — passenger mix by segment (only when the gateway publishes a segment split)
+    if (d.lt.hasSeg){
+      s = pptx.addSlide(); s.background = { color: DARK };
+      s.addText("Passenger mix by segment", { x:0.6, y:0.4, fontSize:24, bold:true, color:INK });
+      const segHead = ["Year", ...d.lt.segLabels].map(t=>({ text:t, options:{ bold:true, color:DARK, fill:{color:PINK}, fontSize:11 } }));
+      const segBody = d.lt.rows.map(r=>[
+        { text:String(r.y), options:{ color:INK } },
+        ...d.lt.segKeys.map(k=>({ text:GP_fmt.int((r.seg&&r.seg[k])||0), options:{ color:INK } })),
+      ]);
+      s.addTable([segHead,...segBody], { x:0.6, y:1.3, w:12.1, fontSize:10, border:{type:"solid",color:"333744",pt:0.5}, fill:{color:PANEL}, align:"right", valign:"middle" });
+    }
+
     // 4 — scenario assumptions
     s = pptx.addSlide(); s.background = { color: DARK };
     s.addText("Scenario assumptions", { x:0.6, y:0.4, fontSize:24, bold:true, color:INK });
@@ -632,6 +664,22 @@ function ExportView({ airport, history, scenario }){
     s.addTable([aHead,...aBody], { x:0.6, y:1.3, w:9, fontSize:13, rowH:0.45, border:{type:"solid",color:"333744",pt:0.5}, fill:{color:PANEL}, valign:"middle", colW:[6,3] });
     s.addText("Model:  g = GDPpc·ε + pop + 0.5·tourism + lcc − 0.18·fuel", { x:0.6, y:6.6, w:12, fontSize:12, color:DIM, italic:true });
 
+    // 5 — shock events (only when at least one is configured)
+    if (events.length){
+      s = pptx.addSlide(); s.background = { color: DARK };
+      s.addText("Shock events", { x:0.6, y:0.4, fontSize:24, bold:true, color:INK });
+      const evHead = ["Event","Starts","Affects","Peak","Length","Recovery"].map(t=>({ text:t, options:{ bold:true, color:DARK, fill:{color:CYAN}, fontSize:11 } }));
+      const evBody = events.map(ev=>[
+        { text:ev.label, options:{ color:INK } },
+        { text:String(ev.start), options:{ color:INK, align:"right" } },
+        { text:segLabelOf(ev.target||"all"), options:{ color:INK, align:"right" } },
+        { text:(ev.peak>0?"+":"")+(ev.peak??0)+"%", options:{ color:CYAN, align:"right" } },
+        { text:(ev.length??ev.hold??0)+" mo", options:{ color:INK, align:"right" } },
+        { text: ev.permanent?"Permanent":((ev.recovery??0)+" mo"), options:{ color:INK, align:"right" } },
+      ]);
+      s.addTable([evHead,...evBody], { x:0.6, y:1.3, w:12.1, fontSize:11, rowH:0.42, border:{type:"solid",color:"333744",pt:0.5}, fill:{color:PANEL}, valign:"middle" });
+    }
+
     await pptx.writeFile({ fileName: fileBase+"_deck.pptx" });
   };
 
@@ -641,6 +689,12 @@ function ExportView({ airport, history, scenario }){
       `<tr><td>${r.y}</td><td>${GP_fmt.int(r.pax)}</td>${hasAtm?`<td>${GP_fmt.int(r.atm)}</td>`:""}${hasCargo?`<td>${GP_fmt.int(r.cargo)}</td>`:""}</tr>`
     ).join("");
     const asRows = assumptions.map(a=>`<tr><td>${a.name}</td><td>${(a.value>0?"+":"")+a.value} ${a.unit}</td></tr>`).join("");
+    const segRows = d.lt.hasSeg ? d.lt.rows.map(r=>
+      `<tr><td>${r.y}</td>${d.lt.segKeys.map(k=>`<td>${GP_fmt.int((r.seg&&r.seg[k])||0)}</td>`).join("")}</tr>`
+    ).join("") : "";
+    const evRows = events.map(ev=>
+      `<tr><td>${ev.label}</td><td>${ev.start}</td><td>${segLabelOf(ev.target||"all")}</td><td>${(ev.peak>0?"+":"")+(ev.peak??0)}%</td><td>${ev.length??ev.hold??0} mo</td><td>${ev.permanent?"Permanent":((ev.recovery??0)+" mo")}</td></tr>`
+    ).join("");
     const html = `<!DOCTYPE html><html xmlns:o='urn:schemas-microsoft-com:office:office' xmlns:w='urn:schemas-microsoft-com:office:word' xmlns='http://www.w3.org/TR/REC-html40'>
 <head><meta charset='utf-8'><title>Glidepath ${airport.iata} brief</title>
 <style>
@@ -677,6 +731,12 @@ driven by blended income, population and tourism dynamics totalling <b>${GP_fmt.
 <p style='margin-top:6pt;color:#666;font-size:9.5pt;'>Model: g = GDPpc&middot;&epsilon; + pop + 0.5&middot;tourism + lcc &minus; 0.18&middot;fuel.
 Passengers compound on the observed base-year seasonal shape${hasAtm?"; movements are held proportional to passengers at the latest observed ratio":""}.</p>
 
+${d.lt.hasSeg?`<h2>Passenger mix by segment</h2>
+<table><tr><th>Year</th>${d.lt.segLabels.map(l=>`<th>${l}</th>`).join("")}</tr>${segRows}</table>`:""}
+
+${events.length?`<h2>Shock events</h2>
+<table><tr><th>Event</th><th>Starts</th><th>Affects</th><th>Peak</th><th>Length</th><th>Recovery</th></tr>${evRows}</table>`:""}
+
 <h2>Provenance</h2>
 <p style='font-size:9.5pt;color:#444;'>${airport.custom
   ? "This forecast runs on the monthly passenger figures uploaded by the report's author, not a public feed, plus World Bank population &amp; GDP/capita for the macro drivers. There is no short-term (Prophet) tactical forecast for uploaded data &mdash; that model is fit only for the committed public data sources."
@@ -699,10 +759,10 @@ Passengers compound on the observed base-year seasonal shape${hasAtm?"; movement
   };
 
   const deliverables = [
-    { id:"pptx", name:"Stakeholder deck", desc:"Editable PowerPoint: title, headline KPIs, long-term trajectory table and scenario assumptions.", tag:"PPTX" },
-    { id:"xlsx", name:"Model workbook", desc:"Real Excel workbook — summary, long-term annual + monthly, short-term monthly, full history and assumptions.", tag:"XLSX" },
-    { id:"docx", name:"Executive brief", desc:"Word-openable narrative: summary, KPIs, trajectory table, assumptions and provenance.", tag:"DOCX" },
-    { id:"csv", name:"Forecast data extract", desc:"Flat annual + monthly tables for your BI stack or master-plan model.", tag:"CSV" },
+    { id:"pptx", name:"Stakeholder deck", desc:"Editable PowerPoint: title, headline KPIs, long-term trajectory table, scenario assumptions, plus segment mix and shock events when set.", tag:"PPTX" },
+    { id:"xlsx", name:"Model workbook", desc:"Real Excel workbook — summary, long-term annual + monthly (with segment columns when set), short-term monthly, full history, assumptions and an events sheet.", tag:"XLSX" },
+    { id:"docx", name:"Executive brief", desc:"Word-openable narrative: summary, KPIs, trajectory table, assumptions, segment mix, events and provenance.", tag:"DOCX" },
+    { id:"csv", name:"Forecast data extract", desc:"Flat annual + monthly tables (with segment columns when set), assumptions and events for your BI stack or master-plan model.", tag:"CSV" },
   ];
 
   return (
@@ -749,6 +809,8 @@ Passengers compound on the observed base-year seasonal shape${hasAtm?"; movement
               ...(d.st&&d.st.mape!=null?[["Next-12mo confidence","±"+d.st.mape+"%"]]:[]),
               ...(hasAtm?[[end.y+" movements",GP_fmt.int(end.atm)]]:[]),
               ["Demand growth",GP_fmt.pct(d.lt.gDemand)],
+              ...(d.lt.hasSeg?[["Segments",d.lt.segLabels.join(", ")]]:[]),
+              ...(events.length?[["Active events",String(events.length)]]:[]),
             ].map((r,i,arr)=>(
               <div key={i} style={{display:"flex",justifyContent:"space-between",gap:14,padding:"10px 0",borderBottom:i<arr.length-1?"1px solid var(--line)":"none"}}>
                 <span style={{color:"var(--faint)",fontSize:13}}>{r[0]}</span>

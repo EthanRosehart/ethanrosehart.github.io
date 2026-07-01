@@ -159,6 +159,21 @@ function guessColumnRole(header){
   if (/cargo|freight/.test(h)) return "cargo";
   return "ignore";
 }
+/* guesses roles for a full header row at once — if nothing matched "pax" by
+   name but exactly one column is otherwise unclassified, assume that's
+   passengers. Passengers is the one metric every upload needs, and a lone
+   generically-named numeric column ("Count", "Total", "Volume", ...) next to
+   a date column is overwhelmingly likely to be it. Stays conservative when
+   there's more than one unclassified column — genuine ambiguity is left for
+   the user to resolve in the mapping dropdowns rather than guessed at. */
+function guessColumnRoles(headers){
+  const roles = headers.map(guessColumnRole);
+  if (!roles.includes("pax")) {
+    const unclassified = roles.map((r,i)=> r==="ignore" ? i : -1).filter(i=>i>=0);
+    if (unclassified.length === 1) roles[unclassified[0]] = "pax";
+  }
+  return roles;
+}
 
 /* segment keys that actually carry monthly data for an airport, in canonical
    order. Used to drive the shape-builder levers and segment view. */
@@ -502,5 +517,6 @@ Object.assign(window, {
   GP_getObservedSeries:getObservedSeries, GP_getActivityMeta:getActivityMeta,
   GP_setForecastMeta:setForecastMeta, GP_setAirportForecast:setAirportForecast,
   GP_setReference:setReference, GP_rebuildAirports:rebuildAirports, GP_ensureMacro:ensureMacro,
-  GP_registerCustomAirport:registerCustomAirport, GP_parseMonthKey:parseMonthKey, GP_guessColumnRole:guessColumnRole,
+  GP_registerCustomAirport:registerCustomAirport, GP_parseMonthKey:parseMonthKey,
+  GP_guessColumnRole:guessColumnRole, GP_guessColumnRoles:guessColumnRoles,
 });
