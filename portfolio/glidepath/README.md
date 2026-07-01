@@ -24,7 +24,7 @@ same catalogue and forecasting machinery.
 | **Long-term** | 10/15/25-year strategic trajectory from the elasticity model, with a growth-driver decomposition. |
 | **Baseline assumptions** | Lever panel (GDP, elasticity, population, tourism, fuel/yield, LCC stimulation, plus movements/cargo/segment levers where the gateway carries that data) with live scenario-vs-baseline impact. |
 | **Event simulator** | Add time-bound shocks (a pandemic, a route collapse, a trade dispute) that dent or lift demand — full recovery or permanent re-baseline — and see them ride on top of the scenario. |
-| **Export** | Generates a real PPTX deck, XLSX workbook, Word-openable DOCX brief, or a dependency-free CSV extract of everything above. |
+| **Export** | Generates a real PPTX deck, XLSX workbook, Word-openable DOCX brief, or a dependency-free CSV extract — including the scenario assumptions, the segment breakdown, and any shock events, not just the headline trajectory. |
 
 ## Forecasting methodology
 
