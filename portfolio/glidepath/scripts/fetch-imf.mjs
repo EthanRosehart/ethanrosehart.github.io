@@ -128,12 +128,35 @@ function growthRates(levelsByYear) {
   return out;
 }
 
+/** Diagnostic only, temporary: the real /indicators list, filtered to
+ *  anything that looks GDP/capita-related, so the right ID can be
+ *  confirmed from a CI log instead of guessed at again — this sandbox
+ *  can't reach imf.org directly to check it directly. */
+async function logCandidateIndicators() {
+  try {
+    const res = await fetch(`${API}/indicators`, { headers: { "User-Agent": "glidepath-data-bot" } });
+    if (!res.ok) { console.warn(`indicators list: HTTP ${res.status}`); return; }
+    const body = await res.json();
+    const all = body?.indicators && typeof body.indicators === "object" ? body.indicators : body;
+    const entries = Object.entries(all || {});
+    const hits = entries.filter(([id, meta]) => {
+      const label = (meta && (meta.label || meta.description)) || "";
+      return /gdp/i.test(id) && (/capita/i.test(id) || /capita/i.test(label));
+    });
+    console.log(`indicators list: ${entries.length} total, ${hits.length} GDP/capita candidates:`);
+    for (const [id, meta] of hits.slice(0, 20)) console.log(`  ${id}: ${(meta && (meta.label || meta.description)) || ""}`);
+  } catch (e) {
+    console.warn("indicators list fetch failed:", e.message);
+  }
+}
+
 async function main() {
   const countries = await deriveCountries();
   const codes = Object.keys(countries);
   console.log(`Fetching IMF WEO (${INDICATOR}) for ${codes.length} countries…`);
 
   const values = await fetchLevels(codes);
+  if (!Object.keys(values).length) await logCandidateIndicators();
 
   const upcomingYear = new Date().getFullYear() + 1;
   const out = {};
