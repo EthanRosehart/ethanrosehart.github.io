@@ -107,8 +107,13 @@ function UploadData({ onDone, onCancel }){
   const [name, setName] = useStateA("");
   const [code, setCode] = useStateA("");
   const [cc, setCc] = useStateA("USA");
-  const [rawRows, setRawRows] = useStateA(null);     // array-of-arrays incl. header row, from the parsed file
-  const [roles, setRoles] = useStateA([]);           // per-column role, parallel to rawRows[0]
+  // { sheetNames:[...], sheets:{ name: arrayOfArrays } } — every sheet that
+  // has data rows, not just the first. Excel workbooks with the same series
+  // split across tabs (by year range, say) are common enough to support
+  // directly rather than silently reading only sheet 1.
+  const [workbook, setWorkbook] = useStateA(null);
+  const [sheetChoice, setSheetChoice] = useStateA(null); // a sheet name, or "__all__"
+  const [roles, setRoles] = useStateA([]);           // per-column role, parallel to the header row
   const [rows, setRows] = useStateA([]);             // editable working rows: [{month,pax,atm,cargo}]
   const [fileName, setFileName] = useStateA(null);
   const [fileError, setFileError] = useStateA(null);
@@ -121,41 +126,55 @@ function UploadData({ onDone, onCancel }){
       await GP_loadScript("https://cdn.sheetjs.com/xlsx-0.20.3/package/dist/xlsx.full.min.js");
       const buf = await file.arrayBuffer();
       const wb = window.XLSX.read(buf, { type:"array", cellDates:true });
-      const sheet = wb.Sheets[wb.SheetNames[0]];
-      const aoa = window.XLSX.utils.sheet_to_json(sheet, { header:1, raw:true, blankrows:false });
-      if (!aoa.length) throw new Error("that file looks empty");
-      const header = aoa[0].map(c => String(c ?? ""));
-      setRawRows(aoa);
-      setRoles(header.map(GP_guessColumnRole));
+      const sheets = {};
+      for (const sheetName of wb.SheetNames) {
+        const aoa = window.XLSX.utils.sheet_to_json(wb.Sheets[sheetName], { header:1, raw:true, blankrows:false });
+        if (aoa.length > 1) sheets[sheetName] = aoa; // skip sheets with no data rows (notes, instructions, ...)
+      }
+      const sheetNames = Object.keys(sheets);
+      if (!sheetNames.length) throw new Error("no sheet in that file has any rows");
+      // column mapping is read from the first data-bearing sheet and assumed
+      // to apply to all of them — true for the common case (the same series
+      // split across tabs), and "combine all sheets" is opt-in below rather
+      // than the assumed default when that's not actually what's going on
+      const header = sheets[sheetNames[0]][0].map(c => String(c ?? ""));
+      setWorkbook({ sheetNames, sheets });
+      setSheetChoice(sheetNames.length > 1 ? "__all__" : sheetNames[0]);
+      setRoles(GP_guessColumnRoles(header));
       setFileName(file.name);
     } catch(e) {
       setFileError("Couldn't read that file — try exporting it as CSV. (" + (e && e.message || e) + ")");
-      setRawRows(null);
+      setWorkbook(null);
     } finally { setBusy(false); }
   };
 
-  // re-derive the editable table whenever the file or the column mapping
-  // changes; after that, rows are edited independently (this effect won't
-  // clobber in-progress edits since neither rawRows nor roles changes then)
+  // re-derive the editable table whenever the file, the active sheet(s), or
+  // the column mapping changes; after that, rows are edited independently
+  // (this effect won't clobber in-progress edits since none of those change
+  // again on their own)
   useEffectA(() => {
-    if (!rawRows) return;
+    if (!workbook) return;
+    const activeSheets = sheetChoice === "__all__" ? workbook.sheetNames : [sheetChoice];
     const dateIdx = roles.indexOf("date");
     const byMonth = {};
-    for (let r = 1; r < rawRows.length; r++) {
-      const raw = rawRows[r];
-      const month = dateIdx >= 0 ? GP_parseMonthKey(raw[dateIdx]) : null;
-      if (!month) continue;
-      const rec = byMonth[month] || { month };
-      roles.forEach((role, ci) => {
-        if (role !== "pax" && role !== "atm" && role !== "cargo") return;
-        const v = raw[ci];
-        const n = typeof v === "number" ? v : parseFloat(String(v ?? "").replace(/[,\s]/g, ""));
-        if (!isNaN(n)) rec[role] = n;
-      });
-      byMonth[month] = rec;
+    for (const sheetName of activeSheets) {
+      const aoa = workbook.sheets[sheetName];
+      for (let r = 1; r < aoa.length; r++) {
+        const raw = aoa[r];
+        const month = dateIdx >= 0 ? GP_parseMonthKey(raw[dateIdx]) : null;
+        if (!month) continue;
+        const rec = byMonth[month] || { month };
+        roles.forEach((role, ci) => {
+          if (role !== "pax" && role !== "atm" && role !== "cargo") return;
+          const v = raw[ci];
+          const n = typeof v === "number" ? v : parseFloat(String(v ?? "").replace(/[,\s]/g, ""));
+          if (!isNaN(n)) rec[role] = n;
+        });
+        byMonth[month] = rec;
+      }
     }
     setRows(Object.values(byMonth).sort((a,b)=>a.month.localeCompare(b.month)));
-  }, [rawRows, roles.join(",")]);
+  }, [workbook, sheetChoice, roles.join(",")]);
 
   const setRole = (colIdx, role) => setRoles(rs => rs.map((r,i)=> i===colIdx ? role : r));
   const updateCell = (i, field, value) => setRows(rs => rs.map((r,ri)=> ri===i ? { ...r, [field]: value } : r));
@@ -245,7 +264,9 @@ function UploadData({ onDone, onCancel }){
           One row per month, with a column for the month and at least one for passengers — movements and cargo are
           optional. Column headers don't have to match exactly: common ones (Month, Date, Passengers, PAX,
           Movements, Flights, Cargo) are detected automatically, and you can fix the mapping below if we guess
-          wrong. Not sure what that should look like? Grab the template.
+          wrong. Not sure what that should look like? Grab the template. This all happens
+          {" "}<b style={{color:"var(--text)"}}>right here in your browser</b> — the file is never sent anywhere;
+          there's no server on the other end of this screen for it to go to.
         </p>
         <div style={{display:"flex",alignItems:"center",gap:14,flexWrap:"wrap"}}>
           <label className="btn btn-primary" style={{cursor:"pointer"}}>
@@ -254,14 +275,27 @@ function UploadData({ onDone, onCancel }){
               onChange={e => e.target.files[0] && onFile(e.target.files[0])}/>
           </label>
           <button className="btn btn-sm" onClick={downloadTemplate}>Download template (CSV)</button>
-          {fileName && !fileError && <span className="air-meta">{fileName} · {rawRows ? rawRows.length-1 : 0} rows read</span>}
+          {fileName && !fileError && <span className="air-meta">{fileName} · {workbook ? workbook.sheetNames.length : 0} sheet{workbook && workbook.sheetNames.length!==1?"s":""} read</span>}
         </div>
         {fileError && <div className="caveat fade-in" style={{marginTop:14}}><b>Couldn't read that file —</b> {fileError.replace(/^Couldn't read that file — /,"")}</div>}
-        {rawRows && (
+        {workbook && workbook.sheetNames.length>1 && (
+          <div style={{marginTop:16}}>
+            <div className="lever-desc" style={{marginBottom:6}}>This file has {workbook.sheetNames.length} sheets — which one has your data?</div>
+            <select value={sheetChoice} onChange={e=>setSheetChoice(e.target.value)} className="seg-select">
+              <option value="__all__">Combine all {workbook.sheetNames.length} sheets</option>
+              {workbook.sheetNames.map(n => <option key={n} value={n}>{n} only ({workbook.sheets[n].length-1} rows)</option>)}
+            </select>
+            <div className="lever-desc" style={{marginTop:6}}>
+              "Combine" assumes every sheet has the same columns in the same order — that's the common case (the
+              same series split across tabs, by year say). Pick a single sheet instead if they don't.
+            </div>
+          </div>
+        )}
+        {workbook && (
           <div style={{marginTop:18}}>
             <div className="lever-desc" style={{marginBottom:10}}>We guessed what each column is — fix anything that's wrong:</div>
-            <div className="grid" style={{gridTemplateColumns:`repeat(${rawRows[0].length}, minmax(120px,1fr))`, gap:10, overflowX:"auto"}}>
-              {rawRows[0].map((h,i)=>(
+            <div className="grid" style={{gridTemplateColumns:`repeat(${workbook.sheets[workbook.sheetNames[0]][0].length}, minmax(120px,1fr))`, gap:10, overflowX:"auto"}}>
+              {workbook.sheets[workbook.sheetNames[0]][0].map((h,i)=>(
                 <div key={i}>
                   <div className="air-meta" style={{marginBottom:5, whiteSpace:"nowrap", overflow:"hidden", textOverflow:"ellipsis"}} title={String(h)}>{String(h) || `Column ${i+1}`}</div>
                   <select value={roles[i]} onChange={e=>setRole(i,e.target.value)} className="seg-select" style={{width:"100%"}}>
