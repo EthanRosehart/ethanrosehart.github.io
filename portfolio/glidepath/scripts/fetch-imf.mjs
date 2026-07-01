@@ -64,29 +64,49 @@ const API = "https://www.imf.org/external/datamapper/api/v1";
 const YEARS_BACK = 1; // one actual year further back, so the first projected year has a predecessor to grow from
 const YEARS_FWD = 5;  // WEO's typical projection horizon
 
+/** One request per country: batching multiple countries into a single path
+ *  doesn't appear to be supported by the real API — a semicolon-joined
+ *  segment silently fell through to the root {"api":{"version":...}}
+ *  response, and a slash-joined multi-segment path 404'd. The documented
+ *  single-country example (.../INDICATOR/COUNTRY?periods=...) is the one
+ *  actually verified to work. Throws on a genuine failure for this country;
+ *  callers treat that as "no data for this country," never a hard stop. */
+async function fetchCountryLevels(cc, periods, diag) {
+  const url = `${API}/${INDICATOR}/${cc}?periods=${periods.join(",")}`;
+  const res = await fetch(url, { headers: { "User-Agent": "glidepath-data-bot" } });
+  if (!res.ok) throw new Error(`HTTP ${res.status}`);
+  const body = await res.json();
+  const levels = body?.values?.[INDICATOR]?.[cc];
+  if (!levels || typeof levels !== "object") {
+    // diagnostic only, temporary, and only logged once: dump the real
+    // top-level keys/body sample the first time the shape doesn't match
+    // what's assumed, so a CI log shows exactly what came back instead of
+    // guessing blind again.
+    if (diag && !diag.logged) {
+      diag.logged = true;
+      console.error(`IMF ${cc} response top-level keys:`, body && typeof body === "object" ? Object.keys(body) : typeof body);
+      console.error(`IMF ${cc} response sample:`, JSON.stringify(body).slice(0, 1500));
+    }
+    throw new Error("unexpected payload shape");
+  }
+  return levels; // { "2025": 12345.6, "2026": ..., ... }
+}
+
 async function fetchLevels(codes) {
   const now = new Date().getFullYear();
   const periods = [];
   for (let y = now - YEARS_BACK; y <= now + YEARS_FWD; y++) periods.push(y);
-  // country/region/group IDs are appended as their own path segments
-  // (.../INDICATOR/ID1/ID2/...), not joined into one segment — a
-  // semicolon-joined list here silently fails to match any route and the
-  // API falls back to its root {"api":{"version":...}} response instead of
-  // erroring, which is what actually happened on the first real run.
-  const url = `${API}/${INDICATOR}/${codes.join("/")}?periods=${periods.join(",")}`;
-  const res = await fetch(url, { headers: { "User-Agent": "glidepath-data-bot" } });
-  if (!res.ok) throw new Error(`IMF ${INDICATOR}: HTTP ${res.status}`);
-  const body = await res.json();
-  const values = body?.values?.[INDICATOR];
-  if (!values || typeof values !== "object") {
-    // diagnostic only, temporary: the DataMapper response shape wasn't what
-    // was assumed (docs/examples elsewhere show `values.<INDICATOR>`) — dump
-    // the real top-level keys and a truncated body so the next run's CI log
-    // shows exactly what came back, instead of guessing again blind.
-    console.error("IMF response top-level keys:", body && typeof body === "object" ? Object.keys(body) : typeof body);
-    console.error("IMF response sample:", JSON.stringify(body).slice(0, 1500));
-    throw new Error(`IMF ${INDICATOR}: unexpected payload shape`);
-  }
+  const diag = { logged: false };
+  const values = {};
+  const failed = [];
+  await Promise.all(codes.map(async (cc) => {
+    try {
+      values[cc] = await fetchCountryLevels(cc, periods, diag);
+    } catch (e) {
+      failed.push(`${cc} (${e.message})`);
+    }
+  }));
+  if (failed.length) console.warn(`IMF: no data for ${failed.length}/${codes.length} countries — ${failed.slice(0, 5).join(", ")}${failed.length > 5 ? ", …" : ""}`);
   return values; // { CC: { "2025": 12345.6, "2026": ..., ... }, ... }
 }
 
