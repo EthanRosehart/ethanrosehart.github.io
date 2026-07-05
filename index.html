@@ -3,8 +3,8 @@
 <head>
 <meta charset="UTF-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-<title>Ethan Rosehart ·Strategic Insights &amp; AI Solutions</title>
-<meta name="description" content="Ethan Rosehart ·Data &amp; Strategy at Greater Toronto Airports Authority. Strategic insights, AI solutions, executive analytics." />
+<title>Ethan Rosehart · Strategic Insights &amp; AI Solutions</title>
+<meta name="description" content="Ethan Rosehart · Data &amp; Strategy, Chief Executive Office at the Greater Toronto Airports Authority (Toronto Pearson). Executive analytics, AI strategy &amp; enablement, forecasting, and airport benchmarking." />
 <meta name="author" content="Ethan Rosehart" />
 
 <!-- Favicon -->
@@ -22,21 +22,21 @@
 <meta property="og:type" content="website" />
 <meta property="og:site_name" content="Ethan Rosehart" />
 <meta property="og:url" content="https://ethanrosehart.com/" />
-<meta property="og:title" content="Ethan Rosehart ·Strategic Insights &amp; AI-Native Execution" />
-<meta property="og:description" content="Interactive resume and portfolio. Data &amp; Strategy · AI &amp; Automation · Ops Transformation." />
+<meta property="og:title" content="Ethan Rosehart · Strategic Insights &amp; AI-Native Execution" />
+<meta property="og:description" content="Interactive resume and portfolio. Data &amp; Strategy · AI Enablement · Forecasting · Airport Benchmarking." />
 <meta property="og:image" content="https://ethanrosehart.com/og-image.png" />
 <meta property="og:image:secure_url" content="https://ethanrosehart.com/og-image.png" />
 <meta property="og:image:type" content="image/png" />
 <meta property="og:image:width" content="1200" />
 <meta property="og:image:height" content="627" />
-<meta property="og:image:alt" content="Ethan Rosehart ·Strategic insights, AI-native execution. ethanrosehart.com" />
+<meta property="og:image:alt" content="Ethan Rosehart · Strategic insights, AI-native execution. ethanrosehart.com" />
 
 <!-- Twitter / X card -->
 <meta name="twitter:card" content="summary_large_image" />
-<meta name="twitter:title" content="Ethan Rosehart ·Strategic Insights &amp; AI-Native Execution" />
-<meta name="twitter:description" content="Interactive resume and portfolio. Data &amp; Strategy · AI &amp; Automation · Ops Transformation." />
+<meta name="twitter:title" content="Ethan Rosehart · Strategic Insights &amp; AI-Native Execution" />
+<meta name="twitter:description" content="Interactive resume and portfolio. Data &amp; Strategy · AI Enablement · Forecasting · Airport Benchmarking." />
 <meta name="twitter:image" content="https://ethanrosehart.com/og-image.png" />
-<meta name="twitter:image:alt" content="Ethan Rosehart ·Strategic insights, AI-native execution. ethanrosehart.com" />
+<meta name="twitter:image:alt" content="Ethan Rosehart · Strategic insights, AI-native execution. ethanrosehart.com" />
 
 <link rel="preconnect" href="https://fonts.googleapis.com" />
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
@@ -53,7 +53,7 @@
     }
   })();
 </script>
-<script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.1/dist/chart.umd.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.1/dist/chart.umd.min.js" defer></script>
 <style>
   :root {
     --navy-900: #0a1628;
@@ -592,82 +592,6 @@
   }
   .timeline-header { margin-bottom: 56px; }
   .timeline-header p { font-size: 17px; color: var(--gray-700); margin-top: 12px; max-width: 680px; }
-  .timeline-track {
-    position: relative;
-    padding: 30px 0 10px;
-  }
-  .timeline-track::before {
-    content: ''; position: absolute;
-    left: 0; right: 0; top: 66px;
-    height: 2px;
-    background: linear-gradient(90deg, var(--accent-aviation) 0%, var(--accent-trades) 20%, var(--accent-ops) 45%, var(--accent-finance) 70%, var(--accent-enterprise) 100%);
-    border-radius: 2px;
-  }
-  .timeline-items {
-    display: grid;
-    grid-template-columns: 1fr 1fr 1fr 1fr 1.2fr;
-    gap: 12px;
-  }
-  @media (max-width: 900px) {
-    .timeline-items { grid-template-columns: 1fr; gap: 20px; }
-    .timeline-track::before { display: none; }
-  }
-  .timeline-item {
-    position: relative;
-    padding-top: 48px;
-    cursor: default;
-  }
-  .timeline-item .year {
-    font-family: 'JetBrains Mono', monospace;
-    font-size: 11px; font-weight: 500;
-    color: var(--gray-500);
-    letter-spacing: 0.08em;
-    margin-bottom: 8px;
-  }
-  .timeline-item .dot {
-    position: absolute;
-    top: 60px;
-    left: 0;
-    width: 14px; height: 14px;
-    border-radius: 50%;
-    border: 3px solid var(--paper);
-    box-shadow: 0 0 0 1px var(--gray-300);
-    z-index: 2;
-    transition: all 0.2s;
-  }
-  .timeline-item:hover .dot { transform: scale(1.2); box-shadow: 0 0 0 2px currentColor; }
-  .timeline-item .role {
-    font-family: 'Space Grotesk', sans-serif;
-    font-weight: 600; font-size: 15px;
-    color: var(--text-heading);
-    line-height: 1.25;
-    margin-bottom: 4px;
-  }
-  .timeline-item .company {
-    font-size: 13px; color: var(--gray-700);
-    margin-bottom: 8px;
-    font-weight: 500;
-  }
-  .timeline-item .industry {
-    font-size: 11px;
-    font-family: 'JetBrains Mono', monospace;
-    font-weight: 500;
-    letter-spacing: 0.06em;
-    text-transform: uppercase;
-    padding: 3px 8px;
-    border-radius: 4px;
-    display: inline-block;
-  }
-  .industry.aviation { background: rgba(45,106,159,0.12); color: var(--accent-aviation); }
-  .industry.trades { background: rgba(198,106,60,0.12); color: var(--accent-trades); }
-  .industry.ops { background: rgba(90,138,74,0.15); color: var(--accent-ops); }
-  .industry.finance { background: rgba(122,92,184,0.12); color: var(--accent-finance); }
-  .industry.enterprise { background: var(--industry-enterprise-bg); color: var(--enterprise-chip-fg); }
-  .timeline-item .dot.aviation { background: var(--accent-aviation); color: var(--accent-aviation); }
-  .timeline-item .dot.trades { background: var(--accent-trades); color: var(--accent-trades); }
-  .timeline-item .dot.ops { background: var(--accent-ops); color: var(--accent-ops); }
-  .timeline-item .dot.finance { background: var(--accent-finance); color: var(--accent-finance); }
-  .timeline-item .dot.enterprise { background: var(--accent-enterprise); color: var(--accent-enterprise); }
 
   /* ================= BREADTH RADAR + STACK ================= */
   section.breadth {
@@ -933,14 +857,14 @@
   .gantt-wrap {
     background: var(--card-bg);
     border-radius: var(--radius);
-    padding: 30px 28px 28px;
+    padding: 30px 0 28px;
     border: 1px solid var(--gray-200);
     box-shadow: var(--shadow-sm);
     margin-top: 40px;
     overflow-x: auto;
     -webkit-overflow-scrolling: touch;
   }
-  .gantt { min-width: 780px; position: relative; }
+  .gantt { min-width: 780px; position: relative; padding-right: 28px; }
   .gantt-header {
     display: grid;
     grid-template-columns: 170px 1fr;
@@ -956,6 +880,15 @@
     letter-spacing: 0.1em;
     text-transform: uppercase;
   }
+  /* Lane labels stay pinned while the chart scrolls horizontally (key for mobile) */
+  .gantt-header .spacer,
+  .gantt-row .lane-label {
+    position: sticky;
+    left: 0;
+    z-index: 5;
+    background: var(--card-bg);
+    padding-left: 28px;
+  }
   .gantt-years {
     position: relative; height: 20px;
     font-family: 'JetBrains Mono', monospace;
@@ -967,6 +900,7 @@
     transform: translateX(-50%);
     top: 0;
   }
+  .gantt-years span:first-child { transform: none; }
   .gantt-years .now {
     right: 0;
     transform: translateX(0);
@@ -977,7 +911,7 @@
   .gantt-row {
     display: grid;
     grid-template-columns: 170px 1fr;
-    align-items: center;
+    align-items: stretch;
     min-height: 44px;
     border-bottom: 1px dashed var(--gray-200);
   }
@@ -988,6 +922,9 @@
     font-weight: 600;
     color: var(--text-heading);
     padding-right: 16px;
+    display: flex;
+    flex-direction: column;
+    justify-content: center;
   }
   .gantt-row .lane-label .lane-count {
     display: block;
@@ -1057,6 +994,19 @@
   }
   @media (max-width: 900px) {
     .gantt-scroll-hint { display: block; text-align: center; }
+  }
+
+  /* Compact Gantt on small screens — narrower pinned label column, tighter type */
+  @media (max-width: 640px) {
+    .gantt { min-width: 640px; padding-right: 16px; }
+    .gantt-header,
+    .gantt-row { grid-template-columns: 118px 1fr; }
+    .gantt-header .spacer,
+    .gantt-row .lane-label { padding-left: 14px; }
+    .gantt-row .lane-label { font-size: 12px; padding-right: 10px; }
+    .gantt-row .lane-label .lane-count { font-size: 9px; }
+    .gantt-bar { font-size: 10px; padding: 0 6px; }
+    .gantt-years { font-size: 10px; }
   }
 
   /* Scroll-in animation */
@@ -1243,7 +1193,7 @@
     <div class="eyebrow">Data &amp; Strategy · Chief Executive Office · GTAA</div>
     <h1>Strategic insights.<br/><span class="accent">AI-native</span> execution.</h1>
     <p class="tagline">
-      I work between executive leadership and the data layer at <strong>Canada's busiest airport</strong>, translating C-suite questions into analytical answers. Background spans national operations leadership, enterprise AI delivery, and building analytics functions from zero, with <strong>fluency across the AI stack underneath</strong>.
+      I work between executive leadership and the data layer at <strong>Canada's busiest airport</strong>, turning C-suite questions into forecasts, KPI frameworks, and AI solutions leadership can act on. Background spans national operations leadership, enterprise AI delivery, and building analytics functions from zero, with <strong>fluency across the AI stack underneath</strong>.
     </p>
     <div class="meta">
       <div class="item">
@@ -1268,7 +1218,7 @@
     <div class="thesis-grid">
       <div>
         <div class="section-label">The Thesis</div>
-        <h2 class="section-title">I'm the operator behind the Officer.</h2>
+        <h2 class="section-title">An operator inside the executive office.</h2>
       </div>
       <div class="thesis-text">
         <p>
@@ -1343,14 +1293,16 @@
         <ul>
           <li><strong>Launched an AI-powered executive dashboard</strong> that quantifies business performance in a uniform way and surfaces where targeted intervention will move the needle. Adopted across the executive leadership team.</li>
           <li><strong>Proposed an exception-based operating model</strong> for executive decision-making, shifting leadership from reactive reporting to proactive strategic intervention.</li>
-          <li>Bridges business and emerging technology across AI solutions, data governance frameworks, and performance management practices, translating executive intent into deployable systems.</li>
-          <li><strong>Reports directly into the Executive Office</strong> with weekly exposure to the executive leadership team, operating where enterprise strategy is shaped and consistently delivering at a pace above the broader business.</li>
-          <li>Architect end-to-end solutions on Microsoft Azure, Microsoft Fabric, and Power BI across predictive modeling, KPI frameworks, and data product design.</li>
+          <li><strong>Lead AI advocacy and education across the organization</strong>: presentations, demos, and hands-on upskilling sessions that build practical fluency and position AI as an everyday efficiency tool teams want to use.</li>
+          <li><strong>Represented the GTAA on a European benchmarking mission</strong> to Amsterdam, Frankfurt, and Munich on airport data and AI strategy, closing with an ACI think-tank working group on air traffic forecasting.</li>
+          <li>Architect end-to-end solutions on Microsoft Azure, Microsoft Fabric, and Power BI, spanning predictive modeling, KPI frameworks, data governance, and data product design, translating executive intent into deployable systems.</li>
+          <li><strong>Report directly into the Executive Office</strong> with weekly exposure to the executive leadership team, operating where enterprise strategy is shaped.</li>
         </ul>
         <div class="pill-row">
           <span class="pill ai">AI-Native Workflows</span>
+          <span class="pill ai">AI Enablement &amp; Education</span>
           <span class="pill data">Exception-Based Reporting</span>
-          <span class="pill">Executive Dashboards</span>
+          <span class="pill data">Airport Benchmarking</span>
           <span class="pill">Data Governance</span>
           <span class="pill">Microsoft Fabric</span>
           <span class="pill">Power BI</span>
@@ -1423,8 +1375,8 @@
   <div class="container">
     <div class="timeline-header">
       <div class="section-label">Career Timeline</div>
-      <h2 class="section-title">Six industries. One pattern of execution.</h2>
-      <p>From a window at McDonald's to the executive office at Canada's busiest airport, every role has reinforced the same operating instinct: find the signal, own the call.</p>
+      <h2 class="section-title">Six industries. One through-line.</h2>
+      <p>My first aviation job was on the ramp at Toronto Pearson. A decade later I work in the executive office of the same airport — with trades, national operations leadership, and financial services analytics in between.</p>
     </div>
 
     <div class="gantt-legend">
@@ -1533,7 +1485,7 @@
     <div class="gantt-scroll-hint">← scroll to explore →</div>
 
     <p style="margin-top: 32px; font-size: 15.5px; color: var(--gray-700); max-width: 820px; line-height: 1.65;">
-      The pattern isn't the résumé; it's the <strong style="color: var(--text-strong);">reps</strong>. Eleven years across six industries, from window-service at McDonald's to the CEO's office at Canada's busiest airport. Every domain has its own operating logic, and recognizing the common structure is where the compounding happens.
+      Fifteen years across six industries, from a McDonald's service window to the CEO's office at Canada's busiest airport. Every domain has its own operating logic — <strong style="color: var(--text-strong);">learning to see the common structure across them</strong> is what makes the next problem faster to solve.
     </p>
   </div>
 </section>
@@ -1588,10 +1540,15 @@
   <div class="container">
     <div class="section-label">Credentials &amp; Recognition</div>
     <h2 class="section-title" style="margin-bottom: 48px;">Signals beyond the job description.</h2>
-    <div class="cred-grid" style="grid-template-columns: 1fr 1fr;">
+    <div class="cred-grid">
       <div class="cred-block">
         <h3><span class="dot"></span>Executive Education &amp; Licences</h3>
         <ul>
+          <li>
+            <span class="title">Strategic &amp; Analytical Thinking and Decision Making</span>
+            <span class="detail">Ivey Business School Executive Education</span>
+            <span class="meta">2026</span>
+          </li>
           <li>
             <span class="title">Building High-Performance Teams</span>
             <span class="detail">Ivey Business School Executive Education</span>
@@ -1611,6 +1568,26 @@
             <span class="title">Commercial Pilot License · Multi-Engine Instrument Rating</span>
             <span class="detail">Transport Canada</span>
             <span class="meta">May 2020</span>
+          </li>
+        </ul>
+      </div>
+      <div class="cred-block">
+        <h3><span class="dot"></span>Conferences &amp; Industry</h3>
+        <ul>
+          <li>
+            <span class="title">ACI World Annual General Assembly &amp; Conference</span>
+            <span class="detail">Airports Council International · Toronto</span>
+            <span class="meta">2026</span>
+          </li>
+          <li>
+            <span class="title">European Airport Benchmarking Mission</span>
+            <span class="detail">Amsterdam · Frankfurt · Munich — data &amp; AI strategy exchange with peer hub airports</span>
+            <span class="meta">2026</span>
+          </li>
+          <li>
+            <span class="title">ACI Air Traffic Forecasting Working Group</span>
+            <span class="detail">Invited to a small think-tank working group of airport forecasting practitioners</span>
+            <span class="meta">2026</span>
           </li>
         </ul>
       </div>
@@ -1681,7 +1658,7 @@
         Save as PDF
       </a>
     </div>
-    <p class="fine-print">Built as a living document · Updated April 2026</p>
+    <p class="fine-print">Built as a living document · Updated July 2026</p>
   </div>
 </footer>
 
