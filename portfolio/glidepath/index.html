@@ -31,18 +31,33 @@
     </div>
   </noscript>
   <script>
-    // If the app hasn't replaced the placeholder shortly after load, a
-    // script failed (blocked, 404, runtime error) — say so instead of
-    // showing "LOADING…" forever.
-    setTimeout(function () {
-      var msg = document.getElementById("boot-msg");
-      if (msg && !document.querySelector(".app")) {
-        msg.innerHTML = "Glidepath couldn&rsquo;t start &mdash; a script failed to load or crashed.<br>" +
-          "Check the browser console for details, then hard-refresh (Ctrl/Cmd+Shift+R).";
-        msg.style.textAlign = "center";
-        msg.style.lineHeight = "2";
+    // If the app hasn't mounted, say what happened instead of a silent
+    // failure. Two shapes of failure, one message:
+    //  - a script never loaded (blocked/404): the LOADING placeholder is
+    //    still sitting in #root after 12s;
+    //  - the app crashed during its first render: React clears #root when
+    //    the root is created, so a crash leaves the page truly EMPTY — the
+    //    error listener catches that instantly (and the timer backstops it).
+    (function () {
+      var shown = false;
+      function bootFailed() {
+        if (shown || document.querySelector(".app")) return;
+        shown = true;
+        var root = document.getElementById("root");
+        root.innerHTML =
+          '<div style="height:100vh;display:grid;place-items:center;color:#636978;' +
+          "font-family:'Space Mono',monospace;font-size:13px;letter-spacing:.1em;" +
+          'text-align:center;line-height:2">' +
+          "Glidepath couldn&rsquo;t start &mdash; a script failed to load or crashed.<br>" +
+          "Check the browser console for details, then hard-refresh (Ctrl/Cmd+Shift+R).</div>";
       }
-    }, 12000);
+      window.addEventListener("error", function () {
+        // only a PRE-mount error means the app never came up; give the
+        // page a beat in case React is mid-mount when the event fires
+        setTimeout(bootFailed, 250);
+      });
+      setTimeout(bootFailed, 12000);
+    })();
   </script>
 
   <!-- React 18.3.1 UMD, self-hosted (vendor/README.md documents how to

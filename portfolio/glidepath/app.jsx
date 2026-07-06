@@ -24,11 +24,21 @@ const TITLES = {
 };
 
 function App(){
-  const saved = useMemoApp(()=>{ try { return JSON.parse(localStorage.getItem(LS)||"{}"); } catch(e){ return {}; } },[]);
+  const saved = useMemoApp(()=>{ try { return JSON.parse(localStorage.getItem(LS)||"{}") || {}; } catch(e){ return {}; } },[]);
   const [screen, setScreen] = useStateApp(saved.screen || "select");
-  const [airport, setAirport] = useStateApp(()=> saved.iata ? AIRPORTS.find(a=>a.iata===saved.iata) : null);
+  // `|| null`, never undefined: the catalogue is still empty at first render
+  // (it arrives by fetch), so find() can't succeed yet even for a valid
+  // saved iata — the airport is restored by the activity-index effect below.
+  const [airport, setAirport] = useStateApp(()=> saved.iata ? (AIRPORTS.find(a=>a.iata===saved.iata) || null) : null);
   const [connected, setConnected] = useStateApp(!!saved.connected);
-  const [scenario, setScenario] = useStateApp(saved.scenario || (saved.iata ? GP_defaultScenario(saved.iata) : null));
+  // A saved scenario can predate fields added since it was written (events,
+  // cargo/gauge, per-segment shifts, …) — spread it over today's defaults so
+  // every consumer sees a complete shape. Reject non-object junk outright.
+  const [scenario, setScenario] = useStateApp(()=>{
+    const sc = (saved.scenario && typeof saved.scenario === "object" && !Array.isArray(saved.scenario)) ? saved.scenario : null;
+    if (saved.iata) return { ...GP_defaultScenario(saved.iata), ...(sc || {}) };
+    return sc;
+  });
   const [macroMeta, setMacroMeta] = useStateApp(window.GP_MACRO_META || null);
   const [actMeta, setActMeta] = useStateApp(window.GP_ACTIVITY_META || null);
   const [ofMeta, setOfMeta] = useStateApp(window.GP_OF_META || null);
@@ -223,7 +233,8 @@ function App(){
         series: GP_getObservedSeries(airport.iata),
       };
     }
-    localStorage.setItem(LS, JSON.stringify(payload));
+    try { localStorage.setItem(LS, JSON.stringify(payload)); }
+    catch(e){ /* storage full or blocked — persistence is best-effort */ }
   },[screen, airport, connected, scenario]);
 
   // ensure scenario resets to airport default when airport changes & none set
@@ -392,7 +403,12 @@ function App(){
           <div style={{display:"flex",alignItems:"center",gap:12}}>
             <span className="topbar-chips" style={{display:"flex",alignItems:"center",gap:12}}>
               {airport && <span className="chip chip-pink"><span className="dot dot-pink"></span>{airport.iata}{airport.icao?" · "+airport.icao:""}</span>}
-              {connected && (()=>{
+              {/* airport && too, not just connected: on a restored session,
+                  connected=true from the very first render while airport
+                  stays null until the catalogue fetch lands — reading
+                  airport.cc here during that window is the crash that used
+                  to blank the whole page. */}
+              {airport && connected && (()=>{
                 const fmtDate = (iso)=> iso ? new Date(iso).toLocaleDateString("en-CA") : "—";
                 const fmtMonth = (ym)=>{ if (!ym) return "—"; const p = ym.split("-"); return MONTHS[+p[1]-1]+" "+p[0]; };
                 const wbDate = macroMeta ? fmtDate(macroMeta.generatedAt) : "—";
@@ -449,4 +465,33 @@ function App(){
   );
 }
 
-ReactDOM.createRoot(document.getElementById("root")).render(<App/>);
+/* Last line of defense for the restore path: if a saved session from an
+   older build still manages to crash a render, clear it and reload ONCE
+   (sessionStorage flag prevents a loop) — the visitor gets a fresh app
+   instead of a blank page. On a second crash in the same tab session the
+   problem isn't stale state, so show a readable failure instead. */
+class GPBoundary extends React.Component {
+  constructor(props){ super(props); this.state = { failed:false }; }
+  static getDerivedStateFromError(){ return { failed:true }; }
+  componentDidCatch(err){
+    try {
+      if (!sessionStorage.getItem("gp.reset")) {
+        sessionStorage.setItem("gp.reset", "1");
+        localStorage.removeItem(LS);
+        location.reload();
+        return;
+      }
+    } catch(e){ /* storage unavailable — fall through to the message */ }
+    console.error("Glidepath crashed:", err);
+  }
+  render(){
+    if (!this.state.failed) return this.props.children;
+    return (
+      <div style={{height:"100vh",display:"grid",placeItems:"center",color:"#9aa1b1",fontFamily:"'Space Mono',monospace",fontSize:13,textAlign:"center",lineHeight:2}}>
+        <div>GLIDEPATH HIT AN ERROR AND COULDN'T RECOVER.<br/>Check the browser console, then hard-refresh (Ctrl/Cmd+Shift+R).</div>
+      </div>
+    );
+  }
+}
+
+ReactDOM.createRoot(document.getElementById("root")).render(<GPBoundary><App/></GPBoundary>);
