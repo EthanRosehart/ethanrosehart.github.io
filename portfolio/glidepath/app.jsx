@@ -32,6 +32,12 @@ function App(){
   const [macroMeta, setMacroMeta] = useStateApp(window.GP_MACRO_META || null);
   const [actMeta, setActMeta] = useStateApp(window.GP_ACTIVITY_META || null);
   const [ofMeta, setOfMeta] = useStateApp(window.GP_OF_META || null);
+  const [imfMeta, setImfMeta] = useStateApp(window.GP_IMF_META || null);
+  // separate from imfMeta itself: true once the fetch attempt has settled
+  // (200, 404, or network error) — IMF genuinely doesn't cover every
+  // country, and the file may not exist yet on a fresh deploy, so "Connect
+  // data" treats a settled-but-empty result as done rather than hanging.
+  const [imfChecked, setImfChecked] = useStateApp(false);
   const [actVer, setActVer] = useStateApp(0);
   const [navOpen, setNavOpen] = useStateApp(false);   // mobile drawer
   const [customPending, setCustomPending] = useStateApp(false); // mid "upload your own data" flow, no airport chosen yet
@@ -186,17 +192,22 @@ function App(){
     fetch("data/imf-weo.json", { cache:"no-cache" })
       .then(r => r.ok ? r.json() : null)
       .then(j => {
-        if (!alive || !j || !j.countries) return;
-        Object.keys(j.countries).forEach(cc => {
-          const c = j.countries[cc];
-          if (!c.nextYear || c.nextYear.pct == null) return;
-          GP_ensureMacro(cc, c.name);
-          MACRO[cc].gdpcapProj = c.nextYear.pct;
-          MACRO[cc].gdpcapProjYear = c.nextYear.year;
-        });
-        if (!connectedRef.current && airportRef.current) setScenario(GP_defaultScenario(airportRef.current.iata));
+        if (!alive) return;
+        if (j && j.countries) {
+          Object.keys(j.countries).forEach(cc => {
+            const c = j.countries[cc];
+            if (!c.nextYear || c.nextYear.pct == null) return;
+            GP_ensureMacro(cc, c.name);
+            MACRO[cc].gdpcapProj = c.nextYear.pct;
+            MACRO[cc].gdpcapProjYear = c.nextYear.year;
+          });
+          window.GP_IMF_META = j;
+          setImfMeta(window.GP_IMF_META);
+          if (!connectedRef.current && airportRef.current) setScenario(GP_defaultScenario(airportRef.current.iata));
+        }
+        setImfChecked(true);
       })
-      .catch(()=>{});
+      .catch(()=>{ if (alive) setImfChecked(true); });
     return ()=>{ alive = false; };
   },[]);
 
@@ -385,6 +396,10 @@ function App(){
                 const fmtDate = (iso)=> iso ? new Date(iso).toLocaleDateString("en-CA") : "—";
                 const fmtMonth = (ym)=>{ if (!ym) return "—"; const p = ym.split("-"); return MONTHS[+p[1]-1]+" "+p[0]; };
                 const wbDate = macroMeta ? fmtDate(macroMeta.generatedAt) : "—";
+                // IMF doesn't cover every country — only count/show it as a
+                // live source when THIS airport's country actually has a
+                // forecast on file (gdpcapProj is only ever set for one that does).
+                const hasImf = !airport?.custom && MACRO[airport.cc]?.gdpcapProj != null;
                 const rows = airport?.custom
                   ? [
                       { name:"Your uploaded data", date:"this session" },
@@ -394,10 +409,12 @@ function App(){
                       { name:"OpenFlights — airport reference", date: ofMeta ? fmtDate(ofMeta.generatedAt) : "—" },
                       { name:GP_sourceLabel(GP_activityFor(airport.iata).source)+" — monthly aviation activity", date:fmtMonth(GP_activityFor(airport.iata).latest) },
                       { name:"World Bank — GDP/capita & population", date:wbDate },
+                      ...(hasImf ? [{ name:"IMF World Economic Outlook — GDP/capita forecast", date: MACRO[airport.cc].gdpcapProjYear ? String(MACRO[airport.cc].gdpcapProjYear) : "—" }] : []),
                     ];
+                const label = airport?.custom ? "your data" : (hasImf ? "4 sources live" : "3 sources live");
                 return (
-                  <span className="chip chip-ok src-tip-wrap" tabIndex={0} role="group" aria-label={(airport?.custom ? "your data" : "3 sources live")+" — focus or hover for source details"}>
-                    <span className="dot dot-ok"></span>{airport?.custom ? "your data" : "3 sources live"}
+                  <span className="chip chip-ok src-tip-wrap" tabIndex={0} role="group" aria-label={label+" — focus or hover for source details"}>
+                    <span className="dot dot-ok"></span>{label}
                     <div className="src-tip">
                       <div className="src-tip-title">{airport?.custom ? "What's live" : "Live sources"}</div>
                       {rows.map((r,i)=>(
@@ -415,7 +432,7 @@ function App(){
 
         {screen==="select"   && <Onboarding onSelect={selectAirport} selected={airport} onUpload={startUpload} onImportSession={importSession}/>}
         {screen==="connect"  && customPending && <UploadData onDone={finishCustomUpload} onCancel={cancelUpload}/>}
-        {screen==="connect"  && !customPending && airport && <ConnectData airport={airport} onDone={finishConnect} alreadyDone={connected} macroMeta={macroMeta} actMeta={actMeta} ofMeta={ofMeta} seriesStatus={seriesStatus}/>}
+        {screen==="connect"  && !customPending && airport && <ConnectData airport={airport} onDone={finishConnect} alreadyDone={connected} macroMeta={macroMeta} actMeta={actMeta} ofMeta={ofMeta} imfMeta={imfMeta} imfChecked={imfChecked} seriesStatus={seriesStatus}/>}
         {screen!=="select" && screen!=="connect" && connected && airport && !dataReady && (
           <div className="content fade-in"><div className="panel panel-pad"><div className="air-meta">
             {seriesStatus.error ? `Couldn't load ${airport.iata}'s data — check your connection and reload.` : `Loading ${airport.iata} data…`}

@@ -23,11 +23,34 @@
 </head>
 <body>
   <div id="root">
-    <div style="height:100vh;display:grid;place-items:center;color:#636978;font-family:'Space Mono',monospace;font-size:13px;letter-spacing:.1em">LOADING GLIDEPATH…</div>
+    <div id="boot-msg" style="height:100vh;display:grid;place-items:center;color:#636978;font-family:'Space Mono',monospace;font-size:13px;letter-spacing:.1em">LOADING GLIDEPATH…</div>
   </div>
+  <noscript>
+    <div style="position:fixed;inset:0;display:grid;place-items:center;background:#0b0c10;color:#9aa1b1;font-family:monospace;font-size:14px;text-align:center;padding:24px">
+      Glidepath needs JavaScript to run — please enable it and reload.
+    </div>
+  </noscript>
+  <script>
+    // If the app hasn't replaced the placeholder shortly after load, a
+    // script failed (blocked, 404, runtime error) — say so instead of
+    // showing "LOADING…" forever.
+    setTimeout(function () {
+      var msg = document.getElementById("boot-msg");
+      if (msg && !document.querySelector(".app")) {
+        msg.innerHTML = "Glidepath couldn&rsquo;t start &mdash; a script failed to load or crashed.<br>" +
+          "Check the browser console for details, then hard-refresh (Ctrl/Cmd+Shift+R).";
+        msg.style.textAlign = "center";
+        msg.style.lineHeight = "2";
+      }
+    }, 12000);
+  </script>
 
-  <script src="https://unpkg.com/react@18.3.1/umd/react.production.min.js" integrity="sha384-DGyLxAyjq0f9SPpVevD6IgztCFlnMF6oW/XQGmfe+IsZ8TqEiDrcHkMLKI6fiB/Z" crossorigin="anonymous"></script>
-  <script src="https://unpkg.com/react-dom@18.3.1/umd/react-dom.production.min.js" integrity="sha384-gTGxhz21lVGYNMcdJOyq01Edg0jhn/c22nsx0kyqP0TxaV5WVdsSH1fSDUf5YJj1" crossorigin="anonymous"></script>
+  <!-- React 18.3.1 UMD, self-hosted (vendor/README.md documents how to
+       update). Served same-origin by GitHub Pages so the app has no
+       runtime dependency on a third-party CDN: an unpkg outage used to
+       leave this page stuck on the loading screen with no error. -->
+  <script src="vendor/react.production.min.js"></script>
+  <script src="vendor/react-dom.production.min.js"></script>
 
   <!-- Precompiled by build.mjs (esbuild) from data.jsx / charts.jsx /
        screens-setup.jsx / screens-forecast.jsx / screens-strategic.jsx /

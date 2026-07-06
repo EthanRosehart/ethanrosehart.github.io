@@ -396,17 +396,23 @@ const SOURCES = [
   { id:"openflights", abbr:"OF", name:"OpenFlights Airport DB", desc:"Identifiers, geography & timezone reference", rows:"reference DB", live:true, wired:true, kind:"openflights" },
   { id:"activity",    abbr:"AVIA", name:"Eurostat / StatCan Aviation", desc:"Monthly passengers by airport — the series the forecasts run on", rows:"132 months", live:true, wired:true, kind:"activity" },
   { id:"worldbank",   abbr:"WB", name:"World Bank Open Data", desc:"Population & historical GDP/capita — catchment driver", rows:"Indicators API", live:true, wired:true, kind:"macro" },
+  { id:"imf",         abbr:"IMF", name:"IMF World Economic Outlook", desc:"Forward-looking real GDP/capita growth forecast — the GDP lever's default, and a Prophet input", rows:"DataMapper API", live:true, wired:true, kind:"imf" },
 ];
 
 /* progress/status here track the REAL fetches (App loads OpenFlights +
    World Bank once on mount, and this airport's own series once selected) —
    there's no simulated timer. "activity" is the one row genuinely still in
    flight when this screen first shows, since it's fetched lazily per
-   airport rather than preloaded like the other two. */
-function ConnectData({ airport, onDone, alreadyDone, macroMeta, actMeta, ofMeta, seriesStatus }){
+   airport rather than preloaded like the other two. IMF doesn't cover
+   every country (and the file may not exist yet on a fresh deploy), so its
+   row settles "connected" once the fetch attempt completes either way —
+   coverage for this specific country is a separate, non-blocking detail
+   shown in the row body. */
+function ConnectData({ airport, onDone, alreadyDone, macroMeta, actMeta, ofMeta, imfMeta, imfChecked, seriesStatus }){
   const wb = macroMeta && macroMeta.countries ? macroMeta.countries[airport.cc] : null;
   const of = ofMeta && ofMeta.airports ? ofMeta.airports[airport.iata] : null;
   const act = (typeof GP_activityFor==="function") ? GP_activityFor(airport.iata) : null;
+  const imf = imfMeta && imfMeta.countries ? imfMeta.countries[airport.cc] : null;
   const forThisAirport = seriesStatus && seriesStatus.iata === airport.iata;
   const activityReady = alreadyDone || (forThisAirport && seriesStatus.ready);
   const activityError = forThisAirport && seriesStatus.error;
@@ -415,8 +421,9 @@ function ConnectData({ airport, onDone, alreadyDone, macroMeta, actMeta, ofMeta,
     ofMeta ? "connected" : "syncing",
     activityError ? "error" : activityReady ? "connected" : "syncing",
     macroMeta ? "connected" : "syncing",
+    imfChecked ? "connected" : "syncing",
   ];
-  const progress = [ ofMeta?100:0, activityError?100:activityReady?100:55, macroMeta?100:0 ];
+  const progress = [ ofMeta?100:0, activityError?100:activityReady?100:55, macroMeta?100:0, imfChecked?100:0 ];
   const done = rowStatus.every(s => s==="connected");
 
   return (
@@ -455,6 +462,10 @@ function ConnectData({ airport, onDone, alreadyDone, macroMeta, actMeta, ofMeta,
                     ? (act.observed
                         ? <span>Observed via <b style={{color:"var(--cyan)"}}>{GP_sourceLabel(act.source)}</b> · <b style={{color:"var(--cyan)"}}>{act.months}</b> months of passengers{act.latest?` · to ${act.latest}`:""}</span>
                         : <span>No public monthly feed for {airport.iata} — series reconstructed from anchors</span>)
+                    : s.kind==="imf" && ok
+                    ? (imf
+                        ? <span>Forward GDP/capita: <b style={{color:"var(--cyan)"}}>{(imf.nextYear.pct>=0?"+":"")+imf.nextYear.pct}%/yr</b> ({imf.nextYear.year})</span>
+                        : <span>No WEO coverage for {airport.country} — GDP lever uses the World Bank trend instead</span>)
                     : s.desc}
                 </div>
                 <div className="src-bar"><i style={{width:p+"%", background: err?"var(--bad)":undefined}}></i></div>
@@ -463,14 +474,15 @@ function ConnectData({ airport, onDone, alreadyDone, macroMeta, actMeta, ofMeta,
                 {err
                   ? <div style={{display:"flex",alignItems:"center",gap:7,justifyContent:"flex-end",color:"var(--bad)",fontSize:13,fontWeight:600}}><span className="dot" style={{background:"var(--bad)"}}></span>Failed</div>
                   : ok
-                  ? (s.kind==="activity" && act && !act.observed
-                      ? <div style={{display:"flex",alignItems:"center",gap:7,justifyContent:"flex-end",color:"var(--amber)",fontSize:13,fontWeight:600}}><span className="dot" style={{background:"var(--amber)"}}></span>Modeled</div>
+                  ? ((s.kind==="activity" && act && !act.observed) || (s.kind==="imf" && !imf)
+                      ? <div style={{display:"flex",alignItems:"center",gap:7,justifyContent:"flex-end",color:"var(--amber)",fontSize:13,fontWeight:600}}><span className="dot" style={{background:"var(--amber)"}}></span>{s.kind==="imf"?"No coverage":"Modeled"}</div>
                       : <div style={{display:"flex",alignItems:"center",gap:7,justifyContent:"flex-end",color:"var(--ok)",fontSize:13,fontWeight:600}}><span className="dot dot-ok"></span>Connected</div>)
                   : <div style={{display:"flex",alignItems:"center",gap:7,justifyContent:"flex-end",color:"var(--dim)",fontSize:13}}><span style={{width:13,height:13,display:"inline-block",color:"var(--pink-2)"}}>{Ico.search}</span>Syncing…</div>}
                 <div className="air-meta" style={{marginTop:4}}>
                   {s.kind==="activity" && actMeta ? "snapshot "+new Date(actMeta.generatedAt).toLocaleDateString("en-CA")
                     : s.kind==="macro" && macroMeta ? "snapshot "+new Date(macroMeta.generatedAt).toLocaleDateString("en-CA")
                     : s.kind==="openflights" && ofMeta ? "snapshot "+new Date(ofMeta.generatedAt).toLocaleDateString("en-CA")
+                    : s.kind==="imf" && imfMeta ? "snapshot "+new Date(imfMeta.generatedAt).toLocaleDateString("en-CA")
                     : s.rows}
                 </div>
               </div>
