@@ -95,14 +95,15 @@ countries for a while; fixed, now ~30.
 World Bank's Indicators API is historical-actuals only — it has no GDP
 *forecast* product. IMF's **World Economic Outlook** (WEO, refreshed every
 April/October) does: real GDP/capita growth projections 2–5 years out, per
-country. Pulled via IMF's plain-JSON DataMapper API (`NGDPRPPPPC` — real
-GDP per capita, constant-PPP levels; growth derived between consecutive
-years, which cancels the constant per-country PPP factor). The fetcher
-requests the indicator's whole dataset in one call and selects countries
-itself: DataMapper silently ignores its country/periods filters on any
-mismatch and dumps the full dataset, and the similarly-named `NGDPRPC_PCH`
-belongs to the Sub-Saharan-Africa REO dataset, not WEO — both burned a
-day of CI debugging (PR #20). Chosen over OECD's SDMX Economic Outlook feed,
+country. Pulled via IMF's plain-JSON DataMapper API by deriving per-capita
+growth from two WEO series — `NGDP_RPCH` (real GDP growth, %) and `LP`
+(population): `(1+gdp)/(1+popGrowth)-1`. Probing the live API (see the
+fetcher's header) established that DataMapper's WEO dataset has NO direct
+real-per-capita series, that the similarly-named `NGDPRPC_PCH` belongs to
+the Sub-Saharan-Africa REO dataset (the trap PR #20 burned a day on), and
+that the country/periods filters are silently ignored — so each indicator
+is fetched whole, once, and all selection happens in the script. Chosen
+over OECD's SDMX Economic Outlook feed,
 which was tried three separate times for this same purpose and dropped
 after persistent HTTP 500s (see git history on the now-deleted
 `fetch-oecd.mjs`) — IMF's API has no dataflow version or key-shape to guess
