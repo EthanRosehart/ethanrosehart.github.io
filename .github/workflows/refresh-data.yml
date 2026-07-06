@@ -70,14 +70,22 @@ jobs:
         run: python portfolio/glidepath/scripts/build-forecast.py
         continue-on-error: true   # never block the data refresh on the model step
 
-      - name: Commit if changed
+      # Auto-commit is main-only: dispatch runs on a feature branch still
+      # exercise every fetcher (that's how you debug one — read the logs),
+      # but committing snapshots to PR branches is what made PR #20
+      # unmergeable — dozens of generated files conflicting with main's
+      # own nightly commits.
+      - name: Commit if changed (main only)
         run: |
-          git config user.name  "glidepath-bot"
-          git config user.email "github-actions[bot]@users.noreply.github.com"
           git add portfolio/glidepath/data/
           if git diff --staged --quiet; then
             echo "No change in data — nothing to commit."
+          elif [ "$GITHUB_REF_NAME" != "main" ]; then
+            echo "Refreshed data differs, but '$GITHUB_REF_NAME' is not main — skipping commit:"
+            git diff --staged --stat | tail -5
           else
+            git config user.name  "glidepath-bot"
+            git config user.email "github-actions[bot]@users.noreply.github.com"
             git commit -m "chore(data): nightly Glidepath refresh [skip ci]"
             git push
           fi
