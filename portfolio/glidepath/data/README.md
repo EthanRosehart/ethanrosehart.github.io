@@ -95,9 +95,14 @@ countries for a while; fixed, now ~30.
 World Bank's Indicators API is historical-actuals only — it has no GDP
 *forecast* product. IMF's **World Economic Outlook** (WEO, refreshed every
 April/October) does: real GDP/capita growth projections 2–5 years out, per
-country. Pulled via IMF's plain-JSON DataMapper API (`NGDPRPC` — real
-GDP/capita, constant prices, national currency; growth is derived from
-consecutive years' levels) rather than OECD's SDMX Economic Outlook feed,
+country. Pulled via IMF's plain-JSON DataMapper API (`NGDPRPPPPC` — real
+GDP per capita, constant-PPP levels; growth derived between consecutive
+years, which cancels the constant per-country PPP factor). The fetcher
+requests the indicator's whole dataset in one call and selects countries
+itself: DataMapper silently ignores its country/periods filters on any
+mismatch and dumps the full dataset, and the similarly-named `NGDPRPC_PCH`
+belongs to the Sub-Saharan-Africa REO dataset, not WEO — both burned a
+day of CI debugging (PR #20). Chosen over OECD's SDMX Economic Outlook feed,
 which was tried three separate times for this same purpose and dropped
 after persistent HTTP 500s (see git history on the now-deleted
 `fetch-oecd.mjs`) — IMF's API has no dataflow version or key-shape to guess
@@ -111,6 +116,15 @@ This feeds two places:
   country IMF doesn't cover.
 - **Prophet's GDP/capita regressor**, for the specific future years IMF
   covers — see below.
+
+The **Connect data** screen shows IMF as a fourth row alongside OpenFlights,
+aviation activity and World Bank, and the topbar's "sources live" tooltip
+counts it too — but only when this specific airport's country actually has
+IMF coverage (`MACRO[cc].gdpcapProj != null`), not just whenever the fetch
+itself succeeds. A country the WEO doesn't cover shows an amber "No
+coverage" row rather than red/blocking, and the count reads "3 sources
+live" instead of "4" — coverage gaps are a normal, disclosed case here, not
+an error.
 
 ### Short-term forecasts — `data/forecast-meta.json` + `data/forecasts/<IATA>.json`
 (`scripts/build-forecast.py`)

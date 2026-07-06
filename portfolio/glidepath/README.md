@@ -18,7 +18,7 @@ same catalogue and forecasting machinery.
 | Screen | Purpose |
 |---|---|
 | **Select airport** | Upload your own data, or connect to the open-source catalogue and search/browse gateways with a live public passenger feed — presented as an explicit either/or, not one path buried under the other. Also where a previously saved session gets re-imported. |
-| **Connect data** | Shows the three data sources (OpenFlights, Eurostat/StatCan aviation activity, World Bank macro) reconciling for the chosen airport. **Upload data** is a parallel step, not a relabeling of this one — both are always visible in the nav, split by an "or". |
+| **Connect data** | Shows the data sources reconciling for the chosen airport — OpenFlights, Eurostat/StatCan aviation activity, World Bank macro, and (where the country's covered) an IMF WEO row for the GDP/capita forecast. **Upload data** is a parallel step, not a relabeling of this one — both are always visible in the nav, split by an "or". |
 | **Overview** | KPI headline, annual throughput history, seasonality, passenger-mix donut. |
 | **Short-term (Prophet)** | 12–24 month tactical forecast with confidence band, model card, and monthly detail table. Not available for uploaded data — see below. |
 | **Long-term** | 10/15/25-year strategic trajectory from the elasticity model, with a growth-driver decomposition. |
@@ -131,7 +131,9 @@ would otherwise leave behind — see the "ghost gateway" test in
 
 ## Architecture
 
-React 18 (production build, from a CDN). The app's own six `.jsx` files are
+React 18 (production build, self-hosted in [`vendor/`](vendor/README.md) —
+no third-party CDN at runtime, so a CDN outage can't take the app down
+with it). The app's own six `.jsx` files are
 precompiled by [`build.mjs`](build.mjs) (esbuild) into a single minified
 `dist/app.bundle.js` — the browser never downloads a JSX compiler, only that
 one plain-JS file. See [Building](#building) for how the bundle gets

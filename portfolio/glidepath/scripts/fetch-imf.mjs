@@ -8,14 +8,25 @@
  * an extrapolation of history — unlike the trailing-rate extrapolation
  * build-forecast.py falls back to for a country this file doesn't cover.
  *
- * Uses NGDPRPC (real GDP per capita, constant prices, national currency)
+ * Uses NGDPRPPPPC (real GDP per capita, constant prices, PPP 2017 int'l $)
  * rather than an aggregate growth indicator: the long-term model's "gdp"
  * lever is specifically PER-CAPITA growth — population growth is already
  * a separate additive term (see defaultScenario() in data.jsx) — so
  * feeding it aggregate growth would double-count population. Growth
- * rates are derived from consecutive years' levels, which also sidesteps
- * any currency conversion: levels stay in national currency; only the
- * ratio between consecutive years is used.
+ * rates are derived from consecutive years' levels, which also cancels
+ * the (constant, per-country) PPP conversion factor: only the ratio
+ * between consecutive years is used.
+ *
+ * Hard-won API lessons, in CI logs of PR #20's dispatch runs:
+ *   - NGDPRPC_PCH is NOT a WEO indicator — it belongs to the Sub-Saharan
+ *     Africa Regional Economic Outlook dataset. Querying it "worked" but
+ *     returned only African countries/aggregates (AGO, BEN, … CEMAC).
+ *   - The /{indicator}/{country} path filter and the ?periods= param are
+ *     silently IGNORED whenever they don't match — the API just dumps the
+ *     indicator's entire dataset instead of erroring. So this fetcher
+ *     requests the whole indicator ONCE (small — one number per country
+ *     per year) and does country/year selection itself, where behavior
+ *     is guaranteed.
  *
  * Deliberately NOT OECD's SDMX Economic Outlook endpoint: that was tried
  * three separate times for this exact purpose (see git history on the
@@ -59,22 +70,25 @@ async function deriveCountries() {
   return countries;
 }
 
-const INDICATOR = "NGDPRPC"; // real GDP per capita, constant prices (national currency)
+const INDICATOR = "NGDPRPPPPC"; // real GDP per capita, constant prices (PPP, 2017 int'l $) — a real WEO DataMapper indicator
 const API = "https://www.imf.org/external/datamapper/api/v1";
 const YEARS_BACK = 1; // one actual year further back, so the first projected year has a predecessor to grow from
 const YEARS_FWD = 5;  // WEO's typical projection horizon
 
-async function fetchLevels(codes) {
-  const now = new Date().getFullYear();
-  const periods = [];
-  for (let y = now - YEARS_BACK; y <= now + YEARS_FWD; y++) periods.push(y);
-  const url = `${API}/${INDICATOR}/${codes.join(";")}?periods=${periods.join(",")}`;
+/** One request for the indicator's entire dataset — no country path
+ *  segment, no periods param, since both are silently ignored on any
+ *  mismatch (see header). Returns { CC: { "2025": level, ... }, ... }
+ *  for every country IMF publishes; the caller selects what it needs. */
+async function fetchAllLevels() {
+  const url = `${API}/${INDICATOR}`;
   const res = await fetch(url, { headers: { "User-Agent": "glidepath-data-bot" } });
   if (!res.ok) throw new Error(`IMF ${INDICATOR}: HTTP ${res.status}`);
   const body = await res.json();
   const values = body?.values?.[INDICATOR];
-  if (!values || typeof values !== "object") throw new Error(`IMF ${INDICATOR}: unexpected payload shape`);
-  return values; // { CC: { "2025": 12345.6, "2026": ..., ... }, ... }
+  if (!values || typeof values !== "object" || !Object.keys(values).length) {
+    throw new Error(`IMF ${INDICATOR}: unexpected payload shape`);
+  }
+  return values;
 }
 
 const round1 = (n) => Math.round(n * 10) / 10;
@@ -82,9 +96,15 @@ const round1 = (n) => Math.round(n * 10) / 10;
 /** {"2025": level, "2026": level, ...} -> [{year, pct}] ascending, one entry
  *  per year that has both itself and its predecessor's level (the earliest
  *  year in the window, with no predecessor in this response, is dropped
- *  rather than guessed at). */
+ *  rather than guessed at). Years outside [now-YEARS_BACK, now+YEARS_FWD]
+ *  are excluded here — the dataset ships IMF's full history, which the app
+ *  doesn't need (World Bank actuals already cover the past). */
 function growthRates(levelsByYear) {
-  const years = Object.keys(levelsByYear).map(Number).sort((a, b) => a - b);
+  const now = new Date().getFullYear();
+  const years = Object.keys(levelsByYear)
+    .map(Number)
+    .filter((y) => y >= now - YEARS_BACK && y <= now + YEARS_FWD)
+    .sort((a, b) => a - b);
   const out = [];
   for (let i = 1; i < years.length; i++) {
     const y0 = years[i - 1], y1 = years[i];
@@ -98,17 +118,18 @@ function growthRates(levelsByYear) {
 async function main() {
   const countries = await deriveCountries();
   const codes = Object.keys(countries);
-  console.log(`Fetching IMF WEO (${INDICATOR}) for ${codes.length} countries…`);
+  console.log(`Fetching IMF WEO (${INDICATOR}), selecting ${codes.length} countries…`);
 
-  const values = await fetchLevels(codes);
+  const values = await fetchAllLevels();
 
   const upcomingYear = new Date().getFullYear() + 1;
   const out = {};
+  const missing = [];
   for (const cc of codes) {
     const levels = values[cc];
-    if (!levels) continue;
+    if (!levels) { missing.push(cc); continue; }
     const rates = growthRates(levels);
-    if (!rates.length) continue;
+    if (!rates.length) { missing.push(cc); continue; }
     // near-term default for the long-term model's GDP lever: the next
     // calendar year's growth, not an average across the horizon — the most
     // immediately actionable single number. `rates[0]` is actually THIS
@@ -120,12 +141,13 @@ async function main() {
     out[cc] = { name: countries[cc], nextYear, years: rates }; // years: full horizon, for Prophet's per-year regressor extrapolation
     console.log(`  ${cc}  next=${nextYear.year}:${nextYear.pct}%  horizon=${rates.length}yr`);
   }
+  if (missing.length) console.warn(`IMF: no WEO coverage for ${missing.length}/${codes.length} countries — ${missing.join(", ")}`);
   if (!Object.keys(out).length) throw new Error("no IMF WEO values parsed for any country — check INDICATOR/payload shape");
 
   const result = {
     generatedAt: new Date().toISOString(),
     source: "IMF World Economic Outlook (DataMapper API, www.imf.org/external/datamapper) — real GDP/capita growth forecast",
-    indicator: `${INDICATOR} · real GDP per capita, constant prices, national currency — growth computed between consecutive years' levels`,
+    indicator: `${INDICATOR} · real GDP per capita, constant prices (PPP, 2017 int'l $) — growth computed between consecutive years' levels`,
     note: ("Genuine forward-looking forecast (WEO, refreshed each April/October), not an extrapolation of history. "
       + "Feeds the long-term model's GDP lever default (gdpcapProj) and, per year, Prophet's GDP/capita regressor "
       + "beyond the last observed year, in build-forecast.py. A country missing here falls back to the trailing "
