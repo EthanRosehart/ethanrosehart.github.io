@@ -1,0 +1,1031 @@
+{
+  "generatedAt": "2026-07-06T05:19:12.212Z",
+  "source": "IMF World Economic Outlook (DataMapper API, www.imf.org/external/datamapper) — real GDP/capita growth forecast",
+  "indicator": "NGDP_RPCH (real GDP growth, %) ÷ LP (population) — real per-capita growth derived per year; WEO's DataMapper has no direct real-per-capita series",
+  "note": "Genuine forward-looking forecast (WEO, refreshed each April/October), not an extrapolation of history. Feeds the long-term model's GDP lever default (gdpcapProj) and, per year, Prophet's GDP/capita regressor beyond the last observed year, in build-forecast.py. A country missing here falls back to the trailing World Bank growth-rate extrapolation instead — never a hard failure.",
+  "countries": {
+    "CAN": {
+      "name": "Canada",
+      "nextYear": {
+        "year": 2027,
+        "pct": 1.8
+      },
+      "years": [
+        {
+          "year": 2026,
+          "pct": 1.6
+        },
+        {
+          "year": 2027,
+          "pct": 1.8
+        },
+        {
+          "year": 2028,
+          "pct": 1.4
+        },
+        {
+          "year": 2029,
+          "pct": 1
+        },
+        {
+          "year": 2030,
+          "pct": 0.9
+        },
+        {
+          "year": 2031,
+          "pct": 1
+        }
+      ]
+    },
+    "USA": {
+      "name": "United States",
+      "nextYear": {
+        "year": 2027,
+        "pct": 1.8
+      },
+      "years": [
+        {
+          "year": 2026,
+          "pct": 2
+        },
+        {
+          "year": 2027,
+          "pct": 1.8
+        },
+        {
+          "year": 2028,
+          "pct": 1.8
+        },
+        {
+          "year": 2029,
+          "pct": 1.6
+        },
+        {
+          "year": 2030,
+          "pct": 1.5
+        },
+        {
+          "year": 2031,
+          "pct": 1.5
+        }
+      ]
+    },
+    "GBR": {
+      "name": "United Kingdom",
+      "nextYear": {
+        "year": 2027,
+        "pct": 0.9
+      },
+      "years": [
+        {
+          "year": 2026,
+          "pct": 0.3
+        },
+        {
+          "year": 2027,
+          "pct": 0.9
+        },
+        {
+          "year": 2028,
+          "pct": 1.2
+        },
+        {
+          "year": 2029,
+          "pct": 1.2
+        },
+        {
+          "year": 2030,
+          "pct": 1
+        },
+        {
+          "year": 2031,
+          "pct": 1
+        }
+      ]
+    },
+    "NLD": {
+      "name": "Netherlands",
+      "nextYear": {
+        "year": 2027,
+        "pct": 0.9
+      },
+      "years": [
+        {
+          "year": 2026,
+          "pct": 0.7
+        },
+        {
+          "year": 2027,
+          "pct": 0.9
+        },
+        {
+          "year": 2028,
+          "pct": 1
+        },
+        {
+          "year": 2029,
+          "pct": 0.9
+        },
+        {
+          "year": 2030,
+          "pct": 0.8
+        },
+        {
+          "year": 2031,
+          "pct": 0.8
+        }
+      ]
+    },
+    "DEU": {
+      "name": "Germany",
+      "nextYear": {
+        "year": 2027,
+        "pct": 1.3
+      },
+      "years": [
+        {
+          "year": 2026,
+          "pct": 0.8
+        },
+        {
+          "year": 2027,
+          "pct": 1.3
+        },
+        {
+          "year": 2028,
+          "pct": 1.3
+        },
+        {
+          "year": 2029,
+          "pct": 1
+        },
+        {
+          "year": 2030,
+          "pct": 0.8
+        },
+        {
+          "year": 2031,
+          "pct": 0.7
+        }
+      ]
+    },
+    "DNK": {
+      "name": "Denmark",
+      "nextYear": {
+        "year": 2027,
+        "pct": 0.8
+      },
+      "years": [
+        {
+          "year": 2026,
+          "pct": 1.3
+        },
+        {
+          "year": 2027,
+          "pct": 0.8
+        },
+        {
+          "year": 2028,
+          "pct": 0.7
+        },
+        {
+          "year": 2029,
+          "pct": 0.9
+        },
+        {
+          "year": 2030,
+          "pct": 0.8
+        },
+        {
+          "year": 2031,
+          "pct": 0.8
+        }
+      ]
+    },
+    "AUT": {
+      "name": "Austria",
+      "nextYear": {
+        "year": 2027,
+        "pct": 0.7
+      },
+      "years": [
+        {
+          "year": 2026,
+          "pct": 0.4
+        },
+        {
+          "year": 2027,
+          "pct": 0.7
+        },
+        {
+          "year": 2028,
+          "pct": 1
+        },
+        {
+          "year": 2029,
+          "pct": 0.8
+        },
+        {
+          "year": 2030,
+          "pct": 0.5
+        },
+        {
+          "year": 2031,
+          "pct": 0.5
+        }
+      ]
+    },
+    "ITA": {
+      "name": "Italy",
+      "nextYear": {
+        "year": 2027,
+        "pct": 0.6
+      },
+      "years": [
+        {
+          "year": 2026,
+          "pct": 0.6
+        },
+        {
+          "year": 2027,
+          "pct": 0.6
+        },
+        {
+          "year": 2028,
+          "pct": 1
+        },
+        {
+          "year": 2029,
+          "pct": 0.9
+        },
+        {
+          "year": 2030,
+          "pct": 0.9
+        },
+        {
+          "year": 2031,
+          "pct": 0.9
+        }
+      ]
+    },
+    "POL": {
+      "name": "Poland",
+      "nextYear": {
+        "year": 2027,
+        "pct": 2.6
+      },
+      "years": [
+        {
+          "year": 2026,
+          "pct": 4.2
+        },
+        {
+          "year": 2027,
+          "pct": 2.6
+        },
+        {
+          "year": 2028,
+          "pct": 2.8
+        },
+        {
+          "year": 2029,
+          "pct": 2.8
+        },
+        {
+          "year": 2030,
+          "pct": 2.7
+        },
+        {
+          "year": 2031,
+          "pct": 2.7
+        }
+      ]
+    },
+    "ESP": {
+      "name": "Spain",
+      "nextYear": {
+        "year": 2027,
+        "pct": 0.7
+      },
+      "years": [
+        {
+          "year": 2026,
+          "pct": 0.9
+        },
+        {
+          "year": 2027,
+          "pct": 0.7
+        },
+        {
+          "year": 2028,
+          "pct": 0.9
+        },
+        {
+          "year": 2029,
+          "pct": 0.9
+        },
+        {
+          "year": 2030,
+          "pct": 1.1
+        },
+        {
+          "year": 2031,
+          "pct": 1.2
+        }
+      ]
+    },
+    "FIN": {
+      "name": "Finland",
+      "nextYear": {
+        "year": 2027,
+        "pct": 1.5
+      },
+      "years": [
+        {
+          "year": 2026,
+          "pct": 0.9
+        },
+        {
+          "year": 2027,
+          "pct": 1.5
+        },
+        {
+          "year": 2028,
+          "pct": 1.5
+        },
+        {
+          "year": 2029,
+          "pct": 1.5
+        },
+        {
+          "year": 2030,
+          "pct": 1.3
+        },
+        {
+          "year": 2031,
+          "pct": 1.3
+        }
+      ]
+    },
+    "HUN": {
+      "name": "Hungary",
+      "nextYear": {
+        "year": 2027,
+        "pct": 2.2
+      },
+      "years": [
+        {
+          "year": 2026,
+          "pct": 2
+        },
+        {
+          "year": 2027,
+          "pct": 2.2
+        },
+        {
+          "year": 2028,
+          "pct": 2.6
+        },
+        {
+          "year": 2029,
+          "pct": 2.7
+        },
+        {
+          "year": 2030,
+          "pct": 2.7
+        },
+        {
+          "year": 2031,
+          "pct": 2.8
+        }
+      ]
+    },
+    "CZE": {
+      "name": "Czechia",
+      "nextYear": {
+        "year": 2027,
+        "pct": 2.5
+      },
+      "years": [
+        {
+          "year": 2026,
+          "pct": 2.5
+        },
+        {
+          "year": 2027,
+          "pct": 2.5
+        },
+        {
+          "year": 2028,
+          "pct": 2.4
+        },
+        {
+          "year": 2029,
+          "pct": 2.2
+        },
+        {
+          "year": 2030,
+          "pct": 2.1
+        },
+        {
+          "year": 2031,
+          "pct": 2.1
+        }
+      ]
+    },
+    "FRA": {
+      "name": "France",
+      "nextYear": {
+        "year": 2027,
+        "pct": 0.6
+      },
+      "years": [
+        {
+          "year": 2026,
+          "pct": 0.6
+        },
+        {
+          "year": 2027,
+          "pct": 0.6
+        },
+        {
+          "year": 2028,
+          "pct": 0.9
+        },
+        {
+          "year": 2029,
+          "pct": 0.9
+        },
+        {
+          "year": 2030,
+          "pct": 0.8
+        },
+        {
+          "year": 2031,
+          "pct": 0.8
+        }
+      ]
+    },
+    "PRT": {
+      "name": "Portugal",
+      "nextYear": {
+        "year": 2027,
+        "pct": 2.1
+      },
+      "years": [
+        {
+          "year": 2026,
+          "pct": 2.2
+        },
+        {
+          "year": 2027,
+          "pct": 2.1
+        },
+        {
+          "year": 2028,
+          "pct": 2.1
+        },
+        {
+          "year": 2029,
+          "pct": 1.9
+        },
+        {
+          "year": 2030,
+          "pct": 1.8
+        },
+        {
+          "year": 2031,
+          "pct": 1.8
+        }
+      ]
+    },
+    "IRL": {
+      "name": "Ireland",
+      "nextYear": {
+        "year": 2027,
+        "pct": 1.5
+      },
+      "years": [
+        {
+          "year": 2026,
+          "pct": 1.3
+        },
+        {
+          "year": 2027,
+          "pct": 1.5
+        },
+        {
+          "year": 2028,
+          "pct": 1.7
+        },
+        {
+          "year": 2029,
+          "pct": 1.5
+        },
+        {
+          "year": 2030,
+          "pct": 1.4
+        },
+        {
+          "year": 2031,
+          "pct": 1.5
+        }
+      ]
+    },
+    "SWE": {
+      "name": "Sweden",
+      "nextYear": {
+        "year": 2027,
+        "pct": 1.2
+      },
+      "years": [
+        {
+          "year": 2026,
+          "pct": 1.2
+        },
+        {
+          "year": 2027,
+          "pct": 1.2
+        },
+        {
+          "year": 2028,
+          "pct": 1.4
+        },
+        {
+          "year": 2029,
+          "pct": 1.3
+        },
+        {
+          "year": 2030,
+          "pct": 1.2
+        },
+        {
+          "year": 2031,
+          "pct": 1.2
+        }
+      ]
+    },
+    "CHE": {
+      "name": "Switzerland",
+      "nextYear": {
+        "year": 2027,
+        "pct": 0.6
+      },
+      "years": [
+        {
+          "year": 2026,
+          "pct": 0.6
+        },
+        {
+          "year": 2027,
+          "pct": 0.6
+        },
+        {
+          "year": 2028,
+          "pct": 1.1
+        },
+        {
+          "year": 2029,
+          "pct": 0.5
+        },
+        {
+          "year": 2030,
+          "pct": 1.1
+        },
+        {
+          "year": 2031,
+          "pct": 0.5
+        }
+      ]
+    },
+    "GRC": {
+      "name": "Greece",
+      "nextYear": {
+        "year": 2027,
+        "pct": 1.9
+      },
+      "years": [
+        {
+          "year": 2026,
+          "pct": 1.9
+        },
+        {
+          "year": 2027,
+          "pct": 1.9
+        },
+        {
+          "year": 2028,
+          "pct": 1.7
+        },
+        {
+          "year": 2029,
+          "pct": 1.8
+        },
+        {
+          "year": 2030,
+          "pct": 1.7
+        },
+        {
+          "year": 2031,
+          "pct": 1.9
+        }
+      ]
+    },
+    "NOR": {
+      "name": "Norway",
+      "nextYear": {
+        "year": 2027,
+        "pct": 0.5
+      },
+      "years": [
+        {
+          "year": 2026,
+          "pct": 0.7
+        },
+        {
+          "year": 2027,
+          "pct": 0.5
+        },
+        {
+          "year": 2028,
+          "pct": 0.3
+        },
+        {
+          "year": 2029,
+          "pct": 0.3
+        },
+        {
+          "year": 2030,
+          "pct": 0.3
+        },
+        {
+          "year": 2031,
+          "pct": 0.3
+        }
+      ]
+    },
+    "ISL": {
+      "name": "Iceland",
+      "nextYear": {
+        "year": 2027,
+        "pct": 0.1
+      },
+      "years": [
+        {
+          "year": 2026,
+          "pct": -0.4
+        },
+        {
+          "year": 2027,
+          "pct": 0.1
+        },
+        {
+          "year": 2028,
+          "pct": 0.2
+        },
+        {
+          "year": 2029,
+          "pct": 0.5
+        },
+        {
+          "year": 2030,
+          "pct": 0.3
+        },
+        {
+          "year": 2031,
+          "pct": 0.5
+        }
+      ]
+    },
+    "BGR": {
+      "name": "Bulgaria",
+      "nextYear": {
+        "year": 2027,
+        "pct": 3.4
+      },
+      "years": [
+        {
+          "year": 2026,
+          "pct": 3.7
+        },
+        {
+          "year": 2027,
+          "pct": 3.4
+        },
+        {
+          "year": 2028,
+          "pct": 3.7
+        },
+        {
+          "year": 2029,
+          "pct": 3.4
+        },
+        {
+          "year": 2030,
+          "pct": 3.5
+        },
+        {
+          "year": 2031,
+          "pct": 3.3
+        }
+      ]
+    },
+    "CYP": {
+      "name": "Cyprus",
+      "nextYear": {
+        "year": 2027,
+        "pct": 1.9
+      },
+      "years": [
+        {
+          "year": 2026,
+          "pct": 1.8
+        },
+        {
+          "year": 2027,
+          "pct": 1.9
+        },
+        {
+          "year": 2028,
+          "pct": 2.7
+        },
+        {
+          "year": 2029,
+          "pct": 2.8
+        },
+        {
+          "year": 2030,
+          "pct": 2.7
+        },
+        {
+          "year": 2031,
+          "pct": 2.8
+        }
+      ]
+    },
+    "ROU": {
+      "name": "Romania",
+      "nextYear": {
+        "year": 2027,
+        "pct": 3.2
+      },
+      "years": [
+        {
+          "year": 2026,
+          "pct": 1.3
+        },
+        {
+          "year": 2027,
+          "pct": 3.2
+        },
+        {
+          "year": 2028,
+          "pct": 3.4
+        },
+        {
+          "year": 2029,
+          "pct": 3.6
+        },
+        {
+          "year": 2030,
+          "pct": 3.8
+        },
+        {
+          "year": 2031,
+          "pct": 3.8
+        }
+      ]
+    },
+    "LVA": {
+      "name": "Latvia",
+      "nextYear": {
+        "year": 2027,
+        "pct": 2.6
+      },
+      "years": [
+        {
+          "year": 2026,
+          "pct": 2.4
+        },
+        {
+          "year": 2027,
+          "pct": 2.6
+        },
+        {
+          "year": 2028,
+          "pct": 2.6
+        },
+        {
+          "year": 2029,
+          "pct": 2.6
+        },
+        {
+          "year": 2030,
+          "pct": 2.6
+        },
+        {
+          "year": 2031,
+          "pct": 2.6
+        }
+      ]
+    },
+    "LUX": {
+      "name": "Luxembourg",
+      "nextYear": {
+        "year": 2027,
+        "pct": -0.3
+      },
+      "years": [
+        {
+          "year": 2026,
+          "pct": -0.4
+        },
+        {
+          "year": 2027,
+          "pct": -0.3
+        },
+        {
+          "year": 2028,
+          "pct": 0.1
+        },
+        {
+          "year": 2029,
+          "pct": 0.2
+        },
+        {
+          "year": 2030,
+          "pct": 0
+        },
+        {
+          "year": 2031,
+          "pct": 0
+        }
+      ]
+    },
+    "LTU": {
+      "name": "Lithuania",
+      "nextYear": {
+        "year": 2027,
+        "pct": 2.1
+      },
+      "years": [
+        {
+          "year": 2026,
+          "pct": 2.7
+        },
+        {
+          "year": 2027,
+          "pct": 2.1
+        },
+        {
+          "year": 2028,
+          "pct": 2.7
+        },
+        {
+          "year": 2029,
+          "pct": 2.8
+        },
+        {
+          "year": 2030,
+          "pct": 2.8
+        },
+        {
+          "year": 2031,
+          "pct": 2.7
+        }
+      ]
+    },
+    "HRV": {
+      "name": "Croatia",
+      "nextYear": {
+        "year": 2027,
+        "pct": 2.4
+      },
+      "years": [
+        {
+          "year": 2026,
+          "pct": 2.4
+        },
+        {
+          "year": 2027,
+          "pct": 2.4
+        },
+        {
+          "year": 2028,
+          "pct": 2.4
+        },
+        {
+          "year": 2029,
+          "pct": 2.3
+        },
+        {
+          "year": 2030,
+          "pct": 2.3
+        },
+        {
+          "year": 2031,
+          "pct": 2.3
+        }
+      ]
+    },
+    "BEL": {
+      "name": "Belgium",
+      "nextYear": {
+        "year": 2027,
+        "pct": 0.8
+      },
+      "years": [
+        {
+          "year": 2026,
+          "pct": 0.3
+        },
+        {
+          "year": 2027,
+          "pct": 0.8
+        },
+        {
+          "year": 2028,
+          "pct": 0.8
+        },
+        {
+          "year": 2029,
+          "pct": 0.9
+        },
+        {
+          "year": 2030,
+          "pct": 1
+        },
+        {
+          "year": 2031,
+          "pct": 1
+        }
+      ]
+    },
+    "SVK": {
+      "name": "Slovakia",
+      "nextYear": {
+        "year": 2027,
+        "pct": 1.8
+      },
+      "years": [
+        {
+          "year": 2026,
+          "pct": 0.8
+        },
+        {
+          "year": 2027,
+          "pct": 1.8
+        },
+        {
+          "year": 2028,
+          "pct": 2.9
+        },
+        {
+          "year": 2029,
+          "pct": 2.8
+        },
+        {
+          "year": 2030,
+          "pct": 2.5
+        },
+        {
+          "year": 2031,
+          "pct": 2.1
+        }
+      ]
+    },
+    "SRB": {
+      "name": "Serbia",
+      "nextYear": {
+        "year": 2027,
+        "pct": 4.4
+      },
+      "years": [
+        {
+          "year": 2026,
+          "pct": 3.5
+        },
+        {
+          "year": 2027,
+          "pct": 4.4
+        },
+        {
+          "year": 2028,
+          "pct": 4.3
+        },
+        {
+          "year": 2029,
+          "pct": 4.3
+        },
+        {
+          "year": 2030,
+          "pct": 4.3
+        },
+        {
+          "year": 2031,
+          "pct": 4.3
+        }
+      ]
+    }
+  }
+}
