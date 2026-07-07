@@ -394,7 +394,7 @@ function UploadData({ onDone, onCancel }){
 /* ---------- Connect data sources ----------------------------- */
 const SOURCES = [
   { id:"openflights", abbr:"OF", name:"OpenFlights Airport DB", desc:"Identifiers, geography & timezone reference", rows:"reference DB", live:true, wired:true, kind:"openflights" },
-  { id:"activity",    abbr:"AVIA", name:"Eurostat / StatCan Aviation", desc:"Monthly passengers by airport — the series the forecasts run on", rows:"132 months", live:true, wired:true, kind:"activity" },
+  { id:"activity",    abbr:"AVIA", name:"Eurostat / StatCan Aviation", desc:"Monthly passengers by airport — the series the forecasts run on", rows:"monthly series", live:true, wired:true, kind:"activity" },
   { id:"worldbank",   abbr:"WB", name:"World Bank Open Data", desc:"Population & historical GDP/capita — catchment driver", rows:"Indicators API", live:true, wired:true, kind:"macro" },
   { id:"imf",         abbr:"IMF", name:"IMF World Economic Outlook", desc:"Forward-looking real GDP/capita growth forecast — the GDP lever's default, and a Prophet input", rows:"DataMapper API", live:true, wired:true, kind:"imf" },
 ];
@@ -461,7 +461,7 @@ function ConnectData({ airport, onDone, alreadyDone, macroMeta, actMeta, ofMeta,
                     : s.kind==="activity" && ok && act
                     ? (act.observed
                         ? <span>Observed via <b style={{color:"var(--cyan)"}}>{GP_sourceLabel(act.source)}</b> · <b style={{color:"var(--cyan)"}}>{act.months}</b> months of passengers{act.latest?` · to ${act.latest}`:""}</span>
-                        : <span>No public monthly feed for {airport.iata} — series reconstructed from anchors</span>)
+                        : <span>No public monthly feed for {airport.iata} — this gateway can't be forecast</span>)
                     : s.kind==="imf" && ok
                     ? (imf
                         ? <span>Forward GDP/capita: <b style={{color:"var(--cyan)"}}>{(imf.nextYear.pct>=0?"+":"")+imf.nextYear.pct}%/yr</b> ({imf.nextYear.year})</span>
@@ -501,8 +501,8 @@ function ConnectData({ airport, onDone, alreadyDone, macroMeta, actMeta, ofMeta,
             {done ? Ico.check : activityError ? "!" : <span className="spin" style={{width:18,height:18}}>{Ico.search}</span>}
           </span>
           <div>
-            <div style={{fontWeight:600, fontSize:15}}>{done ? (act && act.observed ? `Dataset ready — ${act.months} months of observed passengers` : "Dataset ready — 132 months assembled") : activityError ? "Couldn't load this gateway's data" : "Reconciling feeds…"}</div>
-            <div className="air-meta" style={{marginTop:3}}>{done ? (act && act.observed ? `${GP_sourceLabel(act.source)} passengers drive the forecasts · movements, seats & cargo aligned to ${airport.iata}` : "PAX · ATM · cargo · seats · macro drivers, all aligned to "+airport.iata) : activityError ? "Try reloading the page" : "Cross-checking units, gaps and outliers"}</div>
+            <div style={{fontWeight:600, fontSize:15}}>{done ? (act && act.observed ? `Dataset ready — ${act.months} months of observed passengers` : "Dataset ready") : activityError ? "Couldn't load this gateway's data" : "Reconciling feeds…"}</div>
+            <div className="air-meta" style={{marginTop:3}}>{done ? (act && act.observed ? `${GP_sourceLabel(act.source)} passengers drive the forecasts · movements & cargo aligned to ${airport.iata} where published` : "Macro drivers aligned to "+airport.iata) : activityError ? "Try reloading the page" : "Cross-checking units, gaps and outliers"}</div>
           </div>
         </div>
         <button className="btn btn-primary btn-lg" disabled={!done} onClick={onDone}>Build forecast {Ico.arrow}</button>

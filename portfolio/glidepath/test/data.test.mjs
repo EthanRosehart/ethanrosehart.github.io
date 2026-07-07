@@ -337,6 +337,28 @@ test("GP_forecastFor: passes gdpRegressor through so the model card can disclose
   assert.equal(win.GP_forecastFor("TST", "atm"), null, "a metric this airport has no forecast for is null, not a crash");
 });
 
+test("GP_csvCell: escapes quotes/commas and neutralizes spreadsheet formula injection", () => {
+  const win = loadDataModule();
+  assert.equal(win.GP_csvCell("plain"), "plain");
+  assert.equal(win.GP_csvCell('He said "hi", ok'), '"He said ""hi"", ok"');
+  assert.equal(win.GP_csvCell("line\nbreak"), '"line\nbreak"');
+  // a leading =, +, -, @ or tab would execute as a formula when Excel opens
+  // the CSV — the guard prefixes an apostrophe so it stays inert text
+  assert.equal(win.GP_csvCell("=CMD|' /C calc'!A0"), "'=CMD|' /C calc'!A0");
+  assert.equal(win.GP_csvCell("@SUM(A1)"), "'@SUM(A1)");
+  assert.equal(win.GP_csvCell("+1"), "'+1");
+  assert.equal(win.GP_csvCell(null), "");
+  assert.equal(win.GP_csvCell(42), "42");
+});
+
+test("GP_escapeHtml: entity-escapes everything the DOCX brief interpolates", () => {
+  const win = loadDataModule();
+  assert.equal(win.GP_escapeHtml(`<script>alert("x")</script>`), "&lt;script&gt;alert(&quot;x&quot;)&lt;/script&gt;");
+  assert.equal(win.GP_escapeHtml("Tom & Jerry's"), "Tom &amp; Jerry&#39;s");
+  assert.equal(win.GP_escapeHtml(null), "");
+  assert.equal(win.GP_escapeHtml("plain text"), "plain text");
+});
+
 test("GP_forecastFor: passes gdpForecast through — the model card can't tell a real IMF forecast from mere extrapolation without it", () => {
   const win = loadDataModule();
   win.GP_setAirportForecast("IMF", { pax: { mape: 3.1, forecast: [], gdpRegressor: true, gdpForecast: true } });

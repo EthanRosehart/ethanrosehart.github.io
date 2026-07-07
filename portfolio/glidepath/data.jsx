@@ -8,14 +8,14 @@
    (data/forecasts/<IATA>.json) are fetched lazily, once that gateway
    is selected — see app.jsx. The long-term strategic model compounds
    the real base year with public macro drivers. Everything here is
-   exposed on window for the other babel modules.
+   exposed on window for the other script files in the bundle.
    ============================================================ */
 
 /* ---- airport catalogue (built at runtime, not hand-curated) ---
    AIRPORTS is filled from data/activity-index.json — every airport our
    public feeds actually carry monthly data for — and enriched with
    the OpenFlights reference (data/airports.json). It stays the same
-   array object (mutated in place) so the other babel modules that
+   array object (mutated in place) so the other script files that
    captured it lexically keep seeing the live list.                 */
 const AIRPORTS = [];
 let REFERENCE = {};                       // iata -> OpenFlights record
@@ -529,6 +529,28 @@ const METRIC_META = {
   cargo: { key:"cargo", label:"Cargo",      unit:"t" },
 };
 
+/* ---- export sanitizers ----
+   Strings that end up inside a generated file can come from outside the
+   app's own code: an uploaded gateway name, an event label typed by the
+   visitor (or read back from an imported session file), or an airport
+   name from the OpenFlights feed. React escapes them on screen, but the
+   export generators build raw CSV / HTML, so they escape here. */
+
+/* one CSV cell: quote/escape when needed, and neutralize spreadsheet
+   formula injection (a leading =, +, -, @ or tab would otherwise execute
+   as a formula when the CSV is opened in Excel). */
+function csvCell(v){
+  let s = String(v == null ? "" : v);
+  if (/^[=+\-@\t\r]/.test(s)) s = "'" + s;
+  return /[",\n\r]/.test(s) ? '"' + s.replace(/"/g, '""') + '"' : s;
+}
+
+/* minimal HTML entity escape for the DOCX (HTML) brief generator. */
+function escapeHtml(v){
+  return String(v == null ? "" : v).replace(/[&<>"']/g,
+    c => ({ "&":"&amp;", "<":"&lt;", ">":"&gt;", '"':"&quot;", "'":"&#39;" }[c]));
+}
+
 const fmt = {
   int:  n => Math.round(n).toLocaleString("en-US"),
   k:    n => n>=1e6 ? (n/1e6).toFixed(2)+"M" : n>=1e3 ? (n/1e3).toFixed(0)+"K" : Math.round(n).toString(),
@@ -554,4 +576,5 @@ Object.assign(window, {
   GP_setReference:setReference, GP_rebuildAirports:rebuildAirports, GP_ensureMacro:ensureMacro,
   GP_registerCustomAirport:registerCustomAirport, GP_removeCustomAirport:removeCustomAirport, GP_parseMonthKey:parseMonthKey,
   GP_guessColumnRole:guessColumnRole, GP_guessColumnRoles:guessColumnRoles,
+  GP_csvCell:csvCell, GP_escapeHtml:escapeHtml,
 });
