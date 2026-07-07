@@ -30,7 +30,20 @@ few tens of KB instead of downloading every airport's history up front.
 The pipeline runs in this order (see `.github/workflows/refresh-data.yml`):
 `fetch-openflights` → `fetch-activity` → `fetch-bts` → `fetch-data` →
 `fetch-imf` → `build-forecast`. Each step is best-effort and keeps the last
-good snapshot on failure.
+good snapshot on failure — but failures are **not silent**: after the
+fetchers, `scripts/validate-data.mjs` schema-checks every snapshot as a
+hard gate before anything is committed, `scripts/check-snapshots.mjs`
+reports staleness (a snapshot >10 days old means a fetcher has been
+quietly failing) and anomalies (dropped airports, shrunken series,
+wholesale level shifts vs yesterday's baseline), and the workflow's final
+step opens or updates a *pipeline-health issue* and fails the run when
+anything is wrong. The app itself shows a staleness banner when the
+committed snapshot is older than 10 days. Two more artifacts are written
+each night: **`data/manifest.json`** (`scripts/build-manifest.mjs`) — the
+provenance manifest: upstream source, license/terms, generatedAt and row
+counts for every snapshot — and, on the first run of each month, a copy of
+every forecast into **`data/forecasts-archive/YYYY-MM/`** so
+forecast-vs-realized accuracy can be tracked over time.
 
 ## What's wired
 
@@ -148,6 +161,18 @@ of letting them distort the multiplicative seasonality or inflate the
 trend-uncertainty band. Nothing is dropped: every observed month still trains the
 model and appears on the actuals chart. In CI this cut median passenger backtest
 MAPE from ~16% to ~5%.
+
+**Backtesting is rolling-origin** (`rolling_backtest()` in
+`build-forecast.py`): up to 3 refits per series, each trained with a further
+12 months held out and scored on those unseen months. Each metric's forecast
+JSON carries `mape` (mean across folds), `mape_folds`, `naive_mape` (a
+seasonal-naïve benchmark over the same held-out months), `skill`
+(1 − mape/naive_mape — positive means the model earns its keep), `coverage`
+(% of held-out months inside the claimed 80% interval), and `backtest` (the
+most recent fold's month-by-month predicted-vs-actual, which the Short-term
+screen charts). For a quick local run against a subset of airports:
+`GLIDEPATH_ONLY="AMS,YYZ" python scripts/build-forecast.py` (skips pruning,
+so the other committed forecasts survive).
 
 When a **GDP/capita** series is available for the airport's country
 (`gdpcapSeries` above), it rides along as a Prophet `extra_regressor` —
