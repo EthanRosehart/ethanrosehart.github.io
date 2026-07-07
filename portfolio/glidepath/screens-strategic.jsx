@@ -498,14 +498,17 @@ function ExportView({ airport, history, scenario }){
   const stamp = new Date().toLocaleDateString("en-CA");
   const fileBase = `glidepath_${airport.iata}_${new Date().toISOString().slice(0,10)}`;
 
-  /* ---- CSV: flat annual + monthly, dependency-free ---- */
+  /* ---- CSV: flat annual + monthly, dependency-free ----
+     Free-text fields (gateway name, event labels, …) go through
+     GP_csvCell — quote/escape plus a formula-injection guard, since a
+     label like "=CMD(...)" must never execute when Excel opens this. */
   const genCSV = ()=>{
-    let csv = "GLIDEPATH FORECAST — "+airport.name+" ("+airport.iata+")\n";
+    let csv = GP_csvCell("GLIDEPATH FORECAST — "+airport.name+" ("+airport.iata+")")+"\n";
     csv += "generated,"+stamp+"\n\n";
     csv += "SCENARIO ASSUMPTIONS\n";
     csv += "driver,value,unit\n";
-    assumptions.forEach(a=> csv += `"${a.name}",${a.value},${a.unit}\n`);
-    const segCols = d.lt.hasSeg ? d.lt.segLabels.map(l=>`"${l} passengers"`) : [];
+    assumptions.forEach(a=> csv += `${GP_csvCell(a.name)},${a.value},${a.unit}\n`);
+    const segCols = d.lt.hasSeg ? d.lt.segLabels.map(l=>GP_csvCell(l+" passengers")) : [];
     const cols = ["passengers", ...(hasAtm?["movements"]:[]), ...(hasCargo?["cargo_t"]:[]), ...segCols];
     const rowVals = r => [r.pax, ...(hasAtm?[r.atm]:[]), ...(hasCargo?[r.cargo]:[]),
       ...(d.lt.hasSeg ? d.lt.segKeys.map(k=> (r.seg&&r.seg[k]) ?? "") : [])].join(",");
@@ -518,7 +521,7 @@ function ExportView({ airport, history, scenario }){
     if (events.length){
       csv += "\nSHOCK EVENTS\n";
       csv += "label,start,affects,peak_pct,length_mo,recovery_mo,permanent\n";
-      events.forEach(ev=> csv += `"${ev.label}",${ev.start},"${segLabelOf(ev.target||"all")}",${ev.peak??0},${ev.length??ev.hold??0},${ev.permanent?"":(ev.recovery??0)},${ev.permanent?"yes":"no"}\n`);
+      events.forEach(ev=> csv += `${GP_csvCell(ev.label)},${ev.start},${GP_csvCell(segLabelOf(ev.target||"all"))},${ev.peak??0},${ev.length??ev.hold??0},${ev.permanent?"":(ev.recovery??0)},${ev.permanent?"yes":"no"}\n`);
     }
     if (d.st){
       csv += "\nMONTHLY SHORT-TERM FORECAST (passengers · Prophet)\n";
@@ -683,20 +686,25 @@ function ExportView({ airport, history, scenario }){
     await pptx.writeFile({ fileName: fileBase+"_deck.pptx" });
   };
 
-  /* ---- DOCX: a Word-openable executive brief (HTML/.doc) ---- */
+  /* ---- DOCX: a Word-openable executive brief (HTML/.doc) ----
+     This generator concatenates raw HTML, so every free-text field —
+     the gateway name/city/country (uploaded or from the OpenFlights
+     feed), event labels (typed, or read back from an imported session
+     file) — goes through GP_escapeHtml before interpolation. */
   const genDOC = ()=>{
+    const esc = GP_escapeHtml;
     const rows = d.lt.rows.map(r=>
       `<tr><td>${r.y}</td><td>${GP_fmt.int(r.pax)}</td>${hasAtm?`<td>${GP_fmt.int(r.atm)}</td>`:""}${hasCargo?`<td>${GP_fmt.int(r.cargo)}</td>`:""}</tr>`
     ).join("");
-    const asRows = assumptions.map(a=>`<tr><td>${a.name}</td><td>${(a.value>0?"+":"")+a.value} ${a.unit}</td></tr>`).join("");
+    const asRows = assumptions.map(a=>`<tr><td>${esc(a.name)}</td><td>${(a.value>0?"+":"")+a.value} ${esc(a.unit)}</td></tr>`).join("");
     const segRows = d.lt.hasSeg ? d.lt.rows.map(r=>
       `<tr><td>${r.y}</td>${d.lt.segKeys.map(k=>`<td>${GP_fmt.int((r.seg&&r.seg[k])||0)}</td>`).join("")}</tr>`
     ).join("") : "";
     const evRows = events.map(ev=>
-      `<tr><td>${ev.label}</td><td>${ev.start}</td><td>${segLabelOf(ev.target||"all")}</td><td>${(ev.peak>0?"+":"")+(ev.peak??0)}%</td><td>${ev.length??ev.hold??0} mo</td><td>${ev.permanent?"Permanent":((ev.recovery??0)+" mo")}</td></tr>`
+      `<tr><td>${esc(ev.label)}</td><td>${esc(ev.start)}</td><td>${esc(segLabelOf(ev.target||"all"))}</td><td>${(ev.peak>0?"+":"")+(ev.peak??0)}%</td><td>${ev.length??ev.hold??0} mo</td><td>${ev.permanent?"Permanent":((ev.recovery??0)+" mo")}</td></tr>`
     ).join("");
     const html = `<!DOCTYPE html><html xmlns:o='urn:schemas-microsoft-com:office:office' xmlns:w='urn:schemas-microsoft-com:office:word' xmlns='http://www.w3.org/TR/REC-html40'>
-<head><meta charset='utf-8'><title>Glidepath ${airport.iata} brief</title>
+<head><meta charset='utf-8'><title>Glidepath ${esc(airport.iata)} brief</title>
 <style>
   body{font-family:Calibri,Arial,sans-serif;color:#1a1a1a;font-size:11pt;line-height:1.5;}
   h1{font-size:22pt;color:#c4196f;margin:0 0 2pt;} h2{font-size:14pt;color:#c4196f;border-bottom:1px solid #ddd;padding-bottom:3pt;margin-top:18pt;}
@@ -706,11 +714,11 @@ function ExportView({ airport, history, scenario }){
   td{border-bottom:1px solid #e2e2e2;padding:4pt 7pt;text-align:right;} td:first-child{text-align:left;}
   .kpis td{font-size:11pt;border:none;text-align:left;} .kpis td:nth-child(2){font-weight:bold;color:#c4196f;text-align:right;}
 </style></head><body>
-<h1>${airport.name}</h1>
-<div class='sub'>Aero demand forecast &middot; ${airport.iata} / ${airport.icao} &middot; ${airport.city}, ${airport.country} &middot; generated ${stamp}</div>
+<h1>${esc(airport.name)}</h1>
+<div class='sub'>Aero demand forecast &middot; ${esc(airport.iata)} / ${esc(airport.icao)} &middot; ${esc(airport.city)}, ${esc(airport.country)} &middot; generated ${stamp}</div>
 
 <h2>Executive summary</h2>
-<p>This brief sets out the long-term passenger demand outlook for <b>${airport.name}</b> (${airport.iata}).
+<p>This brief sets out the long-term passenger demand outlook for <b>${esc(airport.name)}</b> (${esc(airport.iata)}).
 Under the current scenario, annual passengers grow from <b>${GP_fmt.int(base.pax)}</b> in ${base.y} to
 <b>${GP_fmt.int(end.pax)}</b> by ${end.y} — a compound annual growth rate of <b>${GP_fmt.pct(d.lt.cagr)}</b>,
 driven by blended income, population and tourism dynamics totalling <b>${GP_fmt.pct(d.lt.gDemand)}</b> annual demand growth.${d.st&&d.st.mape!=null?` The short-term Meta Prophet model carries a backtested confidence band of <b>&plusmn;${d.st.mape}%</b> over the next twelve months.`:""}</p>
@@ -732,7 +740,7 @@ driven by blended income, population and tourism dynamics totalling <b>${GP_fmt.
 Passengers compound on the observed base-year seasonal shape${hasAtm?"; movements are held proportional to passengers at the latest observed ratio":""}.</p>
 
 ${d.lt.hasSeg?`<h2>Passenger mix by segment</h2>
-<table><tr><th>Year</th>${d.lt.segLabels.map(l=>`<th>${l}</th>`).join("")}</tr>${segRows}</table>`:""}
+<table><tr><th>Year</th>${d.lt.segLabels.map(l=>`<th>${esc(l)}</th>`).join("")}</tr>${segRows}</table>`:""}
 
 ${events.length?`<h2>Shock events</h2>
 <table><tr><th>Event</th><th>Starts</th><th>Affects</th><th>Peak</th><th>Length</th><th>Recovery</th></tr>${evRows}</table>`:""}

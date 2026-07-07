@@ -22,7 +22,8 @@
  *              single call per metric, then mapped ICAO→IATA via the
  *              OpenFlights reference (data/airports.json).
  *   • Canada → StatCan WDS 23-10-0312 (screened passengers, monthly) +
- *              23-10-0008 (aircraft movements), resolved by airport name.
+ *              23-10-0296 (aircraft movements; retired 23-10-0008 as
+ *              fallback), resolved by airport name.
  *   • US     → fetch-bts.mjs (separate), maintains its own entries in the
  *              same index + series directory; this script only touches
  *              the airports it computes (eurostat ∪ statcan) and leaves
