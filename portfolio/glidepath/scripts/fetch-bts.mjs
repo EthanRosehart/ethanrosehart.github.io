@@ -44,7 +44,7 @@ async function discover() {
   return ordered;
 }
 
-function mapCols(keys) {
+export function mapCols(keys) {
   const find = (re) => keys.find((k) => re.test(k));
   return {
     origin: find(/origin.*code/i) || find(/^origin$/i) || find(/^orig.*airport$/i),
@@ -128,4 +128,6 @@ async function main() {
   console.log(`BTS merge done — ${live} US airports live.`);
 }
 
-main().catch((e) => { console.error("BTS failed:", e.message); process.exit(1); });
+if (process.argv[1] === fileURLToPath(import.meta.url)) {
+  main().catch((e) => { console.error("BTS failed:", e.message); process.exit(1); });
+}

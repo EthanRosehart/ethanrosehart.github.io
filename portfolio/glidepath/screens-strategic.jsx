@@ -22,7 +22,14 @@ function LongTerm({ airport, history, scenario, go }){
     const histVals = [...histTail.map(r=>r[m]), ...fc.map(()=>null)];
     const fcVals = [...histTail.map(()=>null), ...fc.map(r=>r[m])];
     if (nHist>0) fcVals[nHist-1] = histTail[histTail.length-1][m];
-    return { labels, histVals, fcVals, nHist };
+    // capacity-constrained overlay (pax/atm only, when a cap is set)
+    const capKey = m==="pax" && lt.paxCap ? "paxC" : m==="atm" && lt.atmCap ? "atmC" : null;
+    let capVals = null;
+    if (capKey){
+      capVals = [...histTail.map(()=>null), ...fc.map(r=>r[capKey] ?? r[m])];
+      if (nHist>0) capVals[nHist-1] = histTail[histTail.length-1][m];
+    }
+    return { labels, histVals, fcVals, capVals, nHist };
   },[lt, history, m]);
 
   if (!lt || !d) return <div className="content fade-in"><div className="panel panel-pad"><div className="air-meta">Not enough complete years of data for a strategic forecast yet.</div></div></div>;
@@ -42,7 +49,11 @@ function LongTerm({ airport, history, scenario, go }){
           : lt.hasCargo
           ? <KPI label={lt.endYear+" cargo"} value={GP_fmt.k(end.cargo)+"t"} sub="freight trajectory" sparkColor="var(--lime)"/>
           : <KPI label="Horizon" value={(lt.endYear-lt.baseYear)+" yrs"} sub={"to "+lt.endYear}/>}
-        <KPI label={lt.baseYear+" passengers"} value={GP_fmt.k1(start.pax)} sub="observed base year"/>
+        {lt.paxCap
+          ? <KPI label={lt.endYear+" spill"} value={GP_fmt.k1(end.spill||0)}
+              delta={end.spill>0?"demand > capacity":"under capacity"} deltaDir={end.spill>0?"down":"up"}
+              sub={"cap "+GP_fmt.k1(lt.paxCap)+"/yr"}/>
+          : <KPI label={lt.baseYear+" passengers"} value={GP_fmt.k1(start.pax)} sub="observed base year"/>}
       </div>
 
       <div className="grid" style={{gridTemplateColumns:"1.55fr 1fr", marginBottom:16}}>
@@ -53,11 +64,13 @@ function LongTerm({ airport, history, scenario, go }){
             yFmt={cargoFmt?(v=>GP_fmt.k(v)):undefined}
             series={[
               { name:"Actual", color:"var(--text)", values:d.histVals, width:2.4 },
-              { name:"Forecast", color:"var(--pink)", values:d.fcVals, fill:true, glow:true, width:2.8 },
+              { name:"Unconstrained demand", color:"var(--pink)", values:d.fcVals, fill:!d.capVals, glow:true, width:2.8 },
+              ...(d.capVals?[{ name:"Constrained (capacity)", color:"var(--amber)", values:d.capVals, fill:true, width:2.4 }]:[]),
             ]}/>
           <div style={{display:"flex",gap:18,marginTop:12,flexWrap:"wrap"}}>
             <span className="legend-item"><span className="legend-line" style={{borderColor:"var(--text)"}}></span>Actual (observed)</span>
-            <span className="legend-item"><span className="legend-line" style={{borderColor:"var(--pink)"}}></span>Elasticity forecast</span>
+            <span className="legend-item"><span className="legend-line" style={{borderColor:"var(--pink)"}}></span>{d.capVals?"Unconstrained demand":"Elasticity forecast"}</span>
+            {d.capVals && <span className="legend-item"><span className="legend-line" style={{borderColor:"var(--amber)"}}></span>Constrained by capacity — the gap is spill</span>}
           </div>
         </div>
 
@@ -108,6 +121,48 @@ function LongTerm({ airport, history, scenario, go }){
         </div>
         <div className="air-meta" style={{marginTop:12}}>Passengers compound at the blended demand growth on the observed {lt.baseYear} seasonal shape{lt.hasAtm?"; movements are held proportional to passengers at the latest observed ratio":""}.</div>
       </div>
+
+      {/* design-day / peak-hour: the granularity terminal & runway planning
+          actually happens at. Derived from the real seasonal shape with
+          disclosed heuristics — see GP_designDay in data.jsx. */}
+      {(()=>{
+        const seas = GP_observedSeasonality(history, "pax");
+        const ddBase = GP_designDay(start.pax, seas);
+        const endPax = lt.paxCap ? (end.paxC ?? end.pax) : end.pax;
+        const ddEnd = GP_designDay(endPax, seas);
+        if (!ddBase || !ddEnd) return null;
+        const rows = [
+          ["Peak month", MONTHS[ddBase.peakMonth]+" · "+GP_fmt.k1(ddBase.peakMonthPax), MONTHS[ddEnd.peakMonth]+" · "+GP_fmt.k1(ddEnd.peakMonthPax)],
+          ["Average day (peak month)", GP_fmt.int(ddBase.avgDay), GP_fmt.int(ddEnd.avgDay)],
+          ["Busy day (design day)", GP_fmt.int(ddBase.busyDay), GP_fmt.int(ddEnd.busyDay)],
+          ["Peak hour", GP_fmt.int(ddBase.peakHour), GP_fmt.int(ddEnd.peakHour)],
+        ];
+        return (
+          <div className="panel panel-pad" style={{marginTop:16}}>
+            <SectionHead kicker="Design day · peak hour" title="What the terminal has to handle"
+              right={<span className="air-meta">passengers, from the observed seasonal shape</span>}/>
+            <table className="tbl">
+              <thead><tr><th style={{textAlign:"left"}}>Measure</th><th>{lt.baseYear} (observed)</th><th>{lt.endYear} (scenario{lt.paxCap?", constrained":""})</th></tr></thead>
+              <tbody>
+                {rows.map((r,i)=>(
+                  <tr key={i}>
+                    <td style={{textAlign:"left",color:"var(--dim)"}}>{r[0]}</td>
+                    <td style={{color:"var(--text)",fontWeight:600}}>{r[1]}</td>
+                    <td style={{color:"var(--pink-2)",fontWeight:700}}>{r[2]}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+            <div className="method" style={{marginTop:12}}>
+              <b>Assumptions, all disclosed —</b> busy day = average day of the peak month × 1.10 (a stand-in for the
+              ~90th-percentile day; monthly data can't see individual days). Peak hour takes {Math.round(ddEnd.peakHourShare*100)}%
+              of the busy day — the share shrinks as airports grow because traffic spreads across the day
+              (12% under 1M annual passengers, 10% to 10M, 8% above). Replace these with measured design-day
+              factors when you have daily/hourly data.
+            </div>
+          </div>
+        );
+      })()}
     </div>
   );
 }
@@ -170,10 +225,13 @@ function Scenario({ airport, history, scenario, setScenario }){
     ...segLevers];
 
   const setLever = (k,v)=> setScenario({ ...scenario, [k]: v });
+  // presets swap the DEMAND assumptions; events and capacity caps are facts
+  // about the world/infrastructure the user set up, so they ride along
+  const keepNonDemand = ()=>({ events: scenario.events || [], paxCap: scenario.paxCap ?? null, atmCap: scenario.atmCap ?? null });
   const applyPreset = (id)=>{
-    if (id==="base") return setScenario({ ...base, events: scenario.events || [] });
+    if (id==="base") return setScenario({ ...base, ...keepNonDemand() });
     const p = PRESETS[id];
-    const next = { ...base, events: scenario.events || [] };
+    const next = { ...base, ...keepNonDemand() };
     Object.keys(p.set).forEach(k=> next[k] = (base[k]??0) + p.set[k]);
     setScenario(next);
   };
@@ -187,7 +245,7 @@ function Scenario({ airport, history, scenario, setScenario }){
   const cagrM = (d.lt.rows[0][m] && endM) ? (Math.pow(endM/d.lt.rows[0][m], 1/yrs)-1)*100 : 0;
   const mLabel = (metricDefs.find(x=>x.k===m)||{}).label || "Passengers";
   const activePreset = (()=>{
-    const eq=(o)=>Object.keys(o).every(k=> (k==="events"||k==="horizon") ? true : Math.abs((scenario[k]??0)-(o[k]??0))<0.001);
+    const eq=(o)=>Object.keys(o).every(k=> (k==="events"||k==="horizon"||k==="paxCap"||k==="atmCap") ? true : Math.abs((scenario[k]??0)-(o[k]??0))<0.001);
     if (eq(base)) return "base";
     for (const id of Object.keys(PRESETS)){ if(id==="base") continue; const t={...base}; Object.keys(PRESETS[id].set).forEach(k=>t[k]=(base[k]??0)+PRESETS[id].set[k]); if(eq(t)) return id; }
     return null;
@@ -212,6 +270,28 @@ function Scenario({ airport, history, scenario, setScenario }){
             <div className="seg seg-sub">
               {[10,15,25].map(h=><button key={h} className={(scenario.horizon||25)===h?"on":""} onClick={()=>setHorizon(h)}>{h}yr</button>)}
             </div>
+          </div>
+          {/* capacity constraints — what the infrastructure can serve, vs the
+              demand levers above (what the market wants). Blank = unconstrained. */}
+          <div style={{marginTop:12,paddingTop:12,borderTop:"1px solid var(--line)"}}>
+            <div className="lever-name" style={{marginBottom:8}}>Capacity constraints {(scenario.paxCap||scenario.atmCap)?<span className="dot" style={{background:"var(--amber)"}}></span>:null}</div>
+            <div style={{display:"flex",gap:10,flexWrap:"wrap"}}>
+              <label style={{flex:"1 1 130px"}}>
+                <span className="lever-desc" style={{display:"block",marginBottom:4}}>Annual passengers (M)</span>
+                <input type="number" min="0" step="0.5" placeholder="unconstrained"
+                  value={scenario.paxCap ? scenario.paxCap/1e6 : ""}
+                  onChange={e=>{ const v = parseFloat(e.target.value); setScenario({ ...scenario, paxCap: (v>0 ? Math.round(v*1e6) : null) }); }}
+                  style={{width:"100%",background:"var(--bg-2)",border:"1px solid var(--line-2)",borderRadius:"var(--r-sm)",color:"var(--text)",fontFamily:"var(--mono)",fontSize:13,padding:"8px 10px",outline:"none"}}/>
+              </label>
+              {d.lt.hasAtm && <label style={{flex:"1 1 130px"}}>
+                <span className="lever-desc" style={{display:"block",marginBottom:4}}>Annual movements (K)</span>
+                <input type="number" min="0" step="5" placeholder="unconstrained"
+                  value={scenario.atmCap ? scenario.atmCap/1e3 : ""}
+                  onChange={e=>{ const v = parseFloat(e.target.value); setScenario({ ...scenario, atmCap: (v>0 ? Math.round(v*1e3) : null) }); }}
+                  style={{width:"100%",background:"var(--bg-2)",border:"1px solid var(--line-2)",borderRadius:"var(--r-sm)",color:"var(--text)",fontFamily:"var(--mono)",fontSize:13,padding:"8px 10px",outline:"none"}}/>
+              </label>}
+            </div>
+            <div className="lever-desc" style={{marginTop:6}}>Demand above a cap becomes <b style={{color:"var(--amber)"}}>spill</b> — see the constrained line here and on Long-term.</div>
           </div>
           <div style={{marginTop:6}}>
             {levers.map(l=>{
@@ -256,6 +336,8 @@ function Scenario({ airport, history, scenario, setScenario }){
               series={[
                 { name:"Baseline", color:"var(--faint)", values:d.baseLt.months.map(r=>r[m]), dash:"5 4", width:1.8 },
                 { name:"Scenario", color:"var(--pink)", values:d.lt.months.map(r=>r[m]), fill:true, glow:true, width:2.8 },
+                ...((m==="pax" && d.lt.paxCap) ? [{ name:"Constrained", color:"var(--amber)", values:d.lt.months.map(r=>r.paxC ?? r.pax), width:2.2 }]
+                  : (m==="atm" && d.lt.atmCap) ? [{ name:"Constrained", color:"var(--amber)", values:d.lt.months.map(r=>r.atmC ?? r.atm), width:2.2 }] : []),
               ]}/>
           </div>
 
@@ -446,8 +528,11 @@ function EventSim({ airport, history, scenario, setScenario }){
 }
 
 /* ---------- EXPORT ------------------------------------------- */
-/* Lazily inject a CDN script only when a format needs it, so the app
-   stays light until the user actually generates a workbook/deck.      */
+/* Lazily inject a script only when a format needs it, so the app stays
+   light until the user actually generates a workbook/deck. PptxGenJS is
+   self-hosted (vendor/); SheetJS still comes from its official CDN —
+   SheetJS ≥0.19 isn't published to npm, so there's no integrity-checked
+   copy to vendor. Its host is pinned in index.html's CSP.            */
 function GP_loadScript(src){
   return new Promise((resolve, reject)=>{
     window.__gpLibs = window.__gpLibs || {};
@@ -469,7 +554,7 @@ function GP_saveBlob(blob, filename){
 function ExportView({ airport, history, scenario }){
   const d = useMemoS(()=>{
     const lt = GP_longTerm(airport.iata, history, scenario);
-    const st = GP_forecastFor(airport.iata, "pax");
+    const st = GP_tacticalForecast(airport.iata, "pax", history);
     return { lt, st };
   },[airport, history, scenario]);
   const [fmtSel, setFmt] = React.useState("pptx");
@@ -492,7 +577,12 @@ function ExportView({ airport, history, scenario }){
     ...(hasAtm   ? [SHAPE_LEVERS.atm]   : []),
     ...(hasCargo ? [SHAPE_LEVERS.cargo] : []),
     ...segLevers];
-  const assumptions = allLevers.map(l=>({ name:l.name, value:(scenario[l.k] ?? 0), unit:l.unit }));
+  const assumptions = [
+    ...allLevers.map(l=>({ name:l.name, value:(scenario[l.k] ?? 0), unit:l.unit })),
+    ...(d.lt.paxCap ? [{ name:"Annual passenger capacity (constraint)", value:d.lt.paxCap, unit:"pax/yr" }] : []),
+    ...(d.lt.atmCap ? [{ name:"Annual movements capacity (constraint)", value:d.lt.atmCap, unit:"mov/yr" }] : []),
+  ];
+  const stModelName = d.st ? (d.st.method==="ets" ? "Holt-Winters ETS" : "Prophet") : null;
   const events = Array.isArray(scenario.events) ? scenario.events.filter(e=>e&&e.start) : [];
   const segLabelOf = (k)=> k==="all" ? "All traffic" : (d.lt.segLabels[d.lt.segKeys.indexOf(k)] || k);
   const stamp = new Date().toLocaleDateString("en-CA");
@@ -509,9 +599,12 @@ function ExportView({ airport, history, scenario }){
     csv += "driver,value,unit\n";
     assumptions.forEach(a=> csv += `${GP_csvCell(a.name)},${a.value},${a.unit}\n`);
     const segCols = d.lt.hasSeg ? d.lt.segLabels.map(l=>GP_csvCell(l+" passengers")) : [];
-    const cols = ["passengers", ...(hasAtm?["movements"]:[]), ...(hasCargo?["cargo_t"]:[]), ...segCols];
+    const capCols = [...(d.lt.paxCap?["passengers_constrained","spill"]:[]), ...(d.lt.atmCap?["movements_constrained"]:[])];
+    const cols = ["passengers", ...(hasAtm?["movements"]:[]), ...(hasCargo?["cargo_t"]:[]), ...segCols, ...capCols];
     const rowVals = r => [r.pax, ...(hasAtm?[r.atm]:[]), ...(hasCargo?[r.cargo]:[]),
-      ...(d.lt.hasSeg ? d.lt.segKeys.map(k=> (r.seg&&r.seg[k]) ?? "") : [])].join(",");
+      ...(d.lt.hasSeg ? d.lt.segKeys.map(k=> (r.seg&&r.seg[k]) ?? "") : []),
+      ...(d.lt.paxCap ? [r.paxC ?? "", (r.spill != null ? r.spill : (r.paxC != null ? r.pax - r.paxC : ""))] : []),
+      ...(d.lt.atmCap ? [r.atmC ?? ""] : [])].join(",");
     csv += "\nANNUAL LONG-TERM FORECAST (roll-up)\n";
     csv += "year,"+cols.join(",")+"\n";
     d.lt.rows.forEach(r=> csv += `${r.y},${rowVals(r)}\n`);
@@ -524,7 +617,7 @@ function ExportView({ airport, history, scenario }){
       events.forEach(ev=> csv += `${GP_csvCell(ev.label)},${ev.start},${GP_csvCell(segLabelOf(ev.target||"all"))},${ev.peak??0},${ev.length??ev.hold??0},${ev.permanent?"":(ev.recovery??0)},${ev.permanent?"yes":"no"}\n`);
     }
     if (d.st){
-      csv += "\nMONTHLY SHORT-TERM FORECAST (passengers · Prophet)\n";
+      csv += `\nMONTHLY SHORT-TERM FORECAST (passengers · ${stModelName})\n`;
       csv += "month,forecast,low,high\n";
       d.st.forecast.forEach(r=> csv += `${r.date},${r.v},${r.lo},${r.hi}\n`);
     }
@@ -592,9 +685,9 @@ function ExportView({ airport, history, scenario }){
     XLSX.writeFile(wb, fileBase+"_workbook.xlsx");
   };
 
-  /* ---- PPTX: real editable deck via PptxGenJS ---- */
+  /* ---- PPTX: real editable deck via PptxGenJS (self-hosted, see vendor/) ---- */
   const genPPTX = async ()=>{
-    await GP_loadScript("https://cdn.jsdelivr.net/npm/pptxgenjs@3.12.0/dist/pptxgen.bundle.js");
+    await GP_loadScript("vendor/pptxgen.bundle.js");
     const Ctor = window.PptxGenJS;
     const pptx = new Ctor();
     pptx.layout = "LAYOUT_WIDE";        // 13.33 × 7.5 in
@@ -721,7 +814,7 @@ function ExportView({ airport, history, scenario }){
 <p>This brief sets out the long-term passenger demand outlook for <b>${esc(airport.name)}</b> (${esc(airport.iata)}).
 Under the current scenario, annual passengers grow from <b>${GP_fmt.int(base.pax)}</b> in ${base.y} to
 <b>${GP_fmt.int(end.pax)}</b> by ${end.y} — a compound annual growth rate of <b>${GP_fmt.pct(d.lt.cagr)}</b>,
-driven by blended income, population and tourism dynamics totalling <b>${GP_fmt.pct(d.lt.gDemand)}</b> annual demand growth.${d.st&&d.st.mape!=null?` The short-term Meta Prophet model carries a backtested confidence band of <b>&plusmn;${d.st.mape}%</b> over the next twelve months.`:""}</p>
+driven by blended income, population and tourism dynamics totalling <b>${GP_fmt.pct(d.lt.gDemand)}</b> annual demand growth.${d.st&&d.st.mape!=null?` The short-term ${stModelName} model carries a backtested confidence band of <b>&plusmn;${d.st.mape}%</b> over the next twelve months${d.st.coverage!=null?` (80% interval covered ${d.st.coverage}% of held-out months)`:""}.`:""}${d.lt.paxCap?` Demand is assessed against an annual capacity of <b>${GP_fmt.int(d.lt.paxCap)}</b> passengers; unserved demand (spill) reaches <b>${GP_fmt.int(end.spill||0)}</b> by ${end.y}.`:""}</p>
 
 <table class='kpis'>
   <tr><td>Base year (${base.y}) passengers</td><td>${GP_fmt.int(base.pax)}</td></tr>
@@ -747,7 +840,7 @@ ${events.length?`<h2>Shock events</h2>
 
 <h2>Provenance</h2>
 <p style='font-size:9.5pt;color:#444;'>${airport.custom
-  ? "This forecast runs on the monthly passenger figures uploaded by the report's author, not a public feed, plus World Bank population &amp; GDP/capita for the macro drivers. There is no short-term (Prophet) tactical forecast for uploaded data &mdash; that model is fit only for the committed public data sources."
+  ? "This forecast runs on the monthly passenger figures uploaded by the report's author, not a public feed, plus World Bank population &amp; GDP/capita for the macro drivers. The short-term tactical forecast, where present, is a Holt-Winters (ETS) model fit in the author's browser &mdash; the nightly Meta Prophet model runs only for the committed public data sources."
   : "OpenFlights reference &middot; World Bank (GDP per capita &amp; population) &middot; Eurostat / StatCan / US BTS (monthly passengers, movements, cargo) &middot; Meta Prophet short-term forecast. Every figure traces to a public source."}</p>
 </body></html>`;
     GP_saveBlob(new Blob(["﻿"+html], {type:"application/msword"}), fileBase+"_brief.doc");
@@ -771,14 +864,27 @@ ${events.length?`<h2>Shock events</h2>
     GP_saveBlob(new Blob([JSON.stringify(session, null, 2)], {type:"application/json"}), fileBase+"_session.json");
   };
 
-  const GEN = { csv:genCSV, xlsx:genXLSX, pptx:genPPTX, docx:genDOC, session:genSession };
+  /* ---- Share link (catalogue gateways only) ----
+     The whole scenario — every lever, cap and event — rides in the URL
+     fragment; the recipient's browser re-fetches the real data from the
+     live pipeline. An uploaded gateway's data exists only in THIS browser,
+     so it round-trips via Save session instead (the share deliverable is
+     hidden for it). */
+  const genShare = async ()=>{
+    const url = location.origin + location.pathname + "#s=" + GP_encodeShare(airport.iata, scenario);
+    await navigator.clipboard.writeText(url);
+  };
+
+  const GEN = { csv:genCSV, xlsx:genXLSX, pptx:genPPTX, docx:genDOC, session:genSession, share:genShare };
 
   const run = async (id)=>{
     if (busy) return;
     setNote(null); setBusy(id);
     try {
       await GEN[id]();
-      setNote({ ok:true, msg: deliverables.find(x=>x.id===id).tag+" generated — check your downloads." });
+      setNote({ ok:true, msg: id==="share"
+        ? "Share link copied — anyone opening it gets this exact scenario on live data."
+        : deliverables.find(x=>x.id===id).tag+" generated — check your downloads." });
     } catch(e){
       setNote({ ok:false, msg: "Couldn't generate "+id.toUpperCase()+" ("+(e&&e.message||"error")+"). The CSV extract always works offline." });
     } finally { setBusy(null); }
@@ -790,6 +896,7 @@ ${events.length?`<h2>Shock events</h2>
     { id:"docx", name:"Executive brief", desc:"Word-openable narrative: summary, KPIs, trajectory table, assumptions, segment mix, events and provenance.", tag:"DOCX" },
     { id:"csv", name:"Forecast data extract", desc:"Flat annual + monthly tables (with segment columns when set), assumptions and events for your BI stack or master-plan model.", tag:"CSV" },
     { id:"session", name:"Save session", desc:"A JSON file that reopens exactly where you left off — gateway, every lever, every event, and (if uploaded) your own data — via Import session on Select airport.", tag:"JSON" },
+    ...(!airport.custom ? [{ id:"share", name:"Share link", desc:"Copies a URL carrying this exact scenario — levers, capacity caps and events. The recipient's browser pulls the same live public data; only your assumptions travel.", tag:"LINK" }] : []),
   ];
 
   return (
@@ -811,7 +918,7 @@ ${events.length?`<h2>Shock events</h2>
             <button className="btn btn-primary btn-lg" style={{flex:1,justifyContent:"center"}} disabled={!!busy} onClick={()=>run(fmtSel)}>
               {busy===fmtSel
                 ? <span style={{display:"inline-flex",alignItems:"center",gap:9}}><span className="spin" style={{width:15,height:15,display:"inline-block"}}>{GP_Ico.search}</span>Generating…</span>
-                : <span style={{display:"inline-flex",alignItems:"center",gap:9}}>Generate {deliverables.find(x=>x.id===fmtSel).tag} {GP_Ico.arrow}</span>}
+                : <span style={{display:"inline-flex",alignItems:"center",gap:9}}>{fmtSel==="share"?"Copy":"Generate"} {deliverables.find(x=>x.id===fmtSel).tag} {GP_Ico.arrow}</span>}
             </button>
             <button className="btn btn-lg" disabled={!!busy} onClick={()=>run("csv")}>Quick CSV</button>
           </div>
@@ -847,7 +954,7 @@ ${events.length?`<h2>Shock events</h2>
           </div>
           <div className="method" style={{marginTop:16}}>
             <b>Provenance —</b> {airport.custom
-              ? "runs on the monthly figures you uploaded, plus World Bank population & GDP/capita for the macro drivers. No short-term (Prophet) tactical forecast — that model only runs for the committed public data sources."
+              ? "runs on the monthly figures you uploaded, plus World Bank population & GDP/capita for the macro drivers. The short-term view is a Holt-Winters (ETS) model fit in your browser — the nightly Prophet model only runs for the committed public data sources."
               : "OpenFlights reference · World Bank (GDP per capita & population) · Eurostat/StatCan/BTS (monthly passengers, movements & cargo, wired nightly). Every figure traces to a public source; the workbook ships the full audit trail."}
           </div>
         </div>

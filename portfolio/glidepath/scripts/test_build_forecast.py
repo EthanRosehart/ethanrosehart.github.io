@@ -176,3 +176,56 @@ def test_prune_stale_removes_only_files_outside_the_keep_set(bf, tmp_path, monke
     bf.prune_stale(str(tmp_path), ["AAA", "CCC"])
     remaining = sorted(p.name for p in tmp_path.iterdir())
     assert remaining == ["AAA.json", "CCC.json"]
+
+
+# ---- rolling-origin backtest (Phase 1) --------------------------------------
+
+def test_mape_of_scores_pairs_and_skips_zero_actuals(bf):
+    assert bf.mape_of([110, 90], [100, 100]) == pytest.approx(10.0)
+    assert bf.mape_of([5, 110], [0, 100]) == pytest.approx(10.0)  # zero actual skipped
+    assert bf.mape_of([], []) is None
+    assert bf.mape_of([5], [0]) is None
+
+
+def test_seasonal_naive_preds_uses_the_year_ago_month(bf):
+    train = bf.series_frame({f"2023-{m:02d}": 100 + m for m in range(1, 13)})
+    test = bf.series_frame({f"2024-{m:02d}": 200 + m for m in range(1, 4)})
+    preds, actuals = bf.seasonal_naive_preds(train, test)
+    assert preds == [101.0, 102.0, 103.0]   # Jan-Mar 2023 values
+    assert actuals == [201.0, 202.0, 203.0]
+
+
+def test_seasonal_naive_preds_skips_months_without_a_year_ago_anchor(bf):
+    train = bf.series_frame({"2023-06": 100})
+    test = bf.series_frame({"2024-01": 50})
+    preds, actuals = bf.seasonal_naive_preds(train, test)
+    assert preds == [] and actuals == []
+
+
+def test_rolling_backtest_returns_none_when_history_is_too_short(bf):
+    df = bf.series_frame({f"2024-{m:02d}": 100 for m in range(1, 13)})  # 12 months
+    assert bf.rolling_backtest(df, pd.DataFrame(columns=["holiday", "ds"])) is None
+
+
+def test_rolling_backtest_real_fit_on_a_clean_seasonal_series(bf):
+    # One real (small) Prophet fit so a prophet/pandas version bump that breaks
+    # the fitting path fails CI instead of the 03:17 UTC nightly. 60 months of
+    # a clean multiplicative-seasonal series with mild growth: the model should
+    # beat seasonal-naive-level error comfortably, and the fields the UI relies
+    # on must all be present and coherent.
+    monthly = {}
+    for i in range(60):
+        y, m = 2020 + i // 12, i % 12 + 1
+        seasonal = 1.0 + 0.3 * (1 if m in (6, 7, 8) else -0.2 if m in (1, 2) else 0)
+        monthly[f"{y}-{m:02d}"] = round(100000 * (1.004 ** i) * seasonal)
+    df = bf.series_frame(monthly)
+    bt = bf.rolling_backtest(df, pd.DataFrame(columns=["holiday", "ds"]), folds=1)
+    assert bt is not None
+    assert bt["mape"] is not None and bt["mape"] < 10
+    assert len(bt["mape_folds"]) == 1
+    assert bt["naive_mape"] is not None
+    assert bt["coverage"] is None or 0 <= bt["coverage"] <= 100
+    assert len(bt["backtest"]) == 12
+    row = bt["backtest"][0]
+    assert set(row) == {"date", "v", "lo", "hi", "actual"}
+    assert row["lo"] <= row["v"] <= row["hi"]

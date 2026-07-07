@@ -3,6 +3,14 @@
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <!-- Defense-in-depth: GitHub Pages can't set response headers, so the CSP
+       rides in a meta tag. script-src allows self (vendored React/PptxGenJS
+       + the app bundle), the hash of the inline boot-watchdog script below
+       (recompute if that script changes: sha256 of the raw text between its
+       tags, base64), and cdn.sheetjs.com (the one library that can't be
+       vendored — see vendor/README.md). style-src needs 'unsafe-inline'
+       because React style={} attributes are inline styles. -->
+  <meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self' 'sha256-ys0ua9F/+pSJjTxiR/9YC08uMF+V/mZu+FKBF/WjiDI=' https://cdn.sheetjs.com; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; font-src https://fonts.gstatic.com; img-src 'self' data: blob:; connect-src 'self'; object-src 'none'; base-uri 'self'; form-action 'none'" />
   <title>Glidepath · Aero Demand Forecasting</title>
   <meta name="description" content="Glidepath — an aero demand forecasting tool. Real public passenger/movement/cargo data, a Meta Prophet short-term forecast and a macro-driven long-term elasticity model, with scenario and event simulation." />
   <meta name="theme-color" content="#ff3ea5" />

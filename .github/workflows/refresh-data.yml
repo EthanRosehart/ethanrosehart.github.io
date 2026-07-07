@@ -12,6 +12,15 @@ name: Refresh data
 #                            growth forecast (real, not extrapolated)
 #   forecast-meta.json    — shared Meta Prophet model metadata
 #   forecasts/<IATA>.json — one airport's short-term forecast, fetched lazily
+#   forecasts-archive/    — monthly copies, for forecast-vs-realized tracking
+#   manifest.json         — provenance manifest (scripts/build-manifest.mjs)
+#
+# Every fetch step is best-effort (a feed outage keeps the last good
+# snapshot), but failures are NOT silent: the health step at the end
+# collects per-step outcomes plus staleness/anomaly findings
+# (scripts/check-snapshots.mjs) and opens/updates a pipeline-health issue,
+# failing the run. Snapshots are schema-validated
+# (scripts/validate-data.mjs) as a hard gate before anything is committed.
 
 on:
   schedule:
@@ -19,7 +28,8 @@ on:
   workflow_dispatch: {}     # allow manual "Run workflow" from the Actions tab
 
 permissions:
-  contents: write           # needed to commit the refreshed snapshot
+  contents: write           # commit the refreshed snapshot
+  issues: write             # open/update the pipeline-health issue
 
 concurrency:
   group: refresh-data
@@ -37,23 +47,33 @@ jobs:
         with:
           node-version: "20"
 
+      # kept for the end-of-run anomaly diff: dropped airports, shrunken
+      # series, wholesale level shifts vs what was committed yesterday
+      - name: Snapshot baseline for anomaly diff
+        run: cp -r portfolio/glidepath/data /tmp/gp-baseline
+
       - name: Fetch airport reference (OpenFlights)
+        id: openflights
         run: node portfolio/glidepath/scripts/fetch-openflights.mjs
         continue-on-error: true
 
       - name: Fetch monthly activity — Europe + Canada (Eurostat + StatCan)
+        id: activity
         run: node portfolio/glidepath/scripts/fetch-activity.mjs
         continue-on-error: true   # a feed outage keeps the last good snapshot
 
       - name: Fetch monthly activity — US (BTS T-100)
+        id: bts
         run: node portfolio/glidepath/scripts/fetch-bts.mjs
         continue-on-error: true
 
       - name: Fetch macro snapshot from World Bank
+        id: macro
         run: node portfolio/glidepath/scripts/fetch-data.mjs
         continue-on-error: true   # macro covers whatever countries activity found
 
       - name: Fetch forward GDP/capita forecast from IMF WEO
+        id: imf
         run: node portfolio/glidepath/scripts/fetch-imf.mjs
         continue-on-error: true   # build-forecast.py falls back to trailing-rate extrapolation without it
 
@@ -67,8 +87,36 @@ jobs:
         run: pip install -r portfolio/glidepath/scripts/requirements.txt
 
       - name: Build short-term forecasts (Meta Prophet)
+        id: forecast
         run: python portfolio/glidepath/scripts/build-forecast.py
         continue-on-error: true   # never block the data refresh on the model step
+
+      # hard gate: a malformed upstream response must keep last-good,
+      # never ship garbage to the site. The health step reports it.
+      - name: Validate snapshots
+        id: validate
+        run: node portfolio/glidepath/scripts/validate-data.mjs
+        continue-on-error: true
+
+      - name: Build provenance manifest
+        if: steps.validate.outcome == 'success'
+        run: node portfolio/glidepath/scripts/build-manifest.mjs
+
+      # one copy per calendar month, so "what did we predict vs what
+      # happened" can be answered later without archaeology in git history
+      - name: Archive forecasts (first run of the month)
+        if: steps.validate.outcome == 'success'
+        run: |
+          ym=$(date -u +%Y-%m)
+          dest="portfolio/glidepath/data/forecasts-archive/$ym"
+          if [ ! -d "$dest" ] && [ -d portfolio/glidepath/data/forecasts ]; then
+            mkdir -p "$dest"
+            cp portfolio/glidepath/data/forecasts/*.json "$dest"/ 2>/dev/null || true
+            cp portfolio/glidepath/data/forecast-meta.json "$dest/_meta.json" 2>/dev/null || true
+            echo "Archived $(ls "$dest" | wc -l) forecast files to $dest"
+          else
+            echo "Archive for $ym already exists (or no forecasts) — skipping."
+          fi
 
       # Auto-commit is main-only: dispatch runs on a feature branch still
       # exercise every fetcher (that's how you debug one — read the logs),
@@ -76,6 +124,7 @@ jobs:
       # unmergeable — dozens of generated files conflicting with main's
       # own nightly commits.
       - name: Commit if changed (main only)
+        if: steps.validate.outcome == 'success'
         run: |
           git add portfolio/glidepath/data/
           if git diff --staged --quiet; then
@@ -89,3 +138,50 @@ jobs:
             git commit -m "chore(data): nightly Glidepath refresh [skip ci]"
             git push
           fi
+
+      # make failures LOUD: collect per-step outcomes + staleness/anomaly
+      # findings, upsert a pipeline-health issue (main only), fail the run.
+      - name: Pipeline health report
+        if: always()
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          problems=""
+          add() { problems="${problems}- $1"$'\n'; }
+          [ "${{ steps.openflights.outcome }}" = "failure" ] && add "fetch-openflights failed"
+          [ "${{ steps.activity.outcome }}" = "failure" ]    && add "fetch-activity (Eurostat/StatCan) failed"
+          [ "${{ steps.bts.outcome }}" = "failure" ]         && add "fetch-bts failed"
+          [ "${{ steps.macro.outcome }}" = "failure" ]       && add "fetch-data (World Bank) failed"
+          [ "${{ steps.imf.outcome }}" = "failure" ]         && add "fetch-imf (IMF WEO) failed"
+          [ "${{ steps.forecast.outcome }}" = "failure" ]    && add "build-forecast (Prophet) failed"
+          [ "${{ steps.validate.outcome }}" = "failure" ]    && add "snapshot VALIDATION failed — commit was blocked, site keeps last-good data"
+
+          set +e
+          report=$(node portfolio/glidepath/scripts/check-snapshots.mjs --baseline /tmp/gp-baseline 2>&1)
+          rc=$?
+          set -e
+          echo "$report"
+          [ $rc -ne 0 ] && add "stale snapshots — a fetcher has been failing for days"
+
+          if [ -z "$problems" ]; then
+            echo "Pipeline healthy — all steps succeeded, snapshots fresh."
+            exit 0
+          fi
+
+          echo "PROBLEMS:"
+          printf '%s' "$problems"
+
+          if [ "$GITHUB_REF_NAME" = "main" ]; then
+            title="Glidepath nightly pipeline needs attention"
+            body=$(printf 'Run: %s/%s/actions/runs/%s\n\n**Problems**\n%s\n<details><summary>check-snapshots output</summary>\n\n```\n%s\n```\n</details>\n\n_Best-effort steps keep last-good data, so the site stays correct — but a feed that stays broken will go stale. Auto-filed by refresh-data.yml; closes by hand once resolved._' \
+              "$GITHUB_SERVER_URL" "$GITHUB_REPOSITORY" "$GITHUB_RUN_ID" "$problems" "$report")
+            num=$(gh issue list --state open --search "Glidepath nightly pipeline in:title" --json number --jq '.[0].number' 2>/dev/null || true)
+            if [ -n "$num" ] && [ "$num" != "null" ]; then
+              gh issue comment "$num" --body "$body"
+              echo "Updated pipeline-health issue #$num"
+            else
+              gh issue create --title "$title" --body "$body"
+              echo "Opened a new pipeline-health issue"
+            fi
+          fi
+          exit 1

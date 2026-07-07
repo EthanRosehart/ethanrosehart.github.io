@@ -54,6 +54,8 @@ IMF_WEO = os.path.join(DATA, "imf-weo.json")
 HORIZON = 24            # months forecast (UI offers 12 / 24)
 INTERVAL = 0.80         # prediction interval width -> P10..P90 band
 MIN_MONTHS = 36         # need a few seasons before Prophet is meaningful
+BACKTEST_FOLDS = 3      # rolling-origin evaluation: up to N folds...
+BACKTEST_H = 12         # ...each holding out the next 12 months
 
 HOLIDAY_PRIOR = 5.0     # regularisation for public holidays (multiplicative)
 # COVID is modelled as an explicit event, not deleted: one dummy per month over
@@ -219,22 +221,85 @@ def fit_predict(df, hol_df, horizon, gdp_levels=None, gdp_growth=None, gdp_futur
     return m, fc
 
 
-def backtest_mape(df, hol_df, holdout=12, gdp_levels=None, gdp_growth=None, gdp_future_rates=None):
-    """Honest holdout: fit on all-but-last-`holdout`, score those months."""
-    if len(df) <= holdout + 24:
+def mape_of(preds, actuals):
+    """Mean absolute percentage error over pairs with a non-zero actual;
+    None when nothing is scoreable."""
+    pairs = [(float(p), float(a)) for p, a in zip(preds, actuals) if a]
+    if not pairs:
         return None
-    train, test = df.iloc[:-holdout], df.iloc[-holdout:]
-    try:
-        _, fc = fit_predict(train, hol_df, holdout, gdp_levels, gdp_growth, gdp_future_rates)
-    except Exception:
+    return sum(abs(p - a) / a for p, a in pairs) / len(pairs) * 100
+
+
+def seasonal_naive_preds(train, test):
+    """The benchmark every model must beat: month t forecast by the observed
+    value 12 months earlier. Returns (preds, actuals) over the test months
+    where the year-ago month exists in train."""
+    by_ds = {ds: float(y) for ds, y in zip(train["ds"], train["y"])}
+    preds, actuals = [], []
+    for ds, y in zip(test["ds"], test["y"]):
+        prev = ds - pd.DateOffset(years=1)
+        if prev in by_ds:
+            preds.append(by_ds[prev])
+            actuals.append(float(y))
+    return preds, actuals
+
+
+def rolling_backtest(df, hol_df, folds=BACKTEST_FOLDS, holdout=BACKTEST_H,
+                     gdp_levels=None, gdp_growth=None, gdp_future_rates=None):
+    """Rolling-origin evaluation: up to `folds` refits, each trained on the
+    series truncated a further `holdout` months back and scored on the next
+    `holdout` months it never saw. Reports:
+      mape        mean across folds (the headline the UI shows)
+      mape_folds  per-fold values, so a lucky single holdout can't hide
+      naive_mape  seasonal-naïve benchmark over the same held-out months
+      skill       1 - mape/naive_mape (positive = beats the benchmark)
+      coverage    % of held-out months inside the claimed 80% interval
+      backtest    the most recent fold's month-by-month predicted-vs-actual,
+                  shipped so the UI can show what the model got wrong
+    None when even one fold can't be formed (needs 24 training months)."""
+    fold_mapes, naive_p, naive_a = [], [], []
+    hits = n_int = 0
+    detail = None
+    for i in range(1, folds + 1):
+        cut = len(df) - holdout * i
+        if cut < 24:
+            break
+        train, test = df.iloc[:cut], df.iloc[cut:cut + holdout]
+        try:
+            _, fc = fit_predict(train, hol_df, holdout, gdp_levels, gdp_growth, gdp_future_rates)
+        except Exception:
+            continue
+        fx = fc.set_index("ds").loc[test["ds"]]
+        m = mape_of(fx["yhat"], test["y"])
+        if m is None:
+            continue
+        fold_mapes.append(m)
+        for lo, hi, a in zip(fx["yhat_lower"], fx["yhat_upper"], test["y"]):
+            n_int += 1
+            if lo <= a <= hi:
+                hits += 1
+        p, a = seasonal_naive_preds(train, test)
+        naive_p += p
+        naive_a += a
+        if i == 1:
+            detail = [
+                {"date": f"{ds.year}-{ds.month:02d}",
+                 "v": max(0, round(float(v))), "lo": max(0, round(float(lo))),
+                 "hi": max(0, round(float(hi))), "actual": round(float(act))}
+                for ds, v, lo, hi, act in zip(test["ds"], fx["yhat"], fx["yhat_lower"], fx["yhat_upper"], test["y"])
+            ]
+    if not fold_mapes:
         return None
-    pred = fc.set_index("ds").loc[test["ds"], "yhat"].values
-    actual = test["y"].values
-    mask = actual != 0
-    if not mask.any():
-        return None
-    mape = (abs(pred[mask] - actual[mask]) / actual[mask]).mean() * 100
-    return round(float(mape), 1)
+    naive = mape_of(naive_p, naive_a)
+    mape = round(sum(fold_mapes) / len(fold_mapes), 1)
+    return {
+        "mape": mape,
+        "mape_folds": [round(m, 1) for m in fold_mapes],
+        "naive_mape": round(naive, 1) if naive is not None else None,
+        "skill": round(1 - mape / naive, 2) if naive else None,
+        "coverage": round(hits / n_int * 100) if n_int else None,
+        "backtest": detail or [],
+    }
 
 
 def seasonal12(df):
@@ -277,7 +342,7 @@ def forecast_metric(iata, iso2, monthly, horizon, gdp_levels=None, gdp_growth=No
     fit_holidays = pd.concat(frames, ignore_index=True) if frames else hol_df
 
     m, fc = fit_predict(df, fit_holidays, horizon, gdp_levels=gdp_levels, gdp_growth=gdp_growth, gdp_future_rates=gdp_future_rates)
-    mape = backtest_mape(df, fit_holidays, gdp_levels=gdp_levels, gdp_growth=gdp_growth, gdp_future_rates=gdp_future_rates)
+    bt = rolling_backtest(df, fit_holidays, gdp_levels=gdp_levels, gdp_growth=gdp_growth, gdp_future_rates=gdp_future_rates)
 
     fut = fc.tail(horizon)
     out = []
@@ -292,7 +357,12 @@ def forecast_metric(iata, iso2, monthly, horizon, gdp_levels=None, gdp_growth=No
             "hi": max(0, round(float(r["yhat_upper"]))),
         })
     return {
-        "mape": mape,
+        "mape": bt["mape"] if bt else None,
+        "mape_folds": bt["mape_folds"] if bt else [],
+        "naive_mape": bt["naive_mape"] if bt else None,
+        "skill": bt["skill"] if bt else None,
+        "coverage": bt["coverage"] if bt else None,
+        "backtest": bt["backtest"] if bt else [],
         "months_history": int(len(df)),
         "latest": f"{df['ds'].max().year}-{df['ds'].max().month:02d}",
         "seasonal12": seasonal12(df),
@@ -373,6 +443,9 @@ def main():
     with open(ACTIVITY, "r", encoding="utf-8") as f:
         activity = json.load(f)
     airports_in = activity.get("airports", {})
+    # local-dev subset: GLIDEPATH_ONLY="AMS,YYZ" fits just those airports
+    # (and skips pruning, so the other committed forecasts survive the run)
+    only = {s.strip().upper() for s in os.environ.get("GLIDEPATH_ONLY", "").split(",") if s.strip()}
     gdp_by_country = load_gdp_by_country()
     n_with_forecast = sum(1 for _, _, r in gdp_by_country.values() if r)
     print(f"GDP/capita regressor available for {len(gdp_by_country)} countries "
@@ -383,6 +456,8 @@ def main():
     airports_written = []
     n_series = 0
     for iata, a in airports_in.items():
+        if only and iata not in only:
+            continue
         iso2 = a.get("country") or COUNTRY.get(iata)
         if not iso2 or not a.get("observed"):
             continue
@@ -413,7 +488,8 @@ def main():
                 f.write("\n")
             airports_written.append(iata)
 
-    prune_stale(FORECASTS_DIR, airports_written)
+    if not only:
+        prune_stale(FORECASTS_DIR, airports_written)
 
     meta = {
         "generatedAt": datetime.now(timezone.utc).isoformat(),
@@ -421,6 +497,7 @@ def main():
         "library": f"prophet {__import__('prophet').__version__}, holidays {holidays_pkg.__version__}",
         "interval": INTERVAL,
         "horizon": HORIZON,
+        "backtest": f"rolling-origin, up to {BACKTEST_FOLDS} folds x {BACKTEST_H}mo holdouts, scored against a seasonal-naive benchmark; 80% interval coverage measured on the same held-out months",
         "note": ("Short-term forecasts. Fit nightly by .github/workflows/refresh-data.yml "
                  "on the real observed series. Per-airport output lives in "
                  "data/forecasts/<IATA>.json, fetched by the browser once that gateway "

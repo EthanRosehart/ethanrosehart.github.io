@@ -92,7 +92,7 @@ const round1 = (n) => Math.round(n * 10) / 10;
  *  country's aggregate growth pcts and population levels. A year needs its
  *  own gdp pct plus this and last year's population; anything missing just
  *  drops that year. -> [{year, pct}] ascending. */
-function perCapitaRates(gdpPct, popLevels) {
+export function perCapitaRates(gdpPct, popLevels) {
   const now = new Date().getFullYear();
   const out = [];
   for (let y = now; y <= now + YEARS_FWD; y++) {
@@ -145,10 +145,12 @@ async function main() {
   console.log("Wrote", OUT, `— ${Object.keys(out).length} countries.`);
 }
 
-main().catch((err) => {
-  console.error("IMF WEO snapshot failed:", err.message);
-  // Non-zero exit so the workflow surfaces the failure, but nothing is
-  // written — a previously-committed data/imf-weo.json stays in place
-  // untouched, and build-forecast.py's fallback path is unaffected either way.
-  process.exit(1);
-});
+if (process.argv[1] === fileURLToPath(import.meta.url)) {
+  main().catch((err) => {
+    console.error("IMF WEO snapshot failed:", err.message);
+    // Non-zero exit so the workflow surfaces the failure, but nothing is
+    // written — a previously-committed data/imf-weo.json stays in place
+    // untouched, and build-forecast.py's fallback path is unaffected either way.
+    process.exit(1);
+  });
+}

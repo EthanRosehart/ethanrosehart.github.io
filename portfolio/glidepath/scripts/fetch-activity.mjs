@@ -73,7 +73,7 @@ const GEO = {
   AL:["AL","ALB","Albania"], MD:["MD","MDA","Moldova"], UA:["UA","UKR","Ukraine"],
 };
 
-function normMonth(s) { return String(s).replace("M", "-").slice(0, 7); }
+export function normMonth(s) { return String(s).replace("M", "-").slice(0, 7); }
 
 /* ============================================================
    EUROSTAT — JSON-stat. A single all-airports pull is rejected
@@ -93,7 +93,8 @@ function esUrl(dataset, q, reps) {
 }
 
 // decode a JSON-stat payload to { icao: { geo, monthly:{ "YYYY-MM": n } } }
-function esDecode(js, dataset) {
+// (exported for test/pipeline.test.mjs, which feeds it a recorded fixture)
+export function esDecode(js, dataset) {
   const ids = js.id, size = js.size, value = js.value;
   if (!ids || !size || !value) throw new Error(`${dataset}: malformed JSON-stat`);
   const stride = new Array(ids.length); let s = 1;
@@ -442,4 +443,6 @@ async function main() {
   console.log(`Wrote ${OUT} — ${Object.keys(indexAirports).length} airports (${Object.keys(airports).length} eurostat/statcan + ${Object.keys(btsCarry).length} carried BTS), ${live} live metric-series.`);
 }
 
-main().catch((err) => { console.error("Activity snapshot failed:", err.message); process.exit(1); });
+if (process.argv[1] === fileURLToPath(import.meta.url)) {
+  main().catch((err) => { console.error("Activity snapshot failed:", err.message); process.exit(1); });
+}

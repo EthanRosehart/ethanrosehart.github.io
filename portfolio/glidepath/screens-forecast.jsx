@@ -41,8 +41,9 @@ function DataCaveat({ airport, style }){
       <div className="caveat fade-in" style={{marginBottom:16, ...style}}>
         <b>Your data —</b> {airport.iata} runs on the monthly figures you uploaded, not a public feed. The long-term
         elasticity forecast, scenario levers, event simulator and export all work exactly the same as for a catalogue
-        gateway. The one thing that isn't available is the short-term Prophet forecast — that model is fit
-        server-side, nightly, only for the committed public data sources.
+        gateway. The short-term view uses a Holt-Winters (ETS) model fit right here in your browser — the nightly
+        server-side Prophet model only runs for the committed public data sources, and the model card says which
+        one you're looking at.
       </div>
     );
   }
@@ -66,11 +67,12 @@ function Overview({ airport, history, scenario, go }){
     const atmY = GP_fullYears(history,"atm");
     const cargoY = GP_fullYears(history,"cargo");
     const lt = GP_longTerm(airport.iata, history, scenario);
-    const st = GP_forecastFor(airport.iata,"pax");
-    // Prophet only fits nightly for the committed public feeds, so a custom
-    // gateway (and any real one Prophet hasn't fit yet) has no `st.seasIdx` —
-    // fall back to a seasonal index read straight off the observed months
-    // rather than hiding the panel.
+    // Prophet where the nightly fit exists, in-browser ETS otherwise (custom
+    // uploads, or a real gateway Prophet hasn't cleared its minimum for)
+    const st = GP_tacticalForecast(airport.iata, "pax", history);
+    // and if even ETS can't run (< 24 contiguous months), fall back to a
+    // seasonal index read straight off the observed months rather than
+    // hiding the seasonality panel.
     const obsSeas = st ? null : GP_observedSeasonality(history, "pax");
     const seasIdx = st ? st.seasIdx : obsSeas;
     const last = paxY.length?paxY[paxY.length-1].v:0, prev = paxY.length>1?paxY[paxY.length-2].v:last;
@@ -106,8 +108,8 @@ function Overview({ airport, history, scenario, go }){
           ? <KPI label={"Cargo · "+baseYear} value={GP_fmt.k(d.cargoY[d.cargoY.length-1].v)+"t"}
               sub="observed freight" spark={d.cargoY.slice(-6).map(r=>r.v)} sparkColor="var(--lime)"/>
           : <KPI label="History" value={d.paxY.length+" yrs"} sub="observed monthly"/>}
-        {d.st && <KPI label="Next-12mo confidence" value={"±"+d.st.mape+"%"}
-          sub="Prophet backtest MAPE" spark={d.st.forecast.slice(0,12).map(r=>r.v)} sparkColor="var(--violet)"/>}
+        {d.st && d.st.mape!=null && <KPI label="Next-12mo confidence" value={"±"+d.st.mape+"%"}
+          sub={(d.st.method==="ets"?"ETS":"Prophet")+" backtest MAPE"} spark={d.st.forecast.slice(0,12).map(r=>r.v)} sparkColor="var(--violet)"/>}
       </div>
 
       <div className="grid" style={{gridTemplateColumns:"1.55fr 1fr", marginBottom:16}}>
@@ -182,11 +184,13 @@ function Overview({ airport, history, scenario, go }){
 
       <div className="grid g-3" style={{marginBottom:16}}>
         {d.st && <div className="panel panel-pad" style={{cursor:"pointer"}} onClick={()=>go("short")}>
-          <div className="eyebrow" style={{marginBottom:10}}>Tactical · Prophet</div>
+          <div className="eyebrow" style={{marginBottom:10}}>Tactical · {d.st.method==="ets"?"ETS":"Prophet"}</div>
           <div style={{fontSize:17,fontWeight:600,marginBottom:6}}>Short-term forecast</div>
-          <p style={{fontSize:13,color:"var(--dim)",marginBottom:14}}>24-month Meta Prophet demand with country holidays, for capacity & roster planning.</p>
+          <p style={{fontSize:13,color:"var(--dim)",marginBottom:14}}>{d.st.method==="ets"
+            ? "24-month Holt-Winters (ETS) demand forecast, fit in your browser on the observed months."
+            : "24-month Meta Prophet demand with country holidays, for capacity & roster planning."}</p>
           <div className="stat-strip" style={{border:"none",gap:14}}>
-            <div style={{padding:0,border:"none"}}><div className="air-meta">MAPE</div><div className="num" style={{fontSize:17}}>±{d.st.mape}%</div></div>
+            <div style={{padding:0,border:"none"}}><div className="air-meta">MAPE</div><div className="num" style={{fontSize:17}}>{d.st.mape!=null?"±"+d.st.mape+"%":"—"}</div></div>
             <div style={{padding:0,border:"none"}}><div className="air-meta">Next peak</div><div className="num" style={{fontSize:17}}>{GP_fmt.k(Math.max(...d.st.forecast.slice(0,12).map(r=>r.v)))}</div></div>
           </div>
           <div className="btn btn-sm" style={{marginTop:14,width:"100%",justifyContent:"center",color:"var(--pink-2)",borderColor:"var(--pink-line)"}}>Open tactical view {GP_Ico.arrow}</div>
@@ -216,16 +220,20 @@ function Overview({ airport, history, scenario, go }){
   );
 }
 
-/* ---------- SHORT-TERM TACTICAL (Prophet) -------------------- */
+/* ---------- SHORT-TERM TACTICAL (Prophet / ETS) --------------- */
 function ShortTerm({ airport, history }){
-  const avail = GP_availableMetrics(airport.iata).filter(k=>GP_hasForecast(airport.iata,k));
+  // a metric is offered when a tactical model can actually run on it —
+  // the nightly Prophet output where it exists, in-browser ETS otherwise
+  const avail = useMemoF(()=> GP_availableMetrics(airport.iata)
+    .filter(k => GP_hasForecast(airport.iata,k) || GP_tacticalForecast(airport.iata,k,history)),
+    [airport, history]);
   const metrics = (avail.length?avail:["pax"]).map(k=>METRIC_META[k]);
   const [metric, setMetric] = React.useState(metrics[0]?metrics[0].key:"pax");
   const [horizon, setHorizon] = React.useState(24);
   const macro = MACRO[airport.cc];
 
   const d = useMemoF(()=>{
-    const st = GP_forecastFor(airport.iata, metric);
+    const st = GP_tacticalForecast(airport.iata, metric, history);
     if (!st) return null;
     const fc = st.forecast.slice(0, horizon);
     const tail = history.filter(r=>r[metric]!=null).slice(-18);
@@ -240,26 +248,32 @@ function ShortTerm({ airport, history }){
     return { st, fc, labels, actual, fitted, lo, hi, nHist, tail };
   },[airport, history, metric, horizon]);
 
-  if (!d) return <div className="content fade-in"><div className="panel panel-pad"><div className="air-meta">No forecast available for this gateway yet.</div></div></div>;
+  if (!d) return <div className="content fade-in"><div className="panel panel-pad"><div className="air-meta">No forecast available for this gateway yet — the tactical models need at least 24 contiguous months of history.</div></div></div>;
 
+  const isEts = d.st.method === "ets";
+  const modelName = isEts ? "Holt-Winters (ETS)" : "Meta Prophet";
   const unit = metric==="cargo" ? (v=>GP_fmt.k(v)+"t") : (v=>GP_fmt.k(v));
   const next12 = d.fc.slice(0,12);
   const next12sum = next12.reduce((s,r)=>s+r.v,0);
   const ly = d.tail.slice(-12).reduce((s,r)=>s+r[metric],0);
-  const seasSwing = (Math.max(...d.st.seasIdx)/Math.min(...d.st.seasIdx)).toFixed(2);
+  const seasMin = Math.min(...d.st.seasIdx);
+  const seasSwing = seasMin > 0 ? (Math.max(...d.st.seasIdx)/seasMin).toFixed(2) : null;
+  const nFolds = (d.st.mapeFolds||[]).length;
 
   return (
     <div className="content fade-in">
       <DataCaveat airport={airport}/>
       <div className="grid g-4" style={{marginBottom:16}}>
-        <KPI accent label="Model MAPE" value={d.st.mape!=null?("±"+d.st.mape+"%"):"—"} sub="12-mo holdout backtest" deltaDir="up" delta={d.st.mape!=null&&d.st.mape<7?"strong fit":"usable"}/>
+        <KPI accent label="Model MAPE" value={d.st.mape!=null?("±"+d.st.mape+"%"):"—"}
+          sub={nFolds>1?`mean of ${nFolds} rolling 12-mo holdouts`:"12-mo holdout backtest"} deltaDir="up"
+          delta={d.st.skill!=null ? (d.st.skill>0?"beats seasonal-naïve":"≤ seasonal-naïve") : (d.st.mape!=null&&d.st.mape<7?"strong fit":"usable")}/>
         <KPI label="Next 12 months" value={unit(next12sum)} delta={ly?GP_fmt.pct((next12sum/ly-1)*100):null} deltaDir={next12sum>=ly?"up":"down"} sub="vs trailing year"/>
         <KPI label="Forecast peak" value={unit(Math.max(...next12.map(r=>r.v)))} sub={next12.reduce((a,b)=>a.v>b.v?a:b).label}/>
-        <KPI label="Seasonal swing" value={seasSwing+"×"} sub="peak ÷ trough month"/>
+        <KPI label="Seasonal swing" value={seasSwing?seasSwing+"×":"—"} sub="peak ÷ trough month"/>
       </div>
 
       <div className="panel panel-pad" style={{marginBottom:16}}>
-        <SectionHead kicker="Tactical forecast · Meta Prophet" title="Monthly demand, actuals → forecast"
+        <SectionHead kicker={"Tactical forecast · "+modelName} title="Monthly demand, actuals → forecast"
           right={
             <div style={{display:"flex",gap:10,alignItems:"center",flexWrap:"wrap"}}>
               <div className="seg seg-sub">
@@ -275,30 +289,65 @@ function ShortTerm({ airport, history }){
           band={{lo:d.lo, hi:d.hi, color:"var(--pink)"}}
           series={[
             { name:"Actual", color:"var(--text)", values:d.actual, width:2.4 },
-            { name:"Prophet", color:"var(--pink)", values:d.fitted, dash:"6 4", width:2.6, glow:true },
+            { name:modelName, color:"var(--pink)", values:d.fitted, dash:"6 4", width:2.6, glow:true },
           ]}/>
         <div style={{display:"flex",gap:18,marginTop:12,flexWrap:"wrap",alignItems:"center"}}>
           <span className="legend-item"><span className="legend-line" style={{borderColor:"var(--text)"}}></span>Actual ({GP_sourceLabel(GP_activityFor(airport.iata).source)})</span>
-          <span className="legend-item"><span className="legend-line" style={{borderColor:"var(--pink)",borderStyle:"dashed"}}></span>Prophet forecast</span>
-          <span className="legend-item"><span className="legend-swatch" style={{background:"var(--pink)",opacity:.3}}></span>{Math.round((GP_FORECAST_META?.interval||0.8)*100)}% interval (P10–P90)</span>
+          <span className="legend-item"><span className="legend-line" style={{borderColor:"var(--pink)",borderStyle:"dashed"}}></span>{modelName} forecast</span>
+          <span className="legend-item"><span className="legend-swatch" style={{background:"var(--pink)",opacity:.3}}></span>{isEts?"80% interval (approx.)":Math.round((GP_FORECAST_META?.interval||0.8)*100)+"% interval (P10–P90)"}</span>
         </div>
       </div>
+
+      {/* forecast accountability: the most recent 12 months the model never
+          saw, refit without them, next to what actually happened — the
+          quickest way to judge whether the confidence band means anything */}
+      {d.st.backtest && d.st.backtest.length>0 && (()=>{
+        const bt = d.st.backtest;
+        const btLabels = bt.map(r=>{ const p=r.date.split("-"); return MONTHS[+p[1]-1]+" "+p[0].slice(2); });
+        const inBand = bt.filter(r=>r.lo<=r.actual&&r.actual<=r.hi).length;
+        return (
+          <div className="panel panel-pad" style={{marginBottom:16}}>
+            <SectionHead kicker="Held-out backtest" title="What the model predicted vs what happened"
+              right={<span className="air-meta">{inBand}/{bt.length} months inside the 80% band</span>}/>
+            <LineChart labels={btLabels} height={220}
+              yFmt={metric==="cargo"?(v=>GP_fmt.k(v)):undefined}
+              band={{lo:bt.map(r=>r.lo), hi:bt.map(r=>r.hi), color:"var(--violet)"}}
+              series={[
+                { name:"Predicted", color:"var(--violet)", values:bt.map(r=>r.v), dash:"6 4", width:2.2 },
+                { name:"Actual", color:"var(--text)", values:bt.map(r=>r.actual), width:2.4 },
+              ]}/>
+            <div className="method" style={{marginTop:10}}>
+              <b>How to read this —</b> the model was refit with these {bt.length} months hidden, then asked to predict
+              them. Solid is what really happened; dashed is the blind prediction with its 80% band. Every accuracy
+              figure on this page comes from holdouts like this one — never from data the model trained on.
+            </div>
+          </div>
+        );
+      })()}
 
       <div className="grid" style={{gridTemplateColumns:"1fr 1.4fr"}}>
         <div className="panel panel-pad">
           <SectionHead kicker="Under the hood" title="Model card"/>
           <div style={{display:"flex",flexDirection:"column",gap:0}}>
             {[
-              ["Method","Meta Prophet · trend + yearly + holidays"],
-              ["Seasonality","Multiplicative yearly (Fourier)"],
-              ["Holidays",d.st.holidaysTotal+" public · "+macro.label],
-              ...(d.st.gdpRegressor?[["GDP/capita", d.st.gdpForecast
-                ? "World Bank actuals + real IMF WEO forecast"
-                : "World Bank actuals + trailing-rate extrapolation"]]:[]),
-              ["Shocks","COVID 2020–21 modeled as events"],
-              ["Backtest","12-month holdout"],
-              ["Accuracy",d.st.mape!=null?("MAPE ±"+d.st.mape+"%"):"—"],
-              ["Refresh","Nightly · server-side"],
+              ...(isEts ? [
+                ["Method","Holt-Winters (ETS) · trend + seasonality"],
+                ["Seasonality","Multiplicative monthly indices"],
+                ["Fit","In this browser, on the observed months"],
+              ] : [
+                ["Method","Meta Prophet · trend + yearly + holidays"],
+                ["Seasonality","Multiplicative yearly (Fourier)"],
+                ["Holidays",d.st.holidaysTotal+" public · "+macro.label],
+                ...(d.st.gdpRegressor?[["GDP/capita", d.st.gdpForecast
+                  ? "World Bank actuals + real IMF WEO forecast"
+                  : "World Bank actuals + trailing-rate extrapolation"]]:[]),
+                ["Shocks","COVID 2020–21 modeled as events"],
+              ]),
+              ["Backtest", nFolds>1 ? `rolling-origin · ${nFolds} × 12-mo holdouts` : "12-month holdout"],
+              ["Accuracy", d.st.mape!=null?("MAPE ±"+d.st.mape+"%"+(nFolds>1?` (folds ${d.st.mapeFolds.join(" / ")})`:"")):"—"],
+              ...(d.st.naiveMape!=null?[["vs seasonal-naïve", "±"+d.st.naiveMape+"%"+(d.st.skill!=null?` · skill ${d.st.skill>0?"+":""}${Math.round(d.st.skill*100)}%`:"")]]:[]),
+              ...(d.st.coverage!=null?[["80% band coverage", d.st.coverage+"% of held-out months"]]:[]),
+              ["Refresh", isEts ? "Live · in this browser" : "Nightly · server-side"],
             ].map((r,i,arr)=>(
               <div key={i} style={{display:"flex",justifyContent:"space-between",gap:16,padding:"10px 0",borderBottom:i<arr.length-1?"1px solid var(--line)":"none"}}>
                 <span style={{color:"var(--faint)",fontSize:13}}>{r[0]}</span>
@@ -306,10 +355,17 @@ function ShortTerm({ airport, history }){
               </div>
             ))}
           </div>
-          <div className="method" style={{marginTop:14}}>
-            <b>COVID handling —</b> the 2020–21 collapse is fit as explicit monthly events, so it doesn't distort seasonality or widen the forecast band. No data is dropped — every observed month still trains the model and shows on the chart.
-          </div>
-          {d.st.holidays.length>0 && <div className="method" style={{marginTop:14}}>
+          {isEts
+            ? <div className="method" style={{marginTop:14}}>
+                <b>What ETS is —</b> exponential smoothing with an additive trend and multiplicative monthly
+                seasonality, smoothing constants grid-searched on one-step error. The 80% band grows from the
+                in-sample residuals — an approximation, not a full posterior like Prophet's. No holidays, no
+                macro regressor: it's the honest small model for data that lives only in this browser.
+              </div>
+            : <div className="method" style={{marginTop:14}}>
+                <b>COVID handling —</b> the 2020–21 collapse is fit as explicit monthly events, so it doesn't distort seasonality or widen the forecast band. No data is dropped — every observed month still trains the model and shows on the chart.
+              </div>}
+          {!isEts && d.st.holidays.length>0 && <div className="method" style={{marginTop:14}}>
             <b>Top holiday effects —</b> {d.st.holidays.slice(0,4).join(" · ")}.
           </div>}
         </div>
