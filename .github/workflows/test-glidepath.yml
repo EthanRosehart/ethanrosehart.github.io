@@ -38,6 +38,10 @@ jobs:
         working-directory: portfolio/glidepath
         run: node --test   # auto-discovers test/*.test.mjs
 
+      - name: Validate committed data snapshots
+        working-directory: portfolio/glidepath
+        run: node scripts/validate-data.mjs
+
       - name: Set up Python
         uses: actions/setup-python@v5
         with:
