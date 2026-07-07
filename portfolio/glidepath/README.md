@@ -132,8 +132,13 @@ would otherwise leave behind — see the "ghost gateway" test in
 ## Architecture
 
 React 18 (production build, self-hosted in [`vendor/`](vendor/README.md) —
-no third-party CDN at runtime, so a CDN outage can't take the app down
-with it). The app's own six `.jsx` files are
+nothing the app needs to *boot* comes from a third-party CDN, so a CDN
+outage can't take the app down with it). Two optional features do
+lazy-load a pinned third-party script on demand, and both fail soft: the
+XLSX/PPTX exports and the spreadsheet-upload parser (SheetJS from
+cdn.sheetjs.com, PptxGenJS from jsdelivr — see `GP_loadScript` in
+`screens-strategic.jsx`), plus the Google Fonts stylesheet, which falls
+back to system fonts if unreachable. The app's own six `.jsx` files are
 precompiled by [`build.mjs`](build.mjs) (esbuild) into a single minified
 `dist/app.bundle.js` — the browser never downloads a JSX compiler, only that
 one plain-JS file. See [Building](#building) for how the bundle gets
@@ -265,6 +270,23 @@ to `main` and trigger that same redeploy: the nightly data refresh
 - Charts are hand-rolled SVG with no text/table fallback for screen
   readers — fine for a portfolio demo, worth revisiting for a
   production-grade dashboard.
+- **XLSX/PPTX generation and spreadsheet upload lazy-load two pinned
+  third-party CDN scripts** (SheetJS, PptxGenJS) without subresource
+  integrity hashes. A CDN failure degrades gracefully (the CSV export and
+  the rest of the app keep working), but self-hosting those two libraries
+  in `vendor/` — the same treatment React already got — is the next
+  hardening step. Free-text fields that reach the generated files (event
+  labels, uploaded gateway names) are escaped against CSV formula
+  injection and HTML injection (`GP_csvCell` / `GP_escapeHtml` in
+  `data.jsx`).
+
+## Roadmap
+
+[`ROADMAP.md`](ROADMAP.md) lays out the path from this portfolio demo to a
+production-grade, adoptable open-source tool — licensing and security
+hardening, forecast backtesting rigor, more national data feeds,
+planner-grade outputs (constrained demand, design-day profiles), and a
+packaged self-hosting story.
 
 ## Credits / provenance
 

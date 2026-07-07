@@ -29,8 +29,8 @@ few tens of KB instead of downloading every airport's history up front.
 
 The pipeline runs in this order (see `.github/workflows/refresh-data.yml`):
 `fetch-openflights` → `fetch-activity` → `fetch-bts` → `fetch-data` →
-`build-forecast`. Each step is best-effort and keeps the last good snapshot on
-failure.
+`fetch-imf` → `build-forecast`. Each step is best-effort and keeps the last
+good snapshot on failure.
 
 ## What's wired
 
