@@ -20,6 +20,43 @@ someone else to run their own instance.
 
 ---
 
+## Execution status — 2026-07 (phases 0–3 executed)
+
+Shipped in this pass, verified by the test suites (44 Node / 22 pytest) and
+an end-to-end browser smoke run:
+
+- **Phase 0 — done**, two exceptions: MIT `LICENSE`, PptxGenJS vendored,
+  CSP meta tag, loud nightly failures (per-step outcomes + staleness/anomaly
+  checks + auto-filed pipeline-health issue), in-app staleness banner,
+  SECURITY/CONTRIBUTING/CHANGELOG/issue templates. *Deferred:* SheetJS
+  self-hosting (≥0.19 isn't published to npm — no integrity-checked tarball
+  exists; host CSP-pinned instead) and Action SHA-pinning (needs the
+  authentic SHAs from the GitHub API, unreachable from the sandbox this ran
+  in — do not pin to guessed hashes).
+- **Phase 1 — done except two research items:** rolling-origin backtests
+  (3×12mo), seasonal-naïve skill scores, measured interval coverage, the
+  held-out predicted-vs-actual disclosure panel, monthly forecast archive,
+  in-browser Holt-Winters (ETS) for uploaded gateways, a real Prophet fit in
+  CI. *Deferred:* per-airport model *selection* (ship-the-baseline-when-it-
+  wins needs a season of archived skill scores first) and auto-fitting the
+  elasticity coefficient (8–10 annual observations spanning COVID would
+  produce false precision — kept as a documented assumption).
+- **Phase 2 — offline-verifiable subset done:** schema validation as a CI +
+  nightly gate, staleness/anomaly checker, provenance manifest,
+  fixture-tested fetcher parsing (Eurostat JSON-stat, IMF derivation, BTS
+  column mapping). *Deferred:* new live feeds (BTS TranStats, UK CAA, ANAC,
+  BITRE) — each needs live API probing against the real endpoints, which
+  the execution sandbox couldn't reach; shipping untested fetchers would
+  violate the no-garbage-data rule.
+- **Phase 3 — gate items done:** capacity constraints with
+  constrained-vs-unconstrained trajectories and spill (UI + CSV), the
+  design-day / peak-hour panel, shareable scenario URLs (sanitized on
+  decode). *Deferred:* multi-airport comparison, presets-as-data, and
+  chart images inside PPTX/DOCX — product depth that shouldn't gate the
+  hardening/rigor work landing.
+
+---
+
 ## Phase 0 — Open-source foundations & security hardening
 
 *Theme: make it safe and legitimate to adopt. Everything here is small,

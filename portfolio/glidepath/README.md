@@ -20,11 +20,11 @@ same catalogue and forecasting machinery.
 | **Select airport** | Upload your own data, or connect to the open-source catalogue and search/browse gateways with a live public passenger feed — presented as an explicit either/or, not one path buried under the other. Also where a previously saved session gets re-imported. |
 | **Connect data** | Shows the data sources reconciling for the chosen airport — OpenFlights, Eurostat/StatCan aviation activity, World Bank macro, and (where the country's covered) an IMF WEO row for the GDP/capita forecast. **Upload data** is a parallel step, not a relabeling of this one — both are always visible in the nav, split by an "or". |
 | **Overview** | KPI headline, annual throughput history, seasonality, passenger-mix donut. |
-| **Short-term (Prophet)** | 12–24 month tactical forecast with confidence band, model card, and monthly detail table. Not available for uploaded data — see below. |
-| **Long-term** | 10/15/25-year strategic trajectory from the elasticity model, with a growth-driver decomposition. |
-| **Baseline assumptions** | Lever panel (GDP, elasticity, population, tourism, fuel/yield, LCC stimulation, plus movements/cargo/segment levers where the gateway carries that data) with live scenario-vs-baseline impact. |
+| **Short-term** | 12–24 month tactical forecast with confidence band, model card, monthly detail table, and a **held-out backtest panel** (what the model predicted for the last 12 months it never saw, vs what happened). Meta Prophet (server-side, nightly) for catalogue gateways; **Holt-Winters ETS, fit in the browser**, for uploaded data — the model card always says which. |
+| **Long-term** | 10/15/25-year strategic trajectory from the elasticity model, with a growth-driver decomposition, a **capacity-constrained overlay + spill** when a cap is set, and a **design-day / peak-hour panel** derived from the seasonal shape (assumptions disclosed). |
+| **Baseline assumptions** | Lever panel (GDP, elasticity, population, tourism, fuel/yield, LCC stimulation, plus movements/cargo/segment levers where the gateway carries that data) with live scenario-vs-baseline impact, plus **annual capacity constraints** (passengers / movements). |
 | **Event simulator** | Add time-bound shocks (a pandemic, a route collapse, a trade dispute) that dent or lift demand — full recovery or permanent re-baseline — and see them ride on top of the scenario. |
-| **Export** | Generates a real PPTX deck, XLSX workbook, Word-openable DOCX brief, or a dependency-free CSV extract — including the scenario assumptions, the segment breakdown, and any shock events, not just the headline trajectory. Also offers **Save session**, a JSON round-trip file for the Select-airport import. |
+| **Export** | Generates a real PPTX deck, XLSX workbook, Word-openable DOCX brief, or a dependency-free CSV extract — including the scenario assumptions, the segment breakdown, any shock events, and (when a cap is set) the constrained trajectory + spill. Also offers **Save session** (JSON round-trip for the Select-airport import) and, for catalogue gateways, a **Share link** that carries the whole scenario in the URL. |
 
 ## Forecasting methodology
 
@@ -46,8 +46,22 @@ same catalogue and forecasting machinery.
   Every forecast's `gdpRegressor`/`gdpForecast` flags disclose whether the
   regressor ran and whether a real forecast (vs. only extrapolation) drove
   it; see `gdp_monthly_series()` in
-  [`scripts/build-forecast.py`](scripts/build-forecast.py). The browser only
-  renders precomputed output — no forecasting happens client-side.
+  [`scripts/build-forecast.py`](scripts/build-forecast.py). Accuracy is
+  measured by **rolling-origin backtesting** (up to 3 refits, each scored on
+  the next 12 months it never saw): the model card reports the mean MAPE and
+  per-fold values, a **skill score vs a seasonal-naïve benchmark**, and the
+  **measured coverage of the 80% interval** on those held-out months — plus
+  a month-by-month predicted-vs-actual chart of the most recent fold. For
+  catalogue gateways the browser only renders this precomputed output.
+- **Short-term for uploaded data:** a **Holt-Winters (ETS)** model —
+  additive trend, multiplicative monthly seasonality, smoothing constants
+  grid-searched on one-step error — fit *in the browser* on the uploaded
+  months (`GP_etsForecast` in [`data.jsx`](data.jsx), ≥24 contiguous months
+  required). It carries the same holdout-backtest disclosure (MAPE,
+  seasonal-naïve comparison, interval coverage, predicted-vs-actual chart);
+  its interval is an approximation from in-sample residuals and the model
+  card says so. The same fallback serves any catalogue gateway Prophet
+  hasn't cleared its history minimum for.
 - **Long-term (strategic):** an elasticity model —
   `g = GDPpc·ε + pop + 0.5·tourism + lcc − 0.18·fuel` — compounding the real
   observed base year on its own seasonal shape. Movements track passengers
@@ -56,6 +70,16 @@ same catalogue and forecasting machinery.
   same real IMF forecast when published, falling back to the World Bank
   trailing mean otherwise (`gdpcapProj`/`gdpcap` in `data.jsx`'s `MACRO`
   table). See `longTermForecast()` in [`data.jsx`](data.jsx).
+- **Capacity constraints (spill):** optional annual passenger / movements
+  caps on the Baseline-assumptions screen. Demand above a cap is reported
+  as spill; the capped year's months are scaled proportionally (a disclosed
+  simplification — real spill concentrates in peaks) and the unconstrained
+  curve stays on the chart so the gap is visible. Rides into the CSV export.
+- **Design day / peak hour:** derived on the Long-term screen from the
+  observed seasonal shape — busy day = average day of the peak month × 1.10,
+  peak hour = a size-dependent share of the busy day (12%/10%/8%). Every
+  heuristic is printed next to the numbers; replace with measured factors
+  when daily data exists (see `GP_designDay` in `data.jsx`).
 - Both models only render for a metric when the gateway actually publishes
   it — there's no interpolation or backfill for a series that doesn't exist.
 - **Demand seasonality** (the "share of an average month" chart on Overview)
@@ -93,15 +117,16 @@ already say "ready".
 A custom gateway is registered through `GP_registerCustomAirport()` in
 [`data.jsx`](data.jsx) — the exact same `ACTIVITY_META`/`AIRPORTS` catalogue
 machinery a real pipeline-fed airport uses, so **every screen downstream
-(Overview, long-term, scenario levers, event simulator, export) works
-unchanged**. The one thing that's deliberately never populated is
+(Overview, short-term, long-term, scenario levers, event simulator, export)
+works unchanged**. The one thing that's deliberately never populated is
 `FORECASTS[iata]`: Meta Prophet is fit server-side, nightly, only for the
-committed public feeds, so a custom airport has no short-term tactical
-forecast — the "Short-term (Prophet)" nav entry is hidden for it, and
-`DataCaveat` explains why on the Overview screen. Everything else — the
-elasticity model, scenario/event tooling, and every export format — runs
-identically to a catalogue airport, with export copy adjusted to say the
-figures came from you rather than a public source.
+committed public feeds. A custom airport's short-term screen instead runs
+the in-browser Holt-Winters model (the nav entry reads "Short-term (ETS)"
+and the model card says exactly what fit it), and `DataCaveat` explains the
+difference on the Overview screen. Everything else — the elasticity model,
+scenario/event tooling, and every export format — runs identically to a
+catalogue airport, with export copy adjusted to say the figures came from
+you rather than a public source.
 
 Since there's no server involved, a custom airport's meta + monthly series
 ride along in `localStorage` itself (not just its IATA-style code) so a
@@ -131,14 +156,18 @@ would otherwise leave behind — see the "ghost gateway" test in
 
 ## Architecture
 
-React 18 (production build, self-hosted in [`vendor/`](vendor/README.md) —
-nothing the app needs to *boot* comes from a third-party CDN, so a CDN
-outage can't take the app down with it). Two optional features do
-lazy-load a pinned third-party script on demand, and both fail soft: the
-XLSX/PPTX exports and the spreadsheet-upload parser (SheetJS from
-cdn.sheetjs.com, PptxGenJS from jsdelivr — see `GP_loadScript` in
-`screens-strategic.jsx`), plus the Google Fonts stylesheet, which falls
-back to system fonts if unreachable. The app's own six `.jsx` files are
+React 18 and PptxGenJS (production builds, self-hosted in
+[`vendor/`](vendor/README.md) — nothing the app needs to *boot* comes from
+a third-party CDN, so a CDN outage can't take the app down with it). One
+optional feature lazy-loads a pinned third-party script on demand and
+fails soft: the XLSX export and the spreadsheet-upload parser (SheetJS
+from cdn.sheetjs.com — versions ≥0.19 aren't published to npm, so there's
+no integrity-checked copy to vendor; its host is pinned in `index.html`'s
+**Content-Security-Policy**, which locks scripts to self + that one host).
+The Google Fonts stylesheet falls back to system fonts if unreachable.
+MIT-licensed ([`LICENSE`](LICENSE), scoped to this directory); see
+[`SECURITY.md`](SECURITY.md) and [`CONTRIBUTING.md`](CONTRIBUTING.md).
+The app's own six `.jsx` files are
 precompiled by [`build.mjs`](build.mjs) (esbuild) into a single minified
 `dist/app.bundle.js` — the browser never downloads a JSX compiler, only that
 one plain-JS file. See [Building](#building) for how the bundle gets
@@ -257,10 +286,10 @@ to `main` and trigger that same redeploy: the nightly data refresh
 
 ## Known limitations
 
-- **Uploaded data has no short-term forecast and no passenger-segment split.**
-  Both are deliberate scope choices (Prophet is fit server-side only for the
-  committed public feeds; segment upload adds a column-mapping case not worth
-  the complexity yet) rather than a technical wall — see
+- **Uploaded data has no passenger-segment split** (a deliberate scope
+  choice — segment upload adds a column-mapping case not worth the
+  complexity yet). Its short-term forecast is in-browser Holt-Winters, not
+  Prophet — same screen, honest model card; see
   [Bring your own data](#bring-your-own-data).
 - **US coverage is defined but not populated.** `scripts/fetch-bts.mjs`
   discovers and fetches BTS T-100 data by design, but as of the last nightly
@@ -270,15 +299,13 @@ to `main` and trigger that same redeploy: the nightly data refresh
 - Charts are hand-rolled SVG with no text/table fallback for screen
   readers — fine for a portfolio demo, worth revisiting for a
   production-grade dashboard.
-- **XLSX/PPTX generation and spreadsheet upload lazy-load two pinned
-  third-party CDN scripts** (SheetJS, PptxGenJS) without subresource
-  integrity hashes. A CDN failure degrades gracefully (the CSV export and
-  the rest of the app keep working), but self-hosting those two libraries
-  in `vendor/` — the same treatment React already got — is the next
-  hardening step. Free-text fields that reach the generated files (event
-  labels, uploaded gateway names) are escaped against CSV formula
-  injection and HTML injection (`GP_csvCell` / `GP_escapeHtml` in
-  `data.jsx`).
+- **The XLSX export and spreadsheet upload lazy-load one pinned CDN script**
+  (SheetJS — not published to npm at current versions, so it can't be
+  vendored like React and PptxGenJS were). Its host is pinned in the page
+  CSP and a CDN failure degrades gracefully (CSV export and the rest of the
+  app keep working). Free-text fields that reach the generated files (event
+  labels, uploaded gateway names) are escaped against CSV formula injection
+  and HTML injection (`GP_csvCell` / `GP_escapeHtml` in `data.jsx`).
 
 ## Roadmap
 

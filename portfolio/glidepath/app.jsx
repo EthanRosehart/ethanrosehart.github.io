@@ -25,7 +25,19 @@ const TITLES = {
 
 function App(){
   const saved = useMemoApp(()=>{ try { return JSON.parse(localStorage.getItem(LS)||"{}") || {}; } catch(e){ return {}; } },[]);
-  const [screen, setScreen] = useStateApp(saved.screen || "select");
+  // a share link (#s=..., see GP_encodeShare in data.jsx) beats any saved
+  // session — someone opening a link a colleague sent expects THAT scenario,
+  // not whatever they last had open. Decoded once here; applied by the
+  // activity-index effect below, since the catalogue has to exist before
+  // the airport can be resolved. Decoding sanitizes: unknown keys and
+  // non-numeric lever values never survive into state.
+  const shared = useMemoApp(()=>{
+    try {
+      const m = (location.hash || "").match(/[#&]s=([A-Za-z0-9_-]+)/);
+      return m ? GP_decodeShare(m[1]) : null;
+    } catch(e){ return null; }
+  },[]);
+  const [screen, setScreen] = useStateApp(shared ? "select" : (saved.screen || "select"));
   // `|| null`, never undefined: the catalogue is still empty at first render
   // (it arrives by fetch), so find() can't succeed yet even for a valid
   // saved iata — the airport is restored by the activity-index effect below.
@@ -64,7 +76,7 @@ function App(){
   // straight into localStorage (there's no server to re-fetch it from), so
   // it can be restored synchronously on mount, before any fetch resolves.
   useEffectApp(()=>{
-    if (saved.customAirport && saved.customAirport.meta && saved.customAirport.series && !airport) {
+    if (saved.customAirport && saved.customAirport.meta && saved.customAirport.series && !airport && !shared) {
       GP_registerCustomAirport(saved.customAirport.iata, saved.customAirport.meta, saved.customAirport.series);
       const a = AIRPORTS.find(x => x.iata === saved.customAirport.iata);
       if (a) setAirport(a);
@@ -104,8 +116,16 @@ function App(){
         if (!alive || !j) return;
         GP_setActivityIndex(j);  // (re)builds the AIRPORTS catalogue
         setActMeta(j);
-        // restore a returning user's saved airport now the catalogue exists
-        if (saved.iata && !airport) {
+        // a share link resolves first (it's the explicit intent); then a
+        // returning user's saved airport, now that the catalogue exists
+        const sharedAirport = shared ? AIRPORTS.find(x => x.iata === shared.iata) : null;
+        if (sharedAirport) {
+          setAirport(sharedAirport);
+          setScenario({ ...GP_defaultScenario(sharedAirport.iata), ...(shared.scenario || {}) });
+          setConnected(true);
+          setScreen("overview");
+          try { history.replaceState(null, "", location.pathname + location.search); } catch(e){}
+        } else if (saved.iata && !airport) {
           const a = AIRPORTS.find(x => x.iata === saved.iata);
           if (a) setAirport(a);
         }
@@ -242,15 +262,6 @@ function App(){
     if (airport && !scenario) setScenario(GP_defaultScenario(airport.iata));
   },[airport]);
 
-  // a custom airport never has (and never will have) a Prophet forecast —
-  // that's fit server-side, nightly, only for the committed public feeds —
-  // so bounce off the tactical screen rather than render it blank if it's
-  // ever reached (nav hides the link, but a stale saved `screen` shouldn't
-  // strand the visitor on an empty page)
-  useEffectApp(()=>{
-    if (airport?.custom && screen==="short") setScreen("overview");
-  },[airport, screen]);
-
   const selectAirport = (a, proceed)=>{
     setCustomPending(false);
     if (!airport || airport.iata!==a.iata){ setAirport(a); setScenario(GP_defaultScenario(a.iata)); setConnected(false); }
@@ -312,7 +323,6 @@ function App(){
   const reachable = (id)=>{
     if (id==="select") return true;
     if (id==="connect") return !!airport || customPending;
-    if (id==="short" && airport?.custom) return false;
     return !!airport && connected;
   };
   const go = (id)=>{ if (reachable(id)){ setScreen(id); setNavOpen(false); } };
@@ -335,7 +345,7 @@ function App(){
         {["Setup","Forecast","Deliver"].map(group=>(
           <div key={group}>
             <div className="nav-section">{group}</div>
-            {NAV.filter(n=>n.group===group && !(n.id==="short" && airport?.custom)).map(n=>{
+            {NAV.filter(n=>n.group===group).map(n=>{
               // "Connect data" and "Upload data" are two alternative routes to
               // the same step 2 (both land on screen "connect", split by
               // customPending) — special-cased here rather than through the
@@ -363,7 +373,9 @@ function App(){
                   {n.id==="upload" && <div className="nav-or">or</div>}
                   <div className={"nav-item"+(active?" active":"")+(done&&!active?" done":"")+(ok?"":" nav-disabled")} onClick={onClick}>
                     {n.step ? <span className="step-n">{done&&!active?"✓":n.step}</span> : <span style={{width:18,display:"grid",placeItems:"center"}}>{n.icon}</span>}
-                    <span>{n.label}</span>
+                    {/* an uploaded gateway's tactical model is in-browser ETS,
+                        not the nightly server-side Prophet — say which */}
+                    <span>{n.id==="short" && airport?.custom ? "Short-term (ETS)" : n.label}</span>
                   </div>
                 </React.Fragment>
               );
@@ -446,6 +458,21 @@ function App(){
           </div>
         </div>
 
+        {/* nightly-refresh watchdog: every fetch step in the pipeline keeps
+            last-good data on failure (correct), which also means a dead feed
+            fails silently (not ok) — so the app itself discloses when the
+            committed snapshot has stopped moving. 10 days ≈ well past any
+            normal upstream publishing pause. */}
+        {(()=>{
+          const age = actMeta ? GP_dataAgeDays(actMeta.generatedAt) : null;
+          if (age == null || age <= 10) return null;
+          return (
+            <div className="caveat" style={{margin:"14px 26px 0", borderColor:"var(--amber)", color:"var(--dim)"}}>
+              <b style={{color:"var(--amber)"}}>Stale data —</b> the newest data snapshot is {Math.floor(age)} days old,
+              so the nightly refresh may be failing. Figures still trace to real filings, but may lag current months.
+            </div>
+          );
+        })()}
         {screen==="select"   && <Onboarding onSelect={selectAirport} selected={airport} onUpload={startUpload} onImportSession={importSession}/>}
         {screen==="connect"  && customPending && <UploadData onDone={finishCustomUpload} onCancel={cancelUpload}/>}
         {screen==="connect"  && !customPending && airport && <ConnectData airport={airport} onDone={finishConnect} alreadyDone={connected} macroMeta={macroMeta} actMeta={actMeta} ofMeta={ofMeta} imfMeta={imfMeta} imfChecked={imfChecked} seriesStatus={seriesStatus}/>}
@@ -455,7 +482,7 @@ function App(){
           </div></div></div>
         )}
         {screen==="overview" && airport && connected && dataReady && scenario && <Overview airport={airport} history={history} scenario={scenario} go={go}/>}
-        {screen==="short"    && airport && connected && dataReady && !airport.custom && <ShortTerm airport={airport} history={history}/>}
+        {screen==="short"    && airport && connected && dataReady && <ShortTerm airport={airport} history={history}/>}
         {screen==="long"     && airport && connected && dataReady && scenario && <LongTerm airport={airport} history={history} scenario={scenario} go={go}/>}
         {screen==="scenario" && airport && connected && dataReady && scenario && <Scenario airport={airport} history={history} scenario={scenario} setScenario={setScenario}/>}
         {screen==="events"   && airport && connected && dataReady && scenario && <EventSim airport={airport} history={history} scenario={scenario} setScenario={setScenario}/>}

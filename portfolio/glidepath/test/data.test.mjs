@@ -25,6 +25,12 @@ const SRC = readFileSync(resolve(__dirname, "..", "data.jsx"), "utf8");
 function loadDataModule() {
   const sandbox = {};
   sandbox.window = sandbox;
+  // the share-link codec uses these platform globals (present in every
+  // browser and in Node, but not inside a bare vm context)
+  sandbox.TextEncoder = TextEncoder;
+  sandbox.TextDecoder = TextDecoder;
+  sandbox.atob = atob;
+  sandbox.btoa = btoa;
   vm.createContext(sandbox);
   vm.runInContext(SRC, sandbox, { filename: "data.jsx" });
   return sandbox;
@@ -365,4 +371,144 @@ test("GP_forecastFor: passes gdpForecast through — the model card can't tell a
   win.GP_setAirportForecast("EXT", { pax: { mape: 3.1, forecast: [], gdpRegressor: true, gdpForecast: false } });
   assert.equal(win.GP_forecastFor("IMF", "pax").gdpForecast, true, "a real IMF-driven forecast must say so, not silently read as extrapolation-only");
   assert.equal(win.GP_forecastFor("EXT", "pax").gdpForecast, false);
+});
+
+/* ---- Phase 1-3 additions: ETS, capacity, design day, share links ---- */
+
+test("GP_etsForecast: recovers a clean seasonal pattern and reports an honest backtest", () => {
+  const win = loadDataModule();
+  // 5 years of multiplicative seasonality (summer peak) with mild growth
+  const pax = {};
+  for (let i = 0; i < 60; i++) {
+    const y = 2021 + Math.floor(i / 12), m = i % 12;
+    const seasonal = m >= 5 && m <= 7 ? 1.4 : m <= 1 ? 0.7 : 1.0;
+    pax[`${y}-${String(m + 1).padStart(2, "0")}`] = Math.round(100000 * Math.pow(1.003, i) * seasonal);
+  }
+  const history = Object.entries(pax).map(([date, v]) => ({ y: +date.slice(0, 4), m: +date.slice(5, 7) - 1, date, pax: v }));
+  const st = win.GP_etsForecast(history, "pax", 24);
+  assert.ok(st, "expected a forecast from 60 clean months");
+  assert.equal(st.method, "ets");
+  assert.equal(st.forecast.length, 24);
+  assert.ok(st.mape != null && st.mape < 8, `holdout MAPE should be small on a clean pattern, got ${st.mape}`);
+  assert.equal(st.backtest.length, 12, "the held-out predicted-vs-actual disclosure must ship");
+  assert.ok(st.backtest.every(r => r.lo <= r.v && r.v <= r.hi && r.actual > 0));
+  // the forecast has to keep the seasonal shape: July >> January in the same year
+  const y1 = st.forecast.slice(0, 12);
+  const jul = y1.find(r => r.m === 6), jan = y1.find(r => r.m === 0);
+  assert.ok(jul.v > jan.v * 1.5, `summer peak should survive into the forecast (Jul ${jul.v} vs Jan ${jan.v})`);
+  assert.equal(st.seasIdx.length, 12);
+  assert.ok(st.forecast.every(r => r.lo <= r.v && r.v <= r.hi && r.lo >= 0));
+});
+
+test("GP_etsForecast: refuses to model < 24 contiguous months instead of guessing", () => {
+  const win = loadDataModule();
+  const short = [];
+  for (let m = 0; m < 18; m++) short.push({ y: 2024 + Math.floor(m / 12), m: m % 12, pax: 1000 });
+  assert.equal(win.GP_etsForecast(short, "pax", 12), null);
+
+  // 30 months but with a hole 12 months from the end -> contiguous tail is
+  // only 11 months, which must also refuse
+  const gappy = [];
+  for (let i = 0; i < 30; i++) {
+    if (i === 18) continue;
+    gappy.push({ y: 2022 + Math.floor(i / 12), m: i % 12, pax: 1000 });
+  }
+  assert.equal(win.GP_etsForecast(gappy, "pax", 12), null);
+});
+
+test("GP_tacticalForecast: prefers the nightly Prophet output, falls back to ETS", () => {
+  const win = loadDataModule();
+  const pax = monthlySeries(2021, 1, 60, (i) => 50000 + (i % 12) * 1000);
+  const iata = setupAirport(win, { series: { pax } });
+  const history = win.GP_buildHistory(iata);
+
+  const ets = win.GP_tacticalForecast(iata, "pax", history);
+  assert.equal(ets.method, "ets", "no Prophet file on record -> in-browser ETS");
+
+  win.GP_setAirportForecast(iata, { pax: { mape: 3.0, forecast: [{ date: "2026-01", y: 2026, m: 0, v: 1, lo: 1, hi: 1 }] } });
+  const pro = win.GP_tacticalForecast(iata, "pax", history);
+  assert.equal(pro.method, "prophet", "a nightly Prophet forecast must win over ETS");
+});
+
+test("longTermForecast: an annual passenger cap constrains the trajectory and reports spill", () => {
+  const win = loadDataModule();
+  const iata = setupAirport(win, { series: { pax: monthlySeries(2024, 1, 24, 1000) } });
+  const history = win.GP_buildHistory(iata);
+  // ~3.4%/yr growth from 12,000/yr; cap at 13,000 -> binds within a few years
+  const scenario = { ...win.GP_defaultScenario(iata), gdp: 2, elasticity: 1.5, pop: 0.4, horizon: 10, paxCap: 13000 };
+  const lt = win.GP_longTerm(iata, history, scenario);
+
+  assert.ok(lt.hasCap);
+  const end = lt.rows[lt.rows.length - 1];
+  assert.ok(end.pax > 13000, "unconstrained demand must keep growing past the cap");
+  assert.equal(end.paxC, 13000, "constrained throughput must sit exactly at the cap");
+  assert.equal(end.spill, end.pax - 13000, "spill = demand the infrastructure can't serve");
+  // capped year's months must sum (±rounding) to the cap
+  const cappedMonths = lt.months.filter(r => r.y === end.y);
+  const mSum = cappedMonths.reduce((t, r) => t + r.paxC, 0);
+  assert.ok(Math.abs(mSum - 13000) <= 12, `capped months should sum to the cap, got ${mSum}`);
+  // an early year under the cap is untouched
+  const early = lt.rows[1];
+  assert.equal(early.paxC, early.pax);
+  assert.equal(early.spill, 0);
+});
+
+test("longTermForecast: no cap set -> no constrained fields at all", () => {
+  const win = loadDataModule();
+  const iata = setupAirport(win, { series: { pax: monthlySeries(2024, 1, 24, 1000) } });
+  const lt = win.GP_longTerm(iata, win.GP_buildHistory(iata), { ...win.GP_defaultScenario(iata), horizon: 5 });
+  assert.equal(lt.hasCap, false);
+  assert.ok(!("paxC" in lt.rows[lt.rows.length - 1]));
+});
+
+test("GP_designDay: derives peak-month, busy-day and peak-hour with the disclosed heuristics", () => {
+  const win = loadDataModule();
+  const seasIdx = [0.7, 0.7, 0.9, 1.0, 1.1, 1.3, 1.5, 1.4, 1.1, 0.9, 0.7, 0.7];
+  const dd = win.GP_designDay(12_000_000, seasIdx);
+  assert.equal(dd.peakMonth, 6, "July (index 6) is the peak");
+  assert.ok(Math.abs(dd.peakMonthPax - 12_000_000 / 12 * 1.5) < 1);
+  assert.ok(Math.abs(dd.busyDay - dd.peakMonthPax / 30.4 * 1.1) < 1);
+  assert.equal(dd.peakHourShare, 0.08, ">=10M annual pax -> 8% peak-hour share");
+  assert.equal(win.GP_designDay(500_000, seasIdx).peakHourShare, 0.12);
+  assert.equal(win.GP_designDay(0, seasIdx), null);
+  assert.equal(win.GP_designDay(1000, [1, 2]), null);
+});
+
+test("share links: a scenario round-trips, and a hostile payload is stripped to known fields", () => {
+  const win = loadDataModule();
+  const scenario = { gdp: 2.5, elasticity: 1.6, horizon: 15, paxCap: 20000000,
+    events: [{ id: 7, label: "Fuel spike", start: "2027-03", peak: -20, length: 6, recovery: 12, permanent: false, target: "all" }] };
+  const decoded = win.GP_decodeShare(win.GP_encodeShare("AMS", scenario));
+  assert.equal(decoded.iata, "AMS");
+  assert.equal(decoded.scenario.gdp, 2.5);
+  assert.equal(decoded.scenario.paxCap, 20000000);
+  assert.equal(decoded.scenario.events.length, 1);
+  assert.equal(decoded.scenario.events[0].label, "Fuel spike");
+
+  // hostile: junk keys, non-numeric levers, malformed + oversized events
+  const evil = win.GP_encodeShare("MAD", {
+    gdp: "DROP TABLE", __proto__x: 1, extra: { a: 1 }, elasticity: 1.9,
+    events: [{ label: "<img onerror=x>".repeat(20), start: "not-a-month", peak: 1 },
+             { label: "ok", start: "2027-01", peak: "NaNny", target: "everything" }],
+  });
+  const d2 = win.GP_decodeShare(evil);
+  assert.equal(d2.iata, "MAD");
+  assert.ok(!("gdp" in d2.scenario), "non-numeric lever values must be dropped");
+  assert.ok(!("extra" in d2.scenario), "unknown keys must not survive");
+  assert.equal(d2.scenario.elasticity, 1.9);
+  assert.equal(d2.scenario.events.length, 1, "an event without a valid start month is dropped");
+  assert.equal(d2.scenario.events[0].peak, 0, "non-numeric peak coerces to 0");
+  assert.equal(d2.scenario.events[0].target, "all", "unknown targets fall back to 'all'");
+  assert.ok(d2.scenario.events[0].label.length <= 80);
+
+  assert.equal(win.GP_decodeShare("not-base64!!"), null);
+  assert.equal(win.GP_decodeShare(win.GP_encodeShare("../../etc", {})), null, "junk iata shapes are rejected");
+});
+
+test("GP_dataAgeDays: parses ISO timestamps into an age, null on junk", () => {
+  const win = loadDataModule();
+  const twoDaysAgo = new Date(Date.now() - 2 * 86400000).toISOString();
+  const age = win.GP_dataAgeDays(twoDaysAgo);
+  assert.ok(Math.abs(age - 2) < 0.01);
+  assert.equal(win.GP_dataAgeDays("garbage"), null);
 });
