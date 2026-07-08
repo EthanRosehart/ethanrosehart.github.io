@@ -38,8 +38,13 @@ Notable changes to Glidepath. Dates are UTC.
   (Eurostat JSON-stat decode, IMF per-capita derivation).
 
 ### Planner features (Phase 3)
-- Capacity constraints: annual passenger and movement caps with
-  constrained-vs-unconstrained trajectories and spill, in the UI and CSV export.
+- Capacity constraints as a coupled system: a slot cap squeezes passengers
+  (softened by a bounded up-gauging response — rate and ceiling are levers),
+  a terminal cap pulls movements down with it, and cargo's bellyhold share
+  (a lever) scales with constrained passenger flying. Constrained-vs-
+  unconstrained trajectories and spill for every metric, in the UI and CSV.
+- Baseline-assumptions levers reorganized into collapsible groups (demand
+  drivers / fleet & freight / passenger segments / capacity & constraints).
 - Design-day / peak-hour panel derived from the seasonal shape, with all
   assumptions disclosed.
 - Shareable scenario links (catalogue gateways): the full lever/event state

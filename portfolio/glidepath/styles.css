@@ -474,3 +474,24 @@ hr.sep { border: none; border-top: 1px solid var(--line); margin: 0; }
   .stat-strip { flex-wrap: wrap; }
   .stat-strip > div { flex: 1 0 50%; }
 }
+
+/* ---- collapsible lever groups (Baseline assumptions panel) ----
+   The panel outgrew a single flat list once capacity caps and their
+   constraint-response assumptions joined the demand/fleet/segment levers —
+   related controls now fold into named groups. */
+.lever-group { border-top: 1px solid var(--line); }
+.lever-group:first-child { border-top: none; }
+.lever-group-head {
+  display: flex; align-items: center; gap: 8px; width: 100%;
+  background: none; border: none; padding: 11px 0; cursor: pointer;
+  color: var(--text); font-family: var(--sans); text-align: left;
+}
+.lever-group-head:hover .lever-group-title { color: var(--pink-2); }
+.lever-group-chev {
+  display: grid; place-items: center; width: 14px; height: 14px;
+  color: var(--faint); transition: transform .15s ease; flex: none;
+}
+.lever-group-chev.open { transform: rotate(90deg); }
+.lever-group-title { font-size: 13px; font-weight: 600; }
+.lever-group-sub { margin-left: auto; font-size: 10.5px; color: var(--faint); white-space: nowrap; }
+.lever-group-body { padding: 2px 0 12px; }

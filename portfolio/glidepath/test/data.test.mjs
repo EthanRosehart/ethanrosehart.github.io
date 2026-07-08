@@ -512,3 +512,99 @@ test("GP_dataAgeDays: parses ISO timestamps into an age, null on junk", () => {
   assert.ok(Math.abs(age - 2) < 0.01);
   assert.equal(win.GP_dataAgeDays("garbage"), null);
 });
+
+/* ---- coupled capacity model: caps propagate across metrics ---- */
+
+test("capacity coupling: a movements cap squeezes passengers, but bounded up-gauging lifts them above the naive flight-implied level", () => {
+  const win = loadDataModule();
+  // clean base: 100,000 pax/mo over 1,000 movements/mo -> 100 pax per movement
+  const iata = setupAirport(win, { series: {
+    pax: monthlySeries(2024, 1, 24, 100000),
+    atm: monthlySeries(2024, 1, 24, 1000),
+  } });
+  const history = win.GP_buildHistory(iata);
+  // ~3.4%/yr demand growth; slots capped just above the base year's 12,000
+  const scenario = { ...win.GP_defaultScenario(iata), gdp: 2, elasticity: 1.5, pop: 0.4,
+    tourism: 0, fuel: 0, lcc: 0, gauge: 0, horizon: 20,
+    atmCap: 12600, paxCap: null, capGauge: 2, capGaugeMax: 10 };
+  const lt = win.GP_longTerm(iata, history, scenario);
+  const end = lt.rows[lt.rows.length - 1];
+  const ratioBase = lt.rows[0].pax / lt.rows[0].atm;   // ≈ 100
+
+  assert.ok(lt.hasCap);
+  assert.equal(end.atmC, 12600, "movements must sit exactly at the slot cap");
+  assert.ok(end.pax > end.paxC, "passenger demand keeps growing past what the airport can serve");
+  // the two claims that make this a model, not a clamp:
+  assert.ok(end.paxC > 12600 * ratioBase * 1.02,
+    `up-gauging must lift pax above the naive flights×base-ratio level (${end.paxC} vs ${Math.round(12600*ratioBase)})`);
+  assert.ok(end.paxC <= 12600 * ratioBase * 1.10 * 1.005,
+    `...but never past the ${scenario.capGaugeMax}% gauge ceiling (${end.paxC} vs ${Math.round(12600*ratioBase*1.1)})`);
+  assert.equal(end.spill, end.pax - end.paxC);
+});
+
+test("capacity coupling: with zero up-gauging headroom, a movements cap pins passengers to flights × base ratio", () => {
+  const win = loadDataModule();
+  const iata = setupAirport(win, { series: {
+    pax: monthlySeries(2024, 1, 24, 100000),
+    atm: monthlySeries(2024, 1, 24, 1000),
+  } });
+  const history = win.GP_buildHistory(iata);
+  const scenario = { ...win.GP_defaultScenario(iata), gdp: 2, elasticity: 1.5, pop: 0.4,
+    tourism: 0, fuel: 0, lcc: 0, gauge: 0, horizon: 15,
+    atmCap: 12600, capGauge: 0, capGaugeMax: 0 };
+  const lt = win.GP_longTerm(iata, history, scenario);
+  const end = lt.rows[lt.rows.length - 1];
+  const ratioBase = lt.rows[0].pax / lt.rows[0].atm;
+  assert.ok(Math.abs(end.paxC - 12600 * ratioBase) / (12600 * ratioBase) < 0.01,
+    `no headroom -> pax ≈ capped flights × base ratio (${end.paxC} vs ${Math.round(12600*ratioBase)})`);
+});
+
+test("capacity coupling: a terminal (pax) cap pulls movements down and belly cargo with it", () => {
+  const win = loadDataModule();
+  const iata = setupAirport(win, { series: {
+    pax: monthlySeries(2024, 1, 24, 100000),
+    atm: monthlySeries(2024, 1, 24, 1000),
+    cargo: monthlySeries(2024, 1, 24, 500),
+  } });
+  const history = win.GP_buildHistory(iata);
+  const scenario = { ...win.GP_defaultScenario(iata), gdp: 2, elasticity: 1.5, pop: 0.4,
+    tourism: 0, fuel: 0, lcc: 0, gauge: 0, cargo: 0, horizon: 15,
+    paxCap: 1300000, atmCap: null, bellyShare: 50 };
+  const lt = win.GP_longTerm(iata, history, scenario);
+  const end = lt.rows[lt.rows.length - 1];
+
+  assert.equal(end.paxC, 1300000, "terminal cap binds passengers");
+  // movements: airlines fly only what constrained pax need, at the year's ratio
+  const expectedAtm = Math.round(end.paxC / (end.pax / end.atm));
+  assert.ok(Math.abs(end.atmC - expectedAtm) <= 1,
+    `movements must follow constrained pax down (${end.atmC} vs expected ${expectedAtm})`);
+  assert.ok(end.atmC < end.atm, "movements below unconstrained demand");
+  // cargo: only the bellyhold share shrinks with constrained pax activity
+  const paxFactor = end.paxC / end.pax;
+  const expectedCargo = Math.round(end.cargo * (1 - 0.5 * (1 - paxFactor)));
+  assert.ok(Math.abs(end.cargoC - expectedCargo) <= 1,
+    `belly share of cargo scales with pax (${end.cargoC} vs expected ${expectedCargo})`);
+  assert.ok(end.cargoC < end.cargo && end.cargoC > end.cargo * 0.5,
+    "cargo constrained, but freighter share survives");
+});
+
+test("capacity coupling: bellyShare 0 leaves cargo untouched; 100 scales it fully with pax", () => {
+  const win = loadDataModule();
+  const series = {
+    pax: monthlySeries(2024, 1, 24, 100000),
+    cargo: monthlySeries(2024, 1, 24, 500),
+  };
+  const mk = (belly) => {
+    const iata = setupAirport(win, { series });
+    const history = win.GP_buildHistory(iata);
+    return win.GP_longTerm(iata, history, { ...win.GP_defaultScenario(iata),
+      gdp: 2, elasticity: 1.5, pop: 0.4, tourism: 0, fuel: 0, lcc: 0, cargo: 0,
+      horizon: 15, paxCap: 1300000, bellyShare: belly });
+  };
+  const freighterOnly = mk(0), bellyOnly = mk(100);
+  const endF = freighterOnly.rows[freighterOnly.rows.length - 1];
+  const endB = bellyOnly.rows[bellyOnly.rows.length - 1];
+  assert.equal(endF.cargoC, endF.cargo, "all-freighter cargo ignores the pax cap");
+  const expected = Math.round(endB.cargo * (endB.paxC / endB.pax));
+  assert.ok(Math.abs(endB.cargoC - expected) <= 1, "all-belly cargo scales 1:1 with constrained pax");
+});

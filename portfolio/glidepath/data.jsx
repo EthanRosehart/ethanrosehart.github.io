@@ -487,6 +487,9 @@ function defaultScenario(iata){
     events: [],           // discrete time-bound shocks (e.g. a pandemic)
     paxCap: null,         // annual passenger capacity (null/0 = unconstrained)
     atmCap: null,         // annual movements capacity (null/0 = unconstrained)
+    capGauge: 1.5,        // extra up-gauging %/yr once the movements cap binds
+    capGaugeMax: 25,      // ceiling on total pax-per-movement growth vs base year (%)
+    bellyShare: 50,       // share of cargo riding passenger-aircraft bellyhold (%)
     horizon: 25,
   };
 }
@@ -630,48 +633,109 @@ function longTermForecast(iata, history, scenario){
     if (hasSeg)   row.seg   = segAnnual(ms);
     rows.push(row);
   }
-  /* ---- capacity constraints (spill) ----
-     Unconstrained demand above is what the market *wants*; a capacity cap
-     is what the infrastructure can *serve*. When an annual cap is set, each
-     forecast year exceeding it is scaled down to the cap (months
-     proportionally — a disclosed simplification; real spill concentrates in
-     peak months) and the shortfall is reported as `spill`. The
-     unconstrained series is left untouched so the two can be charted
-     against each other. */
+  /* ---- capacity constraints (a coupled system, not independent clamps) ----
+     Unconstrained demand above is what the market *wants*; capacity is what
+     the infrastructure can *serve* — and the metrics are physically linked,
+     so one binding cap propagates to all of them:
+
+       · A MOVEMENTS cap (slots/runway) doesn't freeze passengers at the
+         flight-implied level: airlines respond by up-gauging — bigger
+         aircraft, denser layouts, higher load factors. That response is
+         `capGauge` extra %/yr on passengers-per-movement, accruing only
+         while the cap actually binds, and it runs out: total pax-per-
+         movement growth is ceilinged at `capGaugeMax` % above the observed
+         base year (stand sizes, runway mix and the fleet only stretch so
+         far). Constrained pax = capped flights × that bounded ratio.
+       · A PASSENGER cap (terminal) pulls movements down with it — airlines
+         don't fly the schedule demand can't fill. Constrained movements =
+         the flights constrained passengers actually need at the year's
+         unconstrained pax-per-movement ratio (never above the slot cap).
+       · CARGO rides along: `bellyShare` % of tonnage travels in passenger-
+         aircraft bellies, so that share scales with constrained passenger
+         activity (up-gauged aircraft bring more belly space, which the
+         pax ratio already reflects). Freighters — the rest — are assumed
+         unconstrained (they can shift off-peak); a freighter-specific cap
+         is a future refinement, not modeled.
+
+     Each capped year's months are scaled proportionally per metric (a
+     disclosed simplification; real spill concentrates in peak months).
+     The unconstrained series is left untouched so the two can be charted
+     against each other, and `spill` = demand the infrastructure can't
+     serve. All three response assumptions are levers on the Baseline
+     assumptions screen. */
   const paxCap = (+s.paxCap > 0) ? +s.paxCap : null;
   const atmCap = (hasAtm && +s.atmCap > 0) ? +s.atmCap : null;
   const hasCap = !!(paxCap || atmCap);
+  let capAssumptions = null;
   if (hasCap){
+    const capGauge = Math.max(0, +s.capGauge || 0) / 100;
+    const capGaugeMax = Math.max(0, +s.capGaugeMax || 0) / 100;
+    const bellyShare = Math.min(1, Math.max(0, (s.bellyShare == null ? 50 : +s.bellyShare) / 100));
+    capAssumptions = { capGauge: capGauge*100, capGaugeMax: capGaugeMax*100, bellyShare: bellyShare*100 };
+    const ratioBase = (hasAtm && annualAtm > 0) ? annualPax / annualAtm : null;
+    const ratioCeil = ratioBase != null ? ratioBase * (1 + capGaugeMax) : null;
     const monthsByYear = {};
     months.forEach(r => { (monthsByYear[r.y] = monthsByYear[r.y] || []).push(r); });
+    let gaugeYears = 0;   // years the movements cap has been binding
     rows.forEach(row => {
-      const ms = monthsByYear[row.y] || [];   // base row has no forecast months
-      if (paxCap){
-        if (!row.base && row.pax > paxCap){
-          const f = paxCap / row.pax;
-          ms.forEach(r => { r.paxC = Math.round(r.pax * f); });
-          row.paxC = paxCap; row.spill = row.pax - paxCap;
-        } else {
-          ms.forEach(r => { r.paxC = r.pax; });
-          row.paxC = row.pax; row.spill = 0;
-        }
+      if (row.base){
+        // observed year — carries its own values so the chart lines connect
+        row.paxC = row.pax; row.spill = 0;
+        if (row.atm != null) row.atmC = row.atm;
+        if (row.cargo != null) row.cargoC = row.cargo;
+        return;
       }
-      if (atmCap && row.atm != null){
-        if (!row.base && row.atm > atmCap){
-          const f = atmCap / row.atm;
-          ms.forEach(r => { if (r.atm != null) r.atmC = Math.round(r.atm * f); });
-          row.atmC = atmCap;
-        } else {
-          ms.forEach(r => { if (r.atm != null) r.atmC = r.atm; });
-          row.atmC = row.atm;
-        }
+      const ms = monthsByYear[row.y] || [];
+      const paxU = row.pax, atmU = row.atm, cargoU = row.cargo;
+
+      // 1. slots: capped flights, and the bounded-up-gauging pax ceiling
+      let atmC = (atmU != null && atmCap) ? Math.min(atmU, atmCap) : atmU;
+      let paxFromAtm = Infinity;
+      if (atmCap && atmU != null && atmU > atmCap && ratioBase != null && atmU > 0){
+        gaugeYears++;
+        const ratioU = paxU / atmU;
+        // extra gauge compounds only over binding years, on top of whatever
+        // ratio drift the baseline gauge lever already produced — and never
+        // past the physical ceiling (if baseline drift already exceeds the
+        // ceiling, there's simply no response headroom left)
+        const ratioEff = ratioU >= ratioCeil ? ratioU
+          : Math.min(ratioU * Math.pow(1 + capGauge, gaugeYears), ratioCeil);
+        paxFromAtm = atmCap * ratioEff;
       }
+
+      // 2. passengers: demand vs terminal cap vs slot-implied capacity
+      const paxC = Math.min(paxU, paxCap || Infinity, paxFromAtm);
+
+      // 3. movements follow constrained passengers (never above the slot cap)
+      if (atmU != null && atmU > 0){
+        const flightsNeeded = paxC / (paxU / atmU);
+        atmC = Math.min(atmC, Math.max(flightsNeeded, 0));
+      }
+
+      // 4. bellyhold cargo scales with constrained passenger activity
+      let cargoC = cargoU;
+      if (cargoU != null && paxU > 0){
+        cargoC = cargoU * (1 - bellyShare * (1 - paxC / paxU));
+      }
+
+      row.paxC = Math.round(paxC);
+      row.spill = Math.round(paxU - paxC);
+      if (atmU != null)   row.atmC   = Math.round(atmC);
+      if (cargoU != null) row.cargoC = Math.round(cargoC);
+      const fPax = paxU > 0 ? paxC/paxU : 1;
+      const fAtm = (atmU != null && atmU > 0) ? atmC/atmU : 1;
+      const fCargo = (cargoU != null && cargoU > 0) ? cargoC/cargoU : 1;
+      ms.forEach(r => {
+        r.paxC = Math.round(r.pax * fPax);
+        if (r.atm != null)   r.atmC   = Math.round(r.atm * fAtm);
+        if (r.cargo != null) r.cargoC = Math.round(r.cargo * fCargo);
+      });
     });
   }
 
   const cagr = Math.pow(rows[rows.length-1].pax/annualPax, 1/s.horizon) - 1;
   return { rows, months, baseYear, endYear:baseYear+s.horizon, hasAtm, hasCargo,
-    hasCap, paxCap, atmCap,
+    hasCap, paxCap, atmCap, capAssumptions,
     hasSeg, segKeys, segLabels: segKeys.map(k => (PAX_SEGMENTS.find(p=>p.k===k)||{}).label || k),
     segColors: segKeys.map(k => (PAX_SEGMENTS.find(p=>p.k===k)||{}).color || "var(--cyan)"),
     gDemand:gDemand*100, cagr:cagr*100,
@@ -732,7 +796,8 @@ function b64urlDecode(s){
   return new TextDecoder().decode(bytes);
 }
 const SHARE_NUM_KEYS = ["gdp","elasticity","pop","tourism","fuel","lcc","cargo","gauge",
-  "seg_domestic","seg_transborder","seg_international","horizon","paxCap","atmCap"];
+  "seg_domestic","seg_transborder","seg_international","horizon",
+  "paxCap","atmCap","capGauge","capGaugeMax","bellyShare"];
 function sanitizeSharedScenario(sc){
   if (!sc || typeof sc !== "object" || Array.isArray(sc)) return null;
   const out = {};
