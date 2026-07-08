@@ -22,7 +22,7 @@ same catalogue and forecasting machinery.
 | **Overview** | KPI headline, annual throughput history, seasonality, passenger-mix donut. |
 | **Short-term** | 12–24 month tactical forecast with confidence band, model card, monthly detail table, and a **held-out backtest panel** (what the model predicted for the last 12 months it never saw, vs what happened). Meta Prophet (server-side, nightly) for catalogue gateways; **Holt-Winters ETS, fit in the browser**, for uploaded data — the model card always says which. |
 | **Long-term** | 10/15/25-year strategic trajectory from the elasticity model, with a growth-driver decomposition, a **capacity-constrained overlay + spill** when a cap is set, and a **design-day / peak-hour panel** derived from the seasonal shape (assumptions disclosed). |
-| **Baseline assumptions** | Lever panel (GDP, elasticity, population, tourism, fuel/yield, LCC stimulation, plus movements/cargo/segment levers where the gateway carries that data) with live scenario-vs-baseline impact, plus **annual capacity constraints** (passengers / movements). |
+| **Baseline assumptions** | Lever panel organized into collapsible groups — demand drivers (GDP, elasticity, population, tourism, fuel/yield, LCC), fleet & freight, passenger segments (where published), and **capacity & constraints** (annual pax/movement caps plus the constraint-response levers: up-gauging rate, its ceiling, bellyhold cargo share) — with live scenario-vs-baseline impact. |
 | **Event simulator** | Add time-bound shocks (a pandemic, a route collapse, a trade dispute) that dent or lift demand — full recovery or permanent re-baseline — and see them ride on top of the scenario. |
 | **Export** | Generates a real PPTX deck, XLSX workbook, Word-openable DOCX brief, or a dependency-free CSV extract — including the scenario assumptions, the segment breakdown, any shock events, and (when a cap is set) the constrained trajectory + spill. Also offers **Save session** (JSON round-trip for the Select-airport import) and, for catalogue gateways, a **Share link** that carries the whole scenario in the URL. |
 
@@ -70,11 +70,32 @@ same catalogue and forecasting machinery.
   same real IMF forecast when published, falling back to the World Bank
   trailing mean otherwise (`gdpcapProj`/`gdpcap` in `data.jsx`'s `MACRO`
   table). See `longTermForecast()` in [`data.jsx`](data.jsx).
-- **Capacity constraints (spill):** optional annual passenger / movements
-  caps on the Baseline-assumptions screen. Demand above a cap is reported
-  as spill; the capped year's months are scaled proportionally (a disclosed
-  simplification — real spill concentrates in peaks) and the unconstrained
-  curve stays on the chart so the gap is visible. Rides into the CSV export.
+- **Capacity constraints (a coupled system, not independent clamps):**
+  optional annual passenger / movements caps on the Baseline-assumptions
+  screen, where one binding cap propagates to every output. A slot cap
+  squeezes passengers, softened by an **up-gauging response** (extra
+  passengers-per-movement per binding year, a lever) that runs out at a
+  **ceiling** vs the observed base-year ratio (also a lever — stands,
+  runway mix and the fleet only stretch so far). A terminal cap pulls
+  movements down with it (airlines don't fly demand that can't clear the
+  terminal). **Cargo rides the flights actually flown, on both halves of
+  its `bellyShare` split**: belly capacity falls with capped passenger
+  flights and recovers only `bellyBeta` of the up-gauge (bigger airframes
+  add belly volume, but denser cabins and fuller loads eat it with bags —
+  below 100% that's the classic slot-scarcity trade-off, where packing
+  more passengers through capped movements costs cargo per passenger),
+  while the freighter share is squeezed by slot scarcity but untouched by
+  a purely terminal cap. **Caps can change over the horizon** via capacity
+  steps (a capital project: 65M today, 80M once the terminal opens — the
+  up-gauging clock only ticks while the slot cap actually binds, so an
+  expansion freezes further response). The classic ratios stay sane by
+  construction: pax-per-movement never exceeds base-year × (1 + ceiling),
+  constrained values never exceed demand. Spill = demand the
+  infrastructure can't serve; capped years' months scale proportionally
+  (disclosed simplification — real spill concentrates in peaks) and the
+  unconstrained curves stay on the charts so every gap is visible. All
+  constrained series ride into the CSV export. See the coupled-constraint
+  block in `longTermForecast()` ([`data.jsx`](data.jsx)).
 - **Design day / peak hour:** derived on the Long-term screen from the
   observed seasonal shape — busy day = average day of the peak month × 1.10,
   peak hour = a size-dependent share of the busy day (12%/10%/8%). Every

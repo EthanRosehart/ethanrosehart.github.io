@@ -22,10 +22,13 @@ function LongTerm({ airport, history, scenario, go }){
     const histVals = [...histTail.map(r=>r[m]), ...fc.map(()=>null)];
     const fcVals = [...histTail.map(()=>null), ...fc.map(r=>r[m])];
     if (nHist>0) fcVals[nHist-1] = histTail[histTail.length-1][m];
-    // capacity-constrained overlay (pax/atm only, when a cap is set)
-    const capKey = m==="pax" && lt.paxCap ? "paxC" : m==="atm" && lt.atmCap ? "atmC" : null;
+    // capacity-constrained overlay — any cap propagates to every metric
+    // (see the coupled-constraint block in data.jsx), so the overlay shows
+    // for whichever metric is on screen whenever the constrained values
+    // actually differ from demand
+    const capKey = lt.hasCap ? { pax:"paxC", atm:"atmC", cargo:"cargoC" }[m] : null;
     let capVals = null;
-    if (capKey){
+    if (capKey && fc.some(r => r[capKey] != null && r[capKey] !== r[m])){
       capVals = [...histTail.map(()=>null), ...fc.map(r=>r[capKey] ?? r[m])];
       if (nHist>0) capVals[nHist-1] = histTail[histTail.length-1][m];
     }
@@ -49,10 +52,13 @@ function LongTerm({ airport, history, scenario, go }){
           : lt.hasCargo
           ? <KPI label={lt.endYear+" cargo"} value={GP_fmt.k(end.cargo)+"t"} sub="freight trajectory" sparkColor="var(--lime)"/>
           : <KPI label="Horizon" value={(lt.endYear-lt.baseYear)+" yrs"} sub={"to "+lt.endYear}/>}
-        {lt.paxCap
+        {lt.hasCap
           ? <KPI label={lt.endYear+" spill"} value={GP_fmt.k1(end.spill||0)}
               delta={end.spill>0?"demand > capacity":"under capacity"} deltaDir={end.spill>0?"down":"up"}
-              sub={"cap "+GP_fmt.k1(lt.paxCap)+"/yr"}/>
+              sub={[
+                (lt.paxCap||lt.paxCapEnd) ? ((lt.paxCap?GP_fmt.k1(lt.paxCap):"—")+(lt.paxCapEnd!==lt.paxCap?"→"+(lt.paxCapEnd?GP_fmt.k1(lt.paxCapEnd):"—"):"")+" pax cap") : null,
+                (lt.atmCap||lt.atmCapEnd) ? ((lt.atmCap?GP_fmt.k(lt.atmCap):"—")+(lt.atmCapEnd!==lt.atmCap?"→"+(lt.atmCapEnd?GP_fmt.k(lt.atmCapEnd):"—"):"")+" slot cap") : null,
+              ].filter(Boolean).join(" · ")}/>
           : <KPI label={lt.baseYear+" passengers"} value={GP_fmt.k1(start.pax)} sub="observed base year"/>}
       </div>
 
@@ -185,6 +191,40 @@ const SHAPE_LEVERS = {
            desc:"Freight-specific tailwind/headwind on top of the passenger-linked cargo trend (e-commerce, bellyhold capacity, trade)." },
 };
 
+/* constraint-response assumptions — how the system reacts when a capacity
+   cap binds (see the coupled-constraint block in data.jsx). Only meaningful
+   once a cap is set; surfaced inside the Capacity lever group. */
+const CAP_LEVERS = [
+  { k:"capGauge", name:"Up-gauging response", unit:"%/yr", min:0, max:4, step:0.1,
+    desc:"Extra passengers-per-movement airlines add each year the slot cap binds — bigger aircraft, denser cabins, fuller flights." },
+  { k:"capGaugeMax", name:"Up-gauging ceiling", unit:"%", min:0, max:60, step:5, noSign:true,
+    desc:"Total headroom above today's passengers-per-movement before the response is exhausted — stand sizes, runway mix and the fleet only stretch so far." },
+  { k:"bellyShare", name:"Bellyhold cargo share", unit:"%", min:0, max:100, step:5, noSign:true,
+    desc:"Share of cargo riding in passenger-aircraft bellies. Belly capacity follows the flights actually flown; the freighter share is squeezed by slot scarcity but not by a terminal cap." },
+  { k:"bellyBeta", name:"Belly space from up-gauging", unit:"%", min:0, max:100, step:5, noSign:true,
+    desc:"How much of the extra passengers-per-movement returns as usable belly. Bigger airframes add belly volume, but denser cabins and fuller loads eat it with bags — below 100%, packing more passengers through capped slots costs cargo per passenger." },
+];
+
+/* a collapsible section of the lever panel — the panel was one long flat
+   list; with capacity-response assumptions joining demand, fleet and
+   segment levers, related controls fold into named groups instead. */
+function LeverGroup({ title, sub, count, defaultOpen, children }){
+  const [open, setOpen] = React.useState(!!defaultOpen);
+  return (
+    <div className="lever-group">
+      <button className="lever-group-head" onClick={()=>setOpen(o=>!o)} aria-expanded={open}>
+        <span className={"lever-group-chev"+(open?" open":"")}>
+          <svg viewBox="0 0 24 24" width="12" height="12" fill="none" stroke="currentColor" strokeWidth="2.5"><path d="M9 6l6 6-6 6"/></svg>
+        </span>
+        <span className="lever-group-title">{title}</span>
+        {count>0 && <span className="chip chip-pink" style={{fontSize:9.5,padding:"1px 7px"}}>{count} set</span>}
+        <span className="lever-group-sub">{sub}</span>
+      </button>
+      {open && <div className="lever-group-body">{children}</div>}
+    </div>
+  );
+}
+
 const PRESETS = {
   base:    { label:"Macro baseline", desc:"World Bank central case", icon:"◆" },
   bull:    { label:"Upside", desc:"Strong economy + LCC entry", icon:"▲", set:{ gdp:+0.8, tourism:2.5, lcc:1.5, fuel:-3 } },
@@ -217,17 +257,23 @@ function Scenario({ airport, history, scenario, setScenario }){
     desc:"Grow "+d.lt.segLabels[i].toLowerCase()+" passengers faster or slower than the blended trend.",
   })) : [];
 
-  // levers: the demand drivers always, plus shape levers for present metrics,
-  // plus per-segment levers where the passenger split is published
-  const levers = [...LEVERS,
+  // lever groups: demand drivers always; fleet/freight shape levers for
+  // present metrics; per-segment levers where the split is published;
+  // capacity caps + constraint-response assumptions in their own group
+  const fleetLevers = [
     ...(d.lt && d.lt.hasAtm   ? [SHAPE_LEVERS.atm]   : []),
-    ...(d.lt && d.lt.hasCargo ? [SHAPE_LEVERS.cargo] : []),
-    ...segLevers];
+    ...(d.lt && d.lt.hasCargo ? [SHAPE_LEVERS.cargo] : [])];
+  const changedCount = (ls)=> ls.filter(l=>Math.abs((scenario[l.k]??0)-(base[l.k]??0))>0.001).length;
 
   const setLever = (k,v)=> setScenario({ ...scenario, [k]: v });
-  // presets swap the DEMAND assumptions; events and capacity caps are facts
-  // about the world/infrastructure the user set up, so they ride along
-  const keepNonDemand = ()=>({ events: scenario.events || [], paxCap: scenario.paxCap ?? null, atmCap: scenario.atmCap ?? null });
+  // presets swap the DEMAND assumptions; events, capacity caps and the
+  // constraint-response assumptions are facts about the world/infrastructure
+  // the user set up, so they ride along
+  const keepNonDemand = ()=>({ events: scenario.events || [],
+    paxCap: scenario.paxCap ?? null, atmCap: scenario.atmCap ?? null,
+    capSteps: scenario.capSteps || [],
+    capGauge: scenario.capGauge ?? base.capGauge, capGaugeMax: scenario.capGaugeMax ?? base.capGaugeMax,
+    bellyShare: scenario.bellyShare ?? base.bellyShare, bellyBeta: scenario.bellyBeta ?? base.bellyBeta });
   const applyPreset = (id)=>{
     if (id==="base") return setScenario({ ...base, ...keepNonDemand() });
     const p = PRESETS[id];
@@ -245,7 +291,8 @@ function Scenario({ airport, history, scenario, setScenario }){
   const cagrM = (d.lt.rows[0][m] && endM) ? (Math.pow(endM/d.lt.rows[0][m], 1/yrs)-1)*100 : 0;
   const mLabel = (metricDefs.find(x=>x.k===m)||{}).label || "Passengers";
   const activePreset = (()=>{
-    const eq=(o)=>Object.keys(o).every(k=> (k==="events"||k==="horizon"||k==="paxCap"||k==="atmCap") ? true : Math.abs((scenario[k]??0)-(o[k]??0))<0.001);
+    const NON_DEMAND = new Set(["events","horizon","paxCap","atmCap","capSteps","capGauge","capGaugeMax","bellyShare","bellyBeta"]);
+    const eq=(o)=>Object.keys(o).every(k=> NON_DEMAND.has(k) ? true : Math.abs((scenario[k]??0)-(o[k]??0))<0.001);
     if (eq(base)) return "base";
     for (const id of Object.keys(PRESETS)){ if(id==="base") continue; const t={...base}; Object.keys(PRESETS[id].set).forEach(k=>t[k]=(base[k]??0)+PRESETS[id].set[k]); if(eq(t)) return id; }
     return null;
@@ -271,44 +318,117 @@ function Scenario({ airport, history, scenario, setScenario }){
               {[10,15,25].map(h=><button key={h} className={(scenario.horizon||25)===h?"on":""} onClick={()=>setHorizon(h)}>{h}yr</button>)}
             </div>
           </div>
-          {/* capacity constraints — what the infrastructure can serve, vs the
-              demand levers above (what the market wants). Blank = unconstrained. */}
-          <div style={{marginTop:12,paddingTop:12,borderTop:"1px solid var(--line)"}}>
-            <div className="lever-name" style={{marginBottom:8}}>Capacity constraints {(scenario.paxCap||scenario.atmCap)?<span className="dot" style={{background:"var(--amber)"}}></span>:null}</div>
-            <div style={{display:"flex",gap:10,flexWrap:"wrap"}}>
-              <label style={{flex:"1 1 130px"}}>
-                <span className="lever-desc" style={{display:"block",marginBottom:4}}>Annual passengers (M)</span>
-                <input type="number" min="0" step="0.5" placeholder="unconstrained"
-                  value={scenario.paxCap ? scenario.paxCap/1e6 : ""}
-                  onChange={e=>{ const v = parseFloat(e.target.value); setScenario({ ...scenario, paxCap: (v>0 ? Math.round(v*1e6) : null) }); }}
-                  style={{width:"100%",background:"var(--bg-2)",border:"1px solid var(--line-2)",borderRadius:"var(--r-sm)",color:"var(--text)",fontFamily:"var(--mono)",fontSize:13,padding:"8px 10px",outline:"none"}}/>
-              </label>
-              {d.lt.hasAtm && <label style={{flex:"1 1 130px"}}>
-                <span className="lever-desc" style={{display:"block",marginBottom:4}}>Annual movements (K)</span>
-                <input type="number" min="0" step="5" placeholder="unconstrained"
-                  value={scenario.atmCap ? scenario.atmCap/1e3 : ""}
-                  onChange={e=>{ const v = parseFloat(e.target.value); setScenario({ ...scenario, atmCap: (v>0 ? Math.round(v*1e3) : null) }); }}
-                  style={{width:"100%",background:"var(--bg-2)",border:"1px solid var(--line-2)",borderRadius:"var(--r-sm)",color:"var(--text)",fontFamily:"var(--mono)",fontSize:13,padding:"8px 10px",outline:"none"}}/>
-              </label>}
-            </div>
-            <div className="lever-desc" style={{marginTop:6}}>Demand above a cap becomes <b style={{color:"var(--amber)"}}>spill</b> — see the constrained line here and on Long-term.</div>
-          </div>
-          <div style={{marginTop:6}}>
-            {levers.map(l=>{
+
+          {(()=>{
+            const renderLever = (l)=>{
               const v = scenario[l.k] ?? 0, bv = base[l.k] ?? 0;
               const changed = Math.abs(v-bv)>0.001;
               return (
                 <div className="lever" key={l.k}>
                   <div className="lever-head">
                     <div className="lever-name">{l.name} {changed && <span className="dot dot-pink"></span>}</div>
-                    <div className="lever-val">{v>0&&l.k!=="elasticity"?"+":""}{l.k==="elasticity"?v.toFixed(2):v.toFixed(l.step<1?1:0)}{l.unit}</div>
+                    <div className="lever-val">{v>0&&l.k!=="elasticity"&&!l.noSign?"+":""}{l.k==="elasticity"?v.toFixed(2):v.toFixed(l.step<1?1:0)}{l.unit}</div>
                   </div>
                   <input type="range" min={l.min} max={l.max} step={l.step} value={v} onChange={e=>setLever(l.k, +e.target.value)}/>
                   <div className="lever-desc">{l.desc} {changed && <span style={{color:"var(--faint)"}}>· base {l.k==="elasticity"?bv.toFixed(2):bv.toFixed(1)}{l.unit}</span>}</div>
                 </div>
               );
-            })}
-          </div>
+            };
+            const capSteps = scenario.capSteps || [];
+            const capSet = !!(scenario.paxCap || scenario.atmCap || capSteps.length);
+            const by = d.lt.baseYear, stepYears = [];
+            for (let yy = by+1; yy <= by + (scenario.horizon||25); yy++) stepYears.push(yy);
+            const setStep = (i, patch)=> setScenario({ ...scenario, capSteps: capSteps.map((st,si)=> si===i ? { ...st, ...patch } : st) });
+            const rmStep = (i)=> setScenario({ ...scenario, capSteps: capSteps.filter((_,si)=> si!==i) });
+            const addStep = ()=> setScenario({ ...scenario, capSteps: [...capSteps, {
+              year: Math.min(by + 5, by + (scenario.horizon||25)),
+              paxCap: scenario.paxCap ? Math.round(scenario.paxCap * 1.25) : null,
+              atmCap: null }] });
+            const capInput = (label, key, div, step)=>(
+              <label style={{flex:"1 1 130px"}}>
+                <span className="lever-desc" style={{display:"block",marginBottom:4}}>{label}</span>
+                <input type="number" min="0" step={step} placeholder="unconstrained"
+                  value={scenario[key] ? scenario[key]/div : ""}
+                  onChange={e=>{ const v = parseFloat(e.target.value); setScenario({ ...scenario, [key]: (v>0 ? Math.round(v*div) : null) }); }}
+                  style={{width:"100%",background:"var(--bg-2)",border:"1px solid var(--line-2)",borderRadius:"var(--r-sm)",color:"var(--text)",fontFamily:"var(--mono)",fontSize:13,padding:"8px 10px",outline:"none"}}/>
+              </label>
+            );
+            return (
+              <div style={{marginTop:10}}>
+                <LeverGroup title="Demand drivers" sub="what the market wants" defaultOpen count={changedCount(LEVERS)}>
+                  {LEVERS.map(renderLever)}
+                </LeverGroup>
+                {fleetLevers.length>0 && (
+                  <LeverGroup title="Fleet & freight" sub="how it gets flown" count={changedCount(fleetLevers)}>
+                    {fleetLevers.map(renderLever)}
+                  </LeverGroup>
+                )}
+                {segLevers.length>0 && (
+                  <LeverGroup title="Passenger segments" sub="who's flying" count={changedCount(segLevers)}>
+                    {segLevers.map(renderLever)}
+                  </LeverGroup>
+                )}
+                <LeverGroup title="Capacity & constraints" sub="what infrastructure can serve"
+                  defaultOpen={capSet} count={(scenario.paxCap?1:0)+(scenario.atmCap?1:0)+capSteps.length}>
+                  <div style={{display:"flex",gap:10,flexWrap:"wrap",marginBottom:4}}>
+                    {capInput("Annual passengers (M)", "paxCap", 1e6, "0.5")}
+                    {d.lt.hasAtm && capInput("Annual movements (K)", "atmCap", 1e3, "5")}
+                  </div>
+                  <div className="lever-desc" style={{marginBottom:10}}>
+                    Blank = unconstrained. A binding cap propagates to every output: a slot cap squeezes passengers
+                    (softened by up-gauging, below, until its ceiling) and squeezes cargo harder — belly space only
+                    partially recovers and freighters compete for the same slots; a passenger cap pulls movements
+                    down with it. Demand above capacity becomes <b style={{color:"var(--amber)"}}>spill</b> — see
+                    the constrained line here and on Long-term.
+                  </div>
+
+                  {/* phased capacity — a capital project: caps above apply
+                      until a step year, then the step's caps take over */}
+                  <div style={{margin:"2px 0 10px",paddingTop:10,borderTop:"1px dashed var(--line)"}}>
+                    <div style={{display:"flex",alignItems:"center",justifyContent:"space-between",gap:10,marginBottom:capSteps.length?8:0}}>
+                      <span className="lever-desc" style={{margin:0}}><b style={{color:"var(--dim)"}}>Capacity steps</b> — e.g. a terminal expansion opening mid-horizon</span>
+                      <button className="btn btn-sm" onClick={addStep}>+ Step</button>
+                    </div>
+                    {capSteps.map((st,i)=>(
+                      <div key={i} style={{display:"flex",alignItems:"flex-end",gap:8,flexWrap:"wrap",marginBottom:8}}>
+                        <label style={{flex:"0 0 auto"}}>
+                          <span className="lever-desc" style={{display:"block",marginBottom:4}}>From</span>
+                          <select className="seg-select" value={st.year||by+5} onChange={e=>setStep(i,{year:+e.target.value})}>
+                            {stepYears.map(y=><option key={y} value={y}>{y}</option>)}
+                          </select>
+                        </label>
+                        <label style={{flex:"1 1 90px"}}>
+                          <span className="lever-desc" style={{display:"block",marginBottom:4}}>Pax cap (M)</span>
+                          <input type="number" min="0" step="0.5" placeholder="keep"
+                            value={st.paxCap ? st.paxCap/1e6 : ""}
+                            onChange={e=>{ const v=parseFloat(e.target.value); setStep(i,{paxCap: v>0?Math.round(v*1e6):null}); }}
+                            style={{width:"100%",background:"var(--bg-2)",border:"1px solid var(--line-2)",borderRadius:"var(--r-sm)",color:"var(--text)",fontFamily:"var(--mono)",fontSize:13,padding:"8px 10px",outline:"none"}}/>
+                        </label>
+                        {d.lt.hasAtm && <label style={{flex:"1 1 90px"}}>
+                          <span className="lever-desc" style={{display:"block",marginBottom:4}}>Mov cap (K)</span>
+                          <input type="number" min="0" step="5" placeholder="keep"
+                            value={st.atmCap ? st.atmCap/1e3 : ""}
+                            onChange={e=>{ const v=parseFloat(e.target.value); setStep(i,{atmCap: v>0?Math.round(v*1e3):null}); }}
+                            style={{width:"100%",background:"var(--bg-2)",border:"1px solid var(--line-2)",borderRadius:"var(--r-sm)",color:"var(--text)",fontFamily:"var(--mono)",fontSize:13,padding:"8px 10px",outline:"none"}}/>
+                        </label>}
+                        <button className="icon-btn" title="Remove step" onClick={()=>rmStep(i)} style={{width:28,height:28,flex:"none",marginBottom:2}}>
+                          <svg viewBox="0 0 24 24" width="13" height="13" fill="none" stroke="currentColor" strokeWidth="2"><path d="M6 6l12 12M18 6L6 18"/></svg>
+                        </button>
+                      </div>
+                    ))}
+                    {capSteps.length>0 && <div className="lever-desc">"keep" leaves that cap unchanged from the step year; each step overrides from its year onward.</div>}
+                  </div>
+
+                  {capSet
+                    ? CAP_LEVERS.filter(l =>
+                        l.k==="bellyShare" ? d.lt.hasCargo :
+                        l.k==="bellyBeta"  ? (d.lt.hasCargo && d.lt.hasAtm) :
+                        d.lt.hasAtm).map(renderLever)
+                    : <div className="lever-desc">Set a cap to unlock the constraint-response assumptions (up-gauging rate, its ceiling, belly-space behavior).</div>}
+                </LeverGroup>
+              </div>
+            );
+          })()}
           <button className="btn" style={{width:"100%",justifyContent:"center",marginTop:14}} onClick={()=>setScenario({...base})}>Reset to baseline</button>
         </div>
 
@@ -336,8 +456,12 @@ function Scenario({ airport, history, scenario, setScenario }){
               series={[
                 { name:"Baseline", color:"var(--faint)", values:d.baseLt.months.map(r=>r[m]), dash:"5 4", width:1.8 },
                 { name:"Scenario", color:"var(--pink)", values:d.lt.months.map(r=>r[m]), fill:true, glow:true, width:2.8 },
-                ...((m==="pax" && d.lt.paxCap) ? [{ name:"Constrained", color:"var(--amber)", values:d.lt.months.map(r=>r.paxC ?? r.pax), width:2.2 }]
-                  : (m==="atm" && d.lt.atmCap) ? [{ name:"Constrained", color:"var(--amber)", values:d.lt.months.map(r=>r.atmC ?? r.atm), width:2.2 }] : []),
+                ...(()=>{ // constrained overlay for whichever metric is shown, when a cap actually bites it
+                  if (!d.lt.hasCap) return [];
+                  const ck = { pax:"paxC", atm:"atmC", cargo:"cargoC" }[m];
+                  if (!d.lt.months.some(r => r[ck] != null && r[ck] !== r[m])) return [];
+                  return [{ name:"Constrained", color:"var(--amber)", values:d.lt.months.map(r=>r[ck] ?? r[m]), width:2.2 }];
+                })(),
               ]}/>
           </div>
 
@@ -581,6 +705,16 @@ function ExportView({ airport, history, scenario }){
     ...allLevers.map(l=>({ name:l.name, value:(scenario[l.k] ?? 0), unit:l.unit })),
     ...(d.lt.paxCap ? [{ name:"Annual passenger capacity (constraint)", value:d.lt.paxCap, unit:"pax/yr" }] : []),
     ...(d.lt.atmCap ? [{ name:"Annual movements capacity (constraint)", value:d.lt.atmCap, unit:"mov/yr" }] : []),
+    // phased capacity (a capital project): one row per step and field
+    ...(d.lt.capSteps || []).flatMap(st => [
+      ...(st.paxCap ? [{ name:`Capacity step from ${st.year} — passengers`, value:st.paxCap, unit:"pax/yr" }] : []),
+      ...(st.atmCap ? [{ name:`Capacity step from ${st.year} — movements`, value:st.atmCap, unit:"mov/yr" }] : []),
+    ]),
+    // the constraint-response assumptions only shape the numbers when a cap
+    // is set, so they only clutter the report when one is
+    ...(d.lt.hasCap ? CAP_LEVERS
+      .filter(l => l.k==="bellyShare" ? hasCargo : l.k==="bellyBeta" ? (hasCargo && hasAtm) : hasAtm)
+      .map(l=>({ name:l.name+" (constraint response)", value:(scenario[l.k] ?? 0), unit:l.unit })) : []),
   ];
   const stModelName = d.st ? (d.st.method==="ets" ? "Holt-Winters ETS" : "Prophet") : null;
   const events = Array.isArray(scenario.events) ? scenario.events.filter(e=>e&&e.start) : [];
@@ -599,12 +733,16 @@ function ExportView({ airport, history, scenario }){
     csv += "driver,value,unit\n";
     assumptions.forEach(a=> csv += `${GP_csvCell(a.name)},${a.value},${a.unit}\n`);
     const segCols = d.lt.hasSeg ? d.lt.segLabels.map(l=>GP_csvCell(l+" passengers")) : [];
-    const capCols = [...(d.lt.paxCap?["passengers_constrained","spill"]:[]), ...(d.lt.atmCap?["movements_constrained"]:[])];
+    // any cap propagates to every metric (coupled model), so all constrained
+    // columns ship together whenever a cap is set
+    const capCols = d.lt.hasCap
+      ? ["passengers_constrained","spill", ...(hasAtm?["movements_constrained"]:[]), ...(hasCargo?["cargo_t_constrained"]:[])]
+      : [];
     const cols = ["passengers", ...(hasAtm?["movements"]:[]), ...(hasCargo?["cargo_t"]:[]), ...segCols, ...capCols];
     const rowVals = r => [r.pax, ...(hasAtm?[r.atm]:[]), ...(hasCargo?[r.cargo]:[]),
       ...(d.lt.hasSeg ? d.lt.segKeys.map(k=> (r.seg&&r.seg[k]) ?? "") : []),
-      ...(d.lt.paxCap ? [r.paxC ?? "", (r.spill != null ? r.spill : (r.paxC != null ? r.pax - r.paxC : ""))] : []),
-      ...(d.lt.atmCap ? [r.atmC ?? ""] : [])].join(",");
+      ...(d.lt.hasCap ? [r.paxC ?? "", (r.spill != null ? r.spill : (r.paxC != null ? r.pax - r.paxC : "")),
+        ...(hasAtm?[r.atmC ?? ""]:[]), ...(hasCargo?[r.cargoC ?? ""]:[])] : [])].join(",");
     csv += "\nANNUAL LONG-TERM FORECAST (roll-up)\n";
     csv += "year,"+cols.join(",")+"\n";
     d.lt.rows.forEach(r=> csv += `${r.y},${rowVals(r)}\n`);

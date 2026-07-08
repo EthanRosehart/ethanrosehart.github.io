@@ -48,12 +48,17 @@ an end-to-end browser smoke run:
   BITRE) — each needs live API probing against the real endpoints, which
   the execution sandbox couldn't reach; shipping untested fetchers would
   violate the no-garbage-data rule.
-- **Phase 3 — gate items done:** capacity constraints with
-  constrained-vs-unconstrained trajectories and spill (UI + CSV), the
-  design-day / peak-hour panel, shareable scenario URLs (sanitized on
-  decode). *Deferred:* multi-airport comparison, presets-as-data, and
-  chart images inside PPTX/DOCX — product depth that shouldn't gate the
-  hardening/rigor work landing.
+- **Phase 3 — gate items done:** capacity constraints as a **coupled
+  system** — a slot cap squeezes passengers softened by a bounded
+  up-gauging response (rate + ceiling are levers), a terminal cap pulls
+  movements down with it, and cargo's bellyhold share scales with
+  constrained passenger flying — with constrained-vs-unconstrained
+  trajectories and spill for every metric (UI + CSV); the design-day /
+  peak-hour panel; shareable scenario URLs (sanitized on decode); and the
+  assumptions panel reorganized into collapsible lever groups. *Deferred:*
+  multi-airport comparison, presets-as-data, and chart images inside
+  PPTX/DOCX — product depth that shouldn't gate the hardening/rigor work
+  landing.
 
 ---
 
