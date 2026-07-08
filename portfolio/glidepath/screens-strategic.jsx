@@ -55,7 +55,10 @@ function LongTerm({ airport, history, scenario, go }){
         {lt.hasCap
           ? <KPI label={lt.endYear+" spill"} value={GP_fmt.k1(end.spill||0)}
               delta={end.spill>0?"demand > capacity":"under capacity"} deltaDir={end.spill>0?"down":"up"}
-              sub={[lt.paxCap?GP_fmt.k1(lt.paxCap)+" pax cap":null, lt.atmCap?GP_fmt.k(lt.atmCap)+" slot cap":null].filter(Boolean).join(" · ")}/>
+              sub={[
+                (lt.paxCap||lt.paxCapEnd) ? ((lt.paxCap?GP_fmt.k1(lt.paxCap):"—")+(lt.paxCapEnd!==lt.paxCap?"→"+(lt.paxCapEnd?GP_fmt.k1(lt.paxCapEnd):"—"):"")+" pax cap") : null,
+                (lt.atmCap||lt.atmCapEnd) ? ((lt.atmCap?GP_fmt.k(lt.atmCap):"—")+(lt.atmCapEnd!==lt.atmCap?"→"+(lt.atmCapEnd?GP_fmt.k(lt.atmCapEnd):"—"):"")+" slot cap") : null,
+              ].filter(Boolean).join(" · ")}/>
           : <KPI label={lt.baseYear+" passengers"} value={GP_fmt.k1(start.pax)} sub="observed base year"/>}
       </div>
 
@@ -197,7 +200,9 @@ const CAP_LEVERS = [
   { k:"capGaugeMax", name:"Up-gauging ceiling", unit:"%", min:0, max:60, step:5, noSign:true,
     desc:"Total headroom above today's passengers-per-movement before the response is exhausted — stand sizes, runway mix and the fleet only stretch so far." },
   { k:"bellyShare", name:"Bellyhold cargo share", unit:"%", min:0, max:100, step:5, noSign:true,
-    desc:"Share of cargo riding in passenger-aircraft bellies — that share shrinks when passenger flying is constrained. Freighters (the rest) are assumed unconstrained." },
+    desc:"Share of cargo riding in passenger-aircraft bellies. Belly capacity follows the flights actually flown; the freighter share is squeezed by slot scarcity but not by a terminal cap." },
+  { k:"bellyBeta", name:"Belly space from up-gauging", unit:"%", min:0, max:100, step:5, noSign:true,
+    desc:"How much of the extra passengers-per-movement returns as usable belly. Bigger airframes add belly volume, but denser cabins and fuller loads eat it with bags — below 100%, packing more passengers through capped slots costs cargo per passenger." },
 ];
 
 /* a collapsible section of the lever panel — the panel was one long flat
@@ -266,8 +271,9 @@ function Scenario({ airport, history, scenario, setScenario }){
   // the user set up, so they ride along
   const keepNonDemand = ()=>({ events: scenario.events || [],
     paxCap: scenario.paxCap ?? null, atmCap: scenario.atmCap ?? null,
+    capSteps: scenario.capSteps || [],
     capGauge: scenario.capGauge ?? base.capGauge, capGaugeMax: scenario.capGaugeMax ?? base.capGaugeMax,
-    bellyShare: scenario.bellyShare ?? base.bellyShare });
+    bellyShare: scenario.bellyShare ?? base.bellyShare, bellyBeta: scenario.bellyBeta ?? base.bellyBeta });
   const applyPreset = (id)=>{
     if (id==="base") return setScenario({ ...base, ...keepNonDemand() });
     const p = PRESETS[id];
@@ -285,7 +291,7 @@ function Scenario({ airport, history, scenario, setScenario }){
   const cagrM = (d.lt.rows[0][m] && endM) ? (Math.pow(endM/d.lt.rows[0][m], 1/yrs)-1)*100 : 0;
   const mLabel = (metricDefs.find(x=>x.k===m)||{}).label || "Passengers";
   const activePreset = (()=>{
-    const NON_DEMAND = new Set(["events","horizon","paxCap","atmCap","capGauge","capGaugeMax","bellyShare"]);
+    const NON_DEMAND = new Set(["events","horizon","paxCap","atmCap","capSteps","capGauge","capGaugeMax","bellyShare","bellyBeta"]);
     const eq=(o)=>Object.keys(o).every(k=> NON_DEMAND.has(k) ? true : Math.abs((scenario[k]??0)-(o[k]??0))<0.001);
     if (eq(base)) return "base";
     for (const id of Object.keys(PRESETS)){ if(id==="base") continue; const t={...base}; Object.keys(PRESETS[id].set).forEach(k=>t[k]=(base[k]??0)+PRESETS[id].set[k]); if(eq(t)) return id; }
@@ -328,7 +334,16 @@ function Scenario({ airport, history, scenario, setScenario }){
                 </div>
               );
             };
-            const capSet = !!(scenario.paxCap || scenario.atmCap);
+            const capSteps = scenario.capSteps || [];
+            const capSet = !!(scenario.paxCap || scenario.atmCap || capSteps.length);
+            const by = d.lt.baseYear, stepYears = [];
+            for (let yy = by+1; yy <= by + (scenario.horizon||25); yy++) stepYears.push(yy);
+            const setStep = (i, patch)=> setScenario({ ...scenario, capSteps: capSteps.map((st,si)=> si===i ? { ...st, ...patch } : st) });
+            const rmStep = (i)=> setScenario({ ...scenario, capSteps: capSteps.filter((_,si)=> si!==i) });
+            const addStep = ()=> setScenario({ ...scenario, capSteps: [...capSteps, {
+              year: Math.min(by + 5, by + (scenario.horizon||25)),
+              paxCap: scenario.paxCap ? Math.round(scenario.paxCap * 1.25) : null,
+              atmCap: null }] });
             const capInput = (label, key, div, step)=>(
               <label style={{flex:"1 1 130px"}}>
                 <span className="lever-desc" style={{display:"block",marginBottom:4}}>{label}</span>
@@ -354,20 +369,62 @@ function Scenario({ airport, history, scenario, setScenario }){
                   </LeverGroup>
                 )}
                 <LeverGroup title="Capacity & constraints" sub="what infrastructure can serve"
-                  defaultOpen={capSet} count={(scenario.paxCap?1:0)+(scenario.atmCap?1:0)}>
+                  defaultOpen={capSet} count={(scenario.paxCap?1:0)+(scenario.atmCap?1:0)+capSteps.length}>
                   <div style={{display:"flex",gap:10,flexWrap:"wrap",marginBottom:4}}>
                     {capInput("Annual passengers (M)", "paxCap", 1e6, "0.5")}
                     {d.lt.hasAtm && capInput("Annual movements (K)", "atmCap", 1e3, "5")}
                   </div>
                   <div className="lever-desc" style={{marginBottom:10}}>
                     Blank = unconstrained. A binding cap propagates to every output: a slot cap squeezes passengers
-                    (softened by up-gauging, below, until its ceiling), a passenger cap pulls movements down with it,
-                    and the bellyhold share of cargo shrinks with constrained passenger flying. Demand above capacity
-                    becomes <b style={{color:"var(--amber)"}}>spill</b> — see the constrained line here and on Long-term.
+                    (softened by up-gauging, below, until its ceiling) and squeezes cargo harder — belly space only
+                    partially recovers and freighters compete for the same slots; a passenger cap pulls movements
+                    down with it. Demand above capacity becomes <b style={{color:"var(--amber)"}}>spill</b> — see
+                    the constrained line here and on Long-term.
                   </div>
+
+                  {/* phased capacity — a capital project: caps above apply
+                      until a step year, then the step's caps take over */}
+                  <div style={{margin:"2px 0 10px",paddingTop:10,borderTop:"1px dashed var(--line)"}}>
+                    <div style={{display:"flex",alignItems:"center",justifyContent:"space-between",gap:10,marginBottom:capSteps.length?8:0}}>
+                      <span className="lever-desc" style={{margin:0}}><b style={{color:"var(--dim)"}}>Capacity steps</b> — e.g. a terminal expansion opening mid-horizon</span>
+                      <button className="btn btn-sm" onClick={addStep}>+ Step</button>
+                    </div>
+                    {capSteps.map((st,i)=>(
+                      <div key={i} style={{display:"flex",alignItems:"flex-end",gap:8,flexWrap:"wrap",marginBottom:8}}>
+                        <label style={{flex:"0 0 auto"}}>
+                          <span className="lever-desc" style={{display:"block",marginBottom:4}}>From</span>
+                          <select className="seg-select" value={st.year||by+5} onChange={e=>setStep(i,{year:+e.target.value})}>
+                            {stepYears.map(y=><option key={y} value={y}>{y}</option>)}
+                          </select>
+                        </label>
+                        <label style={{flex:"1 1 90px"}}>
+                          <span className="lever-desc" style={{display:"block",marginBottom:4}}>Pax cap (M)</span>
+                          <input type="number" min="0" step="0.5" placeholder="keep"
+                            value={st.paxCap ? st.paxCap/1e6 : ""}
+                            onChange={e=>{ const v=parseFloat(e.target.value); setStep(i,{paxCap: v>0?Math.round(v*1e6):null}); }}
+                            style={{width:"100%",background:"var(--bg-2)",border:"1px solid var(--line-2)",borderRadius:"var(--r-sm)",color:"var(--text)",fontFamily:"var(--mono)",fontSize:13,padding:"8px 10px",outline:"none"}}/>
+                        </label>
+                        {d.lt.hasAtm && <label style={{flex:"1 1 90px"}}>
+                          <span className="lever-desc" style={{display:"block",marginBottom:4}}>Mov cap (K)</span>
+                          <input type="number" min="0" step="5" placeholder="keep"
+                            value={st.atmCap ? st.atmCap/1e3 : ""}
+                            onChange={e=>{ const v=parseFloat(e.target.value); setStep(i,{atmCap: v>0?Math.round(v*1e3):null}); }}
+                            style={{width:"100%",background:"var(--bg-2)",border:"1px solid var(--line-2)",borderRadius:"var(--r-sm)",color:"var(--text)",fontFamily:"var(--mono)",fontSize:13,padding:"8px 10px",outline:"none"}}/>
+                        </label>}
+                        <button className="icon-btn" title="Remove step" onClick={()=>rmStep(i)} style={{width:28,height:28,flex:"none",marginBottom:2}}>
+                          <svg viewBox="0 0 24 24" width="13" height="13" fill="none" stroke="currentColor" strokeWidth="2"><path d="M6 6l12 12M18 6L6 18"/></svg>
+                        </button>
+                      </div>
+                    ))}
+                    {capSteps.length>0 && <div className="lever-desc">"keep" leaves that cap unchanged from the step year; each step overrides from its year onward.</div>}
+                  </div>
+
                   {capSet
-                    ? CAP_LEVERS.filter(l => l.k==="bellyShare" ? d.lt.hasCargo : d.lt.hasAtm).map(renderLever)
-                    : <div className="lever-desc">Set a cap to unlock the constraint-response assumptions (up-gauging rate, its ceiling, bellyhold share).</div>}
+                    ? CAP_LEVERS.filter(l =>
+                        l.k==="bellyShare" ? d.lt.hasCargo :
+                        l.k==="bellyBeta"  ? (d.lt.hasCargo && d.lt.hasAtm) :
+                        d.lt.hasAtm).map(renderLever)
+                    : <div className="lever-desc">Set a cap to unlock the constraint-response assumptions (up-gauging rate, its ceiling, belly-space behavior).</div>}
                 </LeverGroup>
               </div>
             );
@@ -648,10 +705,15 @@ function ExportView({ airport, history, scenario }){
     ...allLevers.map(l=>({ name:l.name, value:(scenario[l.k] ?? 0), unit:l.unit })),
     ...(d.lt.paxCap ? [{ name:"Annual passenger capacity (constraint)", value:d.lt.paxCap, unit:"pax/yr" }] : []),
     ...(d.lt.atmCap ? [{ name:"Annual movements capacity (constraint)", value:d.lt.atmCap, unit:"mov/yr" }] : []),
+    // phased capacity (a capital project): one row per step and field
+    ...(d.lt.capSteps || []).flatMap(st => [
+      ...(st.paxCap ? [{ name:`Capacity step from ${st.year} — passengers`, value:st.paxCap, unit:"pax/yr" }] : []),
+      ...(st.atmCap ? [{ name:`Capacity step from ${st.year} — movements`, value:st.atmCap, unit:"mov/yr" }] : []),
+    ]),
     // the constraint-response assumptions only shape the numbers when a cap
     // is set, so they only clutter the report when one is
     ...(d.lt.hasCap ? CAP_LEVERS
-      .filter(l => l.k==="bellyShare" ? hasCargo : hasAtm)
+      .filter(l => l.k==="bellyShare" ? hasCargo : l.k==="bellyBeta" ? (hasCargo && hasAtm) : hasAtm)
       .map(l=>({ name:l.name+" (constraint response)", value:(scenario[l.k] ?? 0), unit:l.unit })) : []),
   ];
   const stModelName = d.st ? (d.st.method==="ets" ? "Holt-Winters ETS" : "Prophet") : null;

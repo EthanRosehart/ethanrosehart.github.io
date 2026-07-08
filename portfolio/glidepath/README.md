@@ -78,14 +78,24 @@ same catalogue and forecasting machinery.
   **ceiling** vs the observed base-year ratio (also a lever — stands,
   runway mix and the fleet only stretch so far). A terminal cap pulls
   movements down with it (airlines don't fly demand that can't clear the
-  terminal). Cargo's **bellyhold share** (a third lever) scales with
-  constrained passenger flying, while the freighter share is assumed
-  unconstrained. Demand above capacity is reported as spill; capped years'
-  months scale proportionally (disclosed simplification — real spill
-  concentrates in peaks) and the unconstrained curves stay on the charts so
-  every gap is visible. All constrained series ride into the CSV export.
-  See the coupled-constraint block in `longTermForecast()`
-  ([`data.jsx`](data.jsx)).
+  terminal). **Cargo rides the flights actually flown, on both halves of
+  its `bellyShare` split**: belly capacity falls with capped passenger
+  flights and recovers only `bellyBeta` of the up-gauge (bigger airframes
+  add belly volume, but denser cabins and fuller loads eat it with bags —
+  below 100% that's the classic slot-scarcity trade-off, where packing
+  more passengers through capped movements costs cargo per passenger),
+  while the freighter share is squeezed by slot scarcity but untouched by
+  a purely terminal cap. **Caps can change over the horizon** via capacity
+  steps (a capital project: 65M today, 80M once the terminal opens — the
+  up-gauging clock only ticks while the slot cap actually binds, so an
+  expansion freezes further response). The classic ratios stay sane by
+  construction: pax-per-movement never exceeds base-year × (1 + ceiling),
+  constrained values never exceed demand. Spill = demand the
+  infrastructure can't serve; capped years' months scale proportionally
+  (disclosed simplification — real spill concentrates in peaks) and the
+  unconstrained curves stay on the charts so every gap is visible. All
+  constrained series ride into the CSV export. See the coupled-constraint
+  block in `longTermForecast()` ([`data.jsx`](data.jsx)).
 - **Design day / peak hour:** derived on the Long-term screen from the
   observed seasonal shape — busy day = average day of the peak month × 1.10,
   peak hour = a size-dependent share of the busy day (12%/10%/8%). Every

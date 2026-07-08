@@ -487,9 +487,11 @@ function defaultScenario(iata){
     events: [],           // discrete time-bound shocks (e.g. a pandemic)
     paxCap: null,         // annual passenger capacity (null/0 = unconstrained)
     atmCap: null,         // annual movements capacity (null/0 = unconstrained)
+    capSteps: [],         // phased capacity: [{year, paxCap?, atmCap?}] — a capital project
     capGauge: 1.5,        // extra up-gauging %/yr once the movements cap binds
     capGaugeMax: 25,      // ceiling on total pax-per-movement growth vs base year (%)
     bellyShare: 50,       // share of cargo riding passenger-aircraft bellyhold (%)
+    bellyBeta: 40,        // % of up-gauged capacity that returns as usable belly space
     horizon: 25,
   };
 }
@@ -650,28 +652,65 @@ function longTermForecast(iata, history, scenario){
          don't fly the schedule demand can't fill. Constrained movements =
          the flights constrained passengers actually need at the year's
          unconstrained pax-per-movement ratio (never above the slot cap).
-       · CARGO rides along: `bellyShare` % of tonnage travels in passenger-
-         aircraft bellies, so that share scales with constrained passenger
-         activity (up-gauged aircraft bring more belly space, which the
-         pax ratio already reflects). Freighters — the rest — are assumed
-         unconstrained (they can shift off-peak); a freighter-specific cap
-         is a future refinement, not modeled.
+       · CARGO is tied to FLIGHTS on both halves of `bellyShare`:
+         — Bellyhold (bellyShare %): belly capacity = passenger flights
+           flown × belly space per flight. Fewer flights under a slot cap
+           means less belly, and up-gauged aircraft recover only part of
+           it — `bellyBeta` says how much of the extra passengers-per-
+           movement comes back as usable belly (bigger airframes add belly
+           volume, but denser cabins and fuller passenger loads eat it
+           with bags). Below 100% this is the classic slot-scarcity
+           trade-off: squeezing more passengers through capped movements
+           costs cargo per passenger.
+         — Freighters (the rest): squeezed by slot scarcity right along
+           with passenger flights when the MOVEMENTS cap binds (ad-hoc
+           freighter capacity competes for the same runway), but untouched
+           by a purely terminal (passenger) cap.
+       · Caps can CHANGE over the horizon — `capSteps` models a capital
+         project: [{year, paxCap?, atmCap?}], each step overriding the
+         caps (field by field, cumulatively) from its year onward. The
+         up-gauging clock only ticks in years the slot cap actually binds,
+         so an expansion that un-binds it freezes further response.
+
+     Bounds that keep the classic ratios sane by construction: pax-per-
+     movement never exceeds the base year's ratio × (1 + capGaugeMax);
+     constrained values never exceed unconstrained demand; belly-per-
+     flight growth is capped at gaugeLift^bellyBeta ≤ gaugeLift.
 
      Each capped year's months are scaled proportionally per metric (a
      disclosed simplification; real spill concentrates in peak months).
      The unconstrained series is left untouched so the two can be charted
      against each other, and `spill` = demand the infrastructure can't
-     serve. All three response assumptions are levers on the Baseline
+     serve. All response assumptions are levers on the Baseline
      assumptions screen. */
-  const paxCap = (+s.paxCap > 0) ? +s.paxCap : null;
-  const atmCap = (hasAtm && +s.atmCap > 0) ? +s.atmCap : null;
-  const hasCap = !!(paxCap || atmCap);
+  const paxCapBase = (+s.paxCap > 0) ? +s.paxCap : null;
+  const atmCapBase = (hasAtm && +s.atmCap > 0) ? +s.atmCap : null;
+  const capSteps = (Array.isArray(s.capSteps) ? s.capSteps : [])
+    .filter(st => st && Number.isFinite(+st.year))
+    .map(st => ({ year: Math.round(+st.year),
+      ...(+st.paxCap > 0 ? { paxCap: Math.round(+st.paxCap) } : {}),
+      ...(hasAtm && +st.atmCap > 0 ? { atmCap: Math.round(+st.atmCap) } : {}) }))
+    .filter(st => st.paxCap || st.atmCap)
+    .sort((a, b) => a.year - b.year);
+  const capsFor = (y)=>{
+    let p = paxCapBase, a = atmCapBase;
+    for (const st of capSteps){
+      if (st.year > y) break;
+      if (st.paxCap) p = st.paxCap;
+      if (st.atmCap) a = st.atmCap;
+    }
+    return { paxCap: p, atmCap: a };
+  };
+  const endCaps = capsFor(baseYear + s.horizon);
+  const hasCap = !!(paxCapBase || atmCapBase || capSteps.length);
   let capAssumptions = null;
   if (hasCap){
     const capGauge = Math.max(0, +s.capGauge || 0) / 100;
     const capGaugeMax = Math.max(0, +s.capGaugeMax || 0) / 100;
     const bellyShare = Math.min(1, Math.max(0, (s.bellyShare == null ? 50 : +s.bellyShare) / 100));
-    capAssumptions = { capGauge: capGauge*100, capGaugeMax: capGaugeMax*100, bellyShare: bellyShare*100 };
+    const bellyBeta = Math.min(1, Math.max(0, (s.bellyBeta == null ? 40 : +s.bellyBeta) / 100));
+    capAssumptions = { capGauge: capGauge*100, capGaugeMax: capGaugeMax*100,
+      bellyShare: bellyShare*100, bellyBeta: bellyBeta*100 };
     const ratioBase = (hasAtm && annualAtm > 0) ? annualPax / annualAtm : null;
     const ratioCeil = ratioBase != null ? ratioBase * (1 + capGaugeMax) : null;
     const monthsByYear = {};
@@ -685,13 +724,15 @@ function longTermForecast(iata, history, scenario){
         if (row.cargo != null) row.cargoC = row.cargo;
         return;
       }
+      const { paxCap, atmCap } = capsFor(row.y);   // this year's effective caps
       const ms = monthsByYear[row.y] || [];
       const paxU = row.pax, atmU = row.atm, cargoU = row.cargo;
 
       // 1. slots: capped flights, and the bounded-up-gauging pax ceiling
       let atmC = (atmU != null && atmCap) ? Math.min(atmU, atmCap) : atmU;
+      const slotBound = !!(atmCap && atmU != null && atmU > atmCap);
       let paxFromAtm = Infinity;
-      if (atmCap && atmU != null && atmU > atmCap && ratioBase != null && atmU > 0){
+      if (slotBound && ratioBase != null && atmU > 0){
         gaugeYears++;
         const ratioU = paxU / atmU;
         // extra gauge compounds only over binding years, on top of whatever
@@ -712,10 +753,19 @@ function longTermForecast(iata, history, scenario){
         atmC = Math.min(atmC, Math.max(flightsNeeded, 0));
       }
 
-      // 4. bellyhold cargo scales with constrained passenger activity
+      // 4. cargo — both halves ride the flights actually flown
       let cargoC = cargoU;
       if (cargoU != null && paxU > 0){
-        cargoC = cargoU * (1 - bellyShare * (1 - paxC / paxU));
+        const flightFactor = (atmU != null && atmU > 0) ? Math.min(1, atmC/atmU) : Math.min(1, paxC/paxU);
+        // how much extra gauge the constraint forced (1 = none) — belly
+        // space recovers only bellyBeta of it
+        let gaugeLift = 1;
+        if (atmU != null && atmU > 0 && atmC > 0){
+          gaugeLift = Math.max(1, (paxC/atmC) / (paxU/atmU));
+        }
+        const bellyFactor = Math.min(1, flightFactor * Math.pow(gaugeLift, bellyBeta));
+        const freighterFactor = slotBound ? flightFactor : 1;
+        cargoC = cargoU * (bellyShare*bellyFactor + (1-bellyShare)*freighterFactor);
       }
 
       row.paxC = Math.round(paxC);
@@ -735,7 +785,8 @@ function longTermForecast(iata, history, scenario){
 
   const cagr = Math.pow(rows[rows.length-1].pax/annualPax, 1/s.horizon) - 1;
   return { rows, months, baseYear, endYear:baseYear+s.horizon, hasAtm, hasCargo,
-    hasCap, paxCap, atmCap, capAssumptions,
+    hasCap, paxCap: paxCapBase, atmCap: atmCapBase,
+    paxCapEnd: endCaps.paxCap, atmCapEnd: endCaps.atmCap, capSteps, capAssumptions,
     hasSeg, segKeys, segLabels: segKeys.map(k => (PAX_SEGMENTS.find(p=>p.k===k)||{}).label || k),
     segColors: segKeys.map(k => (PAX_SEGMENTS.find(p=>p.k===k)||{}).color || "var(--cyan)"),
     gDemand:gDemand*100, cagr:cagr*100,
@@ -797,13 +848,24 @@ function b64urlDecode(s){
 }
 const SHARE_NUM_KEYS = ["gdp","elasticity","pop","tourism","fuel","lcc","cargo","gauge",
   "seg_domestic","seg_transborder","seg_international","horizon",
-  "paxCap","atmCap","capGauge","capGaugeMax","bellyShare"];
+  "paxCap","atmCap","capGauge","capGaugeMax","bellyShare","bellyBeta"];
 function sanitizeSharedScenario(sc){
   if (!sc || typeof sc !== "object" || Array.isArray(sc)) return null;
   const out = {};
   for (const k of SHARE_NUM_KEYS){
     const v = sc[k];
     if (typeof v === "number" && Number.isFinite(v)) out[k] = v;
+  }
+  if (Array.isArray(sc.capSteps)){
+    out.capSteps = sc.capSteps.slice(0, 10).map(st => {
+      if (!st || typeof st !== "object") return null;
+      const year = Math.round(+st.year);
+      if (!Number.isFinite(year) || year < 2000 || year > 2100) return null;
+      const o = { year };
+      if (typeof st.paxCap === "number" && Number.isFinite(st.paxCap) && st.paxCap > 0) o.paxCap = Math.round(st.paxCap);
+      if (typeof st.atmCap === "number" && Number.isFinite(st.atmCap) && st.atmCap > 0) o.atmCap = Math.round(st.atmCap);
+      return (o.paxCap || o.atmCap) ? o : null;
+    }).filter(Boolean);
   }
   if (Array.isArray(sc.events)){
     out.events = sc.events.slice(0, 20).map(e => {
