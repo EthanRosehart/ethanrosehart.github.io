@@ -137,9 +137,48 @@ async function pickDataset() {
       const m = mapCols(keys);
       console.log(`  [bts] ${domain}/${c.id} "${c.name}" cols-> origin:${m.origin} y:${m.year} m:${m.month} pax:${m.pax}`);
       if (m.origin && m.month && m.year && m.pax) return { domain, id: c.id, name: c.name, m };
+      // near-miss diagnostics: a monthly table whose airport/pax columns our
+      // mapper didn't recognize is a mapping bug we can fix from the log —
+      // dump its full schema so the next iteration doesn't have to guess
+      if (m.month && m.year) console.log(`  [bts]   near-miss full columns: ${keys.join(", ")}`);
     }
   }
   return null;
+}
+
+/* Live-run finding (Actions runs 29029212909/29030810394): DOT's Socrata
+   catalogs carry only ANNUAL T-100 summaries ("AFF - T100 Segment Summary
+   By Origin Airport" has no month column) — the monthly airport-level
+   table appears to live only on TranStats itself as PREZIP bulk files.
+   This probe runs when Socrata discovery fails: it checks candidate
+   PREZIP URL shapes and logs exactly which respond, so the download
+   path can be wired against a VERIFIED URL instead of a guessed one. */
+export function prezipCandidates(year) {
+  const y = year ?? new Date().getFullYear();
+  const names = [
+    `T_T100D_SEGMENT_ALL_CARRIER_${y}.zip`, `T_T100D_SEGMENT_ALL_CARRIER_${y - 1}.zip`,
+    "T_T100D_SEGMENT_ALL_CARRIER.zip",
+    `T_T100_SEGMENT_ALL_CARRIER_${y - 1}.zip`,
+    `T_T100I_SEGMENT_ALL_CARRIER_${y - 1}.zip`,
+    `T_T100D_MARKET_ALL_CARRIER_${y - 1}.zip`,
+  ];
+  return ["https://transtats.bts.gov/PREZIP/", "https://www.transtats.bts.gov/PREZIP/"]
+    .flatMap((base) => names.map((n) => base + n));
+}
+async function probePrezip() {
+  console.log("  [bts] probing TranStats PREZIP candidates (diagnostic — logs which bulk-file URLs exist):");
+  for (const url of prezipCandidates()) {
+    try {
+      const r = await fetch(url, { method: "GET", headers: { ...UA, Range: "bytes=0-3" } });
+      const ct = r.headers.get("content-type") || "?";
+      const len = r.headers.get("content-length") || "?";
+      let magic = "";
+      try { magic = Buffer.from(await r.arrayBuffer()).toString("latin1").slice(0, 4); } catch {}
+      console.log(`  [bts]   ${r.status} ${url} (type ${ct}, length ${len}, magic ${JSON.stringify(magic)})`);
+    } catch (e) {
+      console.log(`  [bts]   ERR ${url} (${e.message})`);
+    }
+  }
 }
 
 async function seriesFor(ds, code) {
@@ -173,6 +212,7 @@ export async function main() {
 
   const picked = await pickDataset();
   if (!picked) {
+    await probePrezip();
     console.error("  [bts] no monthly T-100 dataset with origin/month/year/pax found on any DOT domain — US airports keep last-good data");
     process.exit(1);   // loud: the health step reports this
   }
