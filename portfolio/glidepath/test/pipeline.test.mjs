@@ -229,3 +229,99 @@ test("droppedAirports + seriesAnomalies: catches vanished gateways, shrunk histo
   const shifted = { pax: Object.fromEntries(Object.entries(prev.pax).map(([k, v]) => [k, v * 2])) };
   assert.ok(seriesAnomalies("TST", prev, shifted).some((w) => w.includes("restatement")));
 });
+
+/* ---- fetch-bts TranStats path: listing pick, zip reading, CSV aggregation ---- */
+
+import zlib from "node:zlib";
+import { parseCsvLine, pickT100Zips, unzipFirstCsv, aggregateT100Csv } from "../scripts/fetch-bts.mjs";
+
+test("parseCsvLine: quoted fields with embedded commas survive", () => {
+  assert.deepEqual(parseCsvLine('2024,1,"ATL","Atlanta, GA",50000'), ["2024", "1", "ATL", "Atlanta, GA", "50000"]);
+});
+
+test("pickT100Zips: prefers the combined all-carrier segment family, newest prefix first", () => {
+  // shaped like the real listing (run 29032448512): rotating numeric prefixes
+  const listing = `
+    <a href="896813517_T_T100D_MARKET_US_CARRIER_ONLY.zip">..</a>
+    <a href="896816367_T_T100_SEGMENT_ALL_CARRIER.zip">..</a>
+    <a href="896816158_T_T100_SEGMENT_ALL_CARRIER.zip">..</a>
+    <a href="896816999_T_T100_SEGMENT_ALL_CARRIER.zip">..</a>
+    <a href="896816367_T_T100_MARKET_ALL_CARRIER.zip">..</a>
+    <a href="896812000_T_T100D_SEGMENT_ALL_CARRIER.zip">..</a>`;
+  const picked = pickT100Zips(listing);
+  assert.deepEqual(picked, [
+    "896816999_T_T100_SEGMENT_ALL_CARRIER.zip",
+    "896816367_T_T100_SEGMENT_ALL_CARRIER.zip",
+    "896816158_T_T100_SEGMENT_ALL_CARRIER.zip",
+  ], "combined family only, sorted by numeric prefix descending; MARKET files excluded");
+
+  // no combined family -> interleave D/I newest-first so periods arrive whole
+  const di = pickT100Zips(`
+    <a href="100_T_T100D_SEGMENT_ALL_CARRIER.zip">..</a>
+    <a href="200_T_T100D_SEGMENT_ALL_CARRIER.zip">..</a>
+    <a href="150_T_T100I_SEGMENT_ALL_CARRIER.zip">..</a>`);
+  assert.deepEqual(di, [
+    "200_T_T100D_SEGMENT_ALL_CARRIER.zip",
+    "150_T_T100I_SEGMENT_ALL_CARRIER.zip",
+    "100_T_T100D_SEGMENT_ALL_CARRIER.zip",
+  ]);
+  assert.deepEqual(pickT100Zips("<html>nothing here</html>"), []);
+});
+
+/** build a minimal real zip (deflated entries) so unzipFirstCsv is tested
+ *  against the actual container format, not a mock */
+function buildZip(entries) {
+  const parts = [], central = [];
+  let offset = 0;
+  for (const [name, content] of entries) {
+    const nameB = Buffer.from(name), data = zlib.deflateRawSync(Buffer.from(content));
+    const local = Buffer.alloc(30);
+    local.writeUInt32LE(0x04034b50, 0); local.writeUInt16LE(8, 8);            // sig, method=deflate
+    local.writeUInt32LE(data.length, 18); local.writeUInt32LE(content.length, 22);
+    local.writeUInt16LE(nameB.length, 26);
+    const cd = Buffer.alloc(46);
+    cd.writeUInt32LE(0x02014b50, 0); cd.writeUInt16LE(8, 10);                 // sig, method
+    cd.writeUInt32LE(data.length, 20); cd.writeUInt32LE(content.length, 24);
+    cd.writeUInt16LE(nameB.length, 28); cd.writeUInt32LE(offset, 42);         // nameLen, local offset
+    parts.push(local, nameB, data);
+    central.push(Buffer.concat([cd, nameB]));
+    offset += local.length + nameB.length + data.length;
+  }
+  const cdBuf = Buffer.concat(central);
+  const eocd = Buffer.alloc(22);
+  eocd.writeUInt32LE(0x06054b50, 0);
+  eocd.writeUInt16LE(entries.length, 8); eocd.writeUInt16LE(entries.length, 10);
+  eocd.writeUInt32LE(cdBuf.length, 12); eocd.writeUInt32LE(offset, 16);
+  return Buffer.concat([...parts, cdBuf, eocd]);
+}
+
+test("unzipFirstCsv: extracts the CSV entry from a real zip container, skipping non-CSV entries", () => {
+  const csv = "YEAR,MONTH,ORIGIN\n2024,1,ATL\n";
+  const zip = buildZip([["readme.html", "<p>hi</p>"], ["T_T100_SEGMENT_ALL_CARRIER.csv", csv]]);
+  assert.equal(unzipFirstCsv(zip).toString("utf8"), csv);
+  assert.throws(() => unzipFirstCsv(Buffer.from("not a zip at all, definitely")), /end-of-central-directory/);
+});
+
+test("aggregateT100Csv: sums by origin airport x month, converts freight lbs->tonnes, skips non-targets", () => {
+  const csv = [
+    '"YEAR","MONTH","ORIGIN","DEST","PASSENGERS","FREIGHT","DEPARTURES_PERFORMED","ORIGIN_CITY_NAME"',
+    '2024,1,"ATL","JFK",50000,2204624,400,"Atlanta, GA"',      // 2,204,624 lb ~ 1000 t
+    '2024,1,"ATL","LAX",30000,0,200,"Atlanta, GA"',
+    '2024,1,"XXX","ATL",99999,0,50,"Not a target"',
+    '2024,2,"JFK","ATL",10000,0,100,"New York, NY"',
+    '1901,1,"ATL","JFK",5,0,1,"junk year dropped"',
+    "",
+  ].join("\n");
+  const { acc, years } = aggregateT100Csv(csv, new Set(["ATL", "JFK"]));
+  assert.equal(acc.ATL.pax["2024-01"], 80000, "two ATL segment rows sum");
+  assert.equal(acc.ATL.atm["2024-01"], 600);
+  assert.equal(Math.round(acc.ATL.cargo["2024-01"]), 1000, "freight lands in tonnes");
+  assert.equal(acc.JFK.pax["2024-02"], 10000);
+  assert.ok(!acc.XXX, "non-target origins skipped");
+  assert.deepEqual(years, [2024]);
+  // accumulation across files: a second file's rows add into the same acc
+  aggregateT100Csv('"YEAR","MONTH","ORIGIN","PASSENGERS"\n2023,12,"ATL",70000\n', new Set(["ATL"]), acc);
+  assert.equal(acc.ATL.pax["2023-12"], 70000);
+  assert.equal(acc.ATL.pax["2024-01"], 80000, "earlier months untouched");
+  assert.throws(() => aggregateT100Csv("A,B\n1,2\n", new Set(["ATL"])), /missing YEAR/);
+});

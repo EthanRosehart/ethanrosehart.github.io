@@ -25,6 +25,7 @@
 import { writeFile, readFile, mkdir, unlink } from "node:fs/promises";
 import { dirname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
+import zlib from "node:zlib";
 import { lastFullYearTotal, metricsIn } from "./_util.mjs";
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
@@ -153,55 +154,159 @@ async function pickDataset() {
   return null;
 }
 
-/* Live-run finding (Actions runs 29029212909/29030810394): DOT's Socrata
-   catalogs carry only ANNUAL T-100 summaries ("AFF - T100 Segment Summary
-   By Origin Airport" has no month column) — the monthly airport-level
-   table appears to live only on TranStats itself as PREZIP bulk files.
-   This probe runs when Socrata discovery fails: it checks candidate
-   PREZIP URL shapes and logs exactly which respond, so the download
-   path can be wired against a VERIFIED URL instead of a guessed one. */
-export function prezipCandidates(year) {
-  const y = year ?? new Date().getFullYear();
-  const names = [
-    `T_T100D_SEGMENT_ALL_CARRIER_${y}.zip`, `T_T100D_SEGMENT_ALL_CARRIER_${y - 1}.zip`,
-    "T_T100D_SEGMENT_ALL_CARRIER.zip",
-    `T_T100_SEGMENT_ALL_CARRIER_${y - 1}.zip`,
-    `T_T100I_SEGMENT_ALL_CARRIER_${y - 1}.zip`,
-    `T_T100D_MARKET_ALL_CARRIER_${y - 1}.zip`,
-  ];
-  return ["https://transtats.bts.gov/PREZIP/", "https://www.transtats.bts.gov/PREZIP/"]
-    .flatMap((base) => names.map((n) => base + n));
+/* ============================================================
+   TranStats PREZIP path — the one that actually carries the data.
+   Live-run findings (Actions runs 29029212909 → 29032448512): DOT's
+   Socrata catalogs, fully enumerated, hold only ANNUAL T-100 summaries;
+   the monthly airport-level table lives on transtats.bts.gov/PREZIP/ as
+   bulk zips whose names carry a rotating numeric prefix
+   (e.g. 896816367_T_T100_SEGMENT_ALL_CARRIER.zip) — which is why every
+   guessed static filename 404'd. The directory listing is enabled
+   (HTTP 200, ~940 zips), so the real filenames are read from it, newest
+   prefix first, and each zip's single CSV is aggregated by origin
+   airport × month. All helpers are pure and fixture-tested.
+   ============================================================ */
+const T100_START_YEAR = 2015;   // history depth target (matches Eurostat's sinceTimePeriod)
+const MAX_ZIPS = 14;            // download budget per run
+const MAX_ZIP_BYTES = 250e6;    // a per-year file is ~15-40MB; refuse surprises
+
+/* quote-aware CSV field split (same approach as fetch-openflights) */
+export function parseCsvLine(line) {
+  const out = []; let cur = "", q = false;
+  for (const ch of line) {
+    if (ch === '"') q = !q;
+    else if (ch === "," && !q) { out.push(cur); cur = ""; }
+    else cur += ch;
+  }
+  out.push(cur);
+  return out;
 }
-async function probePrezip() {
-  console.log("  [bts] probing TranStats PREZIP candidates (diagnostic — logs which bulk-file URLs exist):");
-  // a directory listing, if enabled, settles the filename question outright
+
+/* T-100 segment zips from the PREZIP directory listing, in fetch order:
+   the combined table (domestic + international, all carriers) is the whole
+   truth in one family; D/I pairs interleaved newest-first only if the
+   combined family is absent. Numeric prefix descending ≈ newest data. */
+export function pickT100Zips(listingHtml) {
+  const found = [...new Set(String(listingHtml).match(/\d+_T_T100\w*?\.zip/g) || [])];
+  const groups = { combined: [], domestic: [], international: [] };
+  for (const n of found) {
+    if (/_T_T100_SEGMENT_ALL_CARRIER\.zip$/i.test(n)) groups.combined.push(n);
+    else if (/_T_T100D_SEGMENT_ALL_CARRIER\.zip$/i.test(n)) groups.domestic.push(n);
+    else if (/_T_T100I_SEGMENT_ALL_CARRIER\.zip$/i.test(n)) groups.international.push(n);
+  }
+  const byIdDesc = (a, b) => parseInt(b) - parseInt(a);
+  for (const k of Object.keys(groups)) groups[k].sort(byIdDesc);
+  if (groups.combined.length) return groups.combined;
+  const inter = [];
+  for (let i = 0; i < Math.max(groups.domestic.length, groups.international.length); i++) {
+    if (groups.domestic[i]) inter.push(groups.domestic[i]);
+    if (groups.international[i]) inter.push(groups.international[i]);
+  }
+  return inter;
+}
+
+/* minimal ZIP reader (central directory + inflateRaw) — enough for
+   TranStats' one-CSV-per-zip files, no dependency needed */
+export function unzipFirstCsv(buf) {
+  let eocd = -1;
+  for (let i = buf.length - 22; i >= Math.max(0, buf.length - 65558); i--) {
+    if (buf.readUInt32LE(i) === 0x06054b50) { eocd = i; break; }
+  }
+  if (eocd < 0) throw new Error("not a zip (no end-of-central-directory)");
+  const count = buf.readUInt16LE(eocd + 10);
+  let off = buf.readUInt32LE(eocd + 16);
+  for (let n = 0; n < count; n++) {
+    if (buf.readUInt32LE(off) !== 0x02014b50) throw new Error("corrupt zip central directory");
+    const method = buf.readUInt16LE(off + 10);
+    const csize = buf.readUInt32LE(off + 20);
+    const nameLen = buf.readUInt16LE(off + 28);
+    const extraLen = buf.readUInt16LE(off + 30);
+    const commentLen = buf.readUInt16LE(off + 32);
+    const lho = buf.readUInt32LE(off + 42);
+    const name = buf.toString("latin1", off + 46, off + 46 + nameLen);
+    if (/\.csv$/i.test(name)) {
+      const dataStart = lho + 30 + buf.readUInt16LE(lho + 26) + buf.readUInt16LE(lho + 28);
+      const data = buf.subarray(dataStart, dataStart + csize);
+      if (method === 0) return data;
+      if (method === 8) return zlib.inflateRawSync(data);
+      throw new Error(`unsupported zip compression method ${method}`);
+    }
+    off += 46 + nameLen + extraLen + commentLen;
+  }
+  throw new Error("no .csv entry in zip");
+}
+
+/* aggregate one T-100 CSV into acc: iata -> {pax, atm, cargo} monthly.
+   Freight arrives in POUNDS and is accumulated in tonnes (rounded once at
+   the very end, across all files). Returns the years this file covered. */
+export function aggregateT100Csv(csv, usSet, acc = {}) {
+  const lines = String(csv).replace(/^﻿/, "").split(/\r?\n/);
+  const header = parseCsvLine(lines[0] || "").map((h) => h.trim().toUpperCase());
+  const iY = header.indexOf("YEAR"), iM = header.indexOf("MONTH"), iO = header.indexOf("ORIGIN");
+  const iP = header.indexOf("PASSENGERS"), iF = header.indexOf("FREIGHT"), iD = header.indexOf("DEPARTURES_PERFORMED");
+  if (iY < 0 || iM < 0 || iO < 0 || iP < 0) {
+    throw new Error("T-100 csv missing YEAR/MONTH/ORIGIN/PASSENGERS — header: " + header.slice(0, 25).join(","));
+  }
+  const years = new Set();
+  for (let i = 1; i < lines.length; i++) {
+    if (!lines[i]) continue;
+    const c = parseCsvLine(lines[i]);
+    const o = (c[iO] || "").trim();
+    if (!usSet.has(o)) continue;
+    const y = +c[iY], m = +c[iM];
+    if (!(y >= 1980 && y <= 2100) || !(m >= 1 && m <= 12)) continue;
+    years.add(y);
+    const ym = `${y}-${String(m).padStart(2, "0")}`;
+    const a = acc[o] || (acc[o] = { pax: {}, atm: {}, cargo: {} });
+    a.pax[ym] = (a.pax[ym] || 0) + (+c[iP] || 0);
+    if (iD >= 0) a.atm[ym] = (a.atm[ym] || 0) + (+c[iD] || 0);
+    if (iF >= 0) a.cargo[ym] = (a.cargo[ym] || 0) + (+c[iF] || 0) * LB_TO_T;
+  }
+  return { acc, years: [...years].sort((a, b) => a - b) };
+}
+
+async function fetchViaTranstats() {
+  console.log("  [bts] Socrata has no monthly airport-level T-100 — using TranStats PREZIP bulk files");
+  let host = null, names = [];
   for (const base of ["https://transtats.bts.gov/PREZIP/", "https://www.transtats.bts.gov/PREZIP/"]) {
     try {
       const r = await fetch(base, { headers: UA });
-      const body = r.ok ? await r.text() : "";
-      const zips = [...new Set(body.match(/[A-Za-z0-9_().%-]+\.zip/g) || [])];
-      const t100 = zips.filter((n) => /t_?-?100/i.test(n));
-      console.log(`  [bts]   ${r.status} ${base} listing -> ${zips.length} zips visible, T-100ish: ${t100.slice(0, 30).join(", ") || "(none)"}`);
-    } catch (e) {
-      console.log(`  [bts]   ERR ${base} (${e.message})`);
-    }
+      if (!r.ok) { console.warn(`  [bts] ${base} listing HTTP ${r.status}`); continue; }
+      names = pickT100Zips(await r.text());
+      if (names.length) { host = base; break; }
+      console.warn(`  [bts] ${base} listing readable but no T-100 segment zips in it`);
+    } catch (e) { console.warn(`  [bts] ${base} listing failed (${e.message})`); }
   }
-  // sanity check: a filename family known to exist for the on-time table —
-  // a 200 here proves the host serves PREZIP and our T-100 names are wrong,
-  // a 404 says the whole PREZIP path assumption is off
-  const sanity = "https://transtats.bts.gov/PREZIP/On_Time_Reporting_Carrier_On_Time_Performance_1987_present_2024_1.zip";
-  for (const url of [sanity, ...prezipCandidates()]) {
+  if (!host) return null;
+  console.log(`  [bts] ${host}: ${names.length} T-100 segment zips, newest first (target history back to ${T100_START_YEAR})`);
+
+  const usSet = new Set(US);
+  const acc = {};
+  let minYear = Infinity, parsed = 0;
+  for (const name of names.slice(0, MAX_ZIPS)) {
     try {
-      const r = await fetch(url, { method: "GET", headers: { ...UA, Range: "bytes=0-3" } });
-      const ct = r.headers.get("content-type") || "?";
-      const len = r.headers.get("content-length") || "?";
-      let magic = "";
-      try { magic = Buffer.from(await r.arrayBuffer()).toString("latin1").slice(0, 4); } catch {}
-      console.log(`  [bts]   ${r.status} ${url} (type ${ct}, length ${len}, magic ${JSON.stringify(magic)})`);
+      const r = await fetch(host + name, { headers: UA });
+      if (!r.ok) { console.warn(`  [bts]   ${name}: HTTP ${r.status}`); continue; }
+      const buf = Buffer.from(await r.arrayBuffer());
+      if (buf.length > MAX_ZIP_BYTES) { console.warn(`  [bts]   ${name}: ${(buf.length/1e6).toFixed(0)}MB — larger than expected for a per-period file, skipping`); continue; }
+      const csv = unzipFirstCsv(buf).toString("utf8");
+      const { years } = aggregateT100Csv(csv, usSet, acc);
+      parsed++;
+      if (years.length) minYear = Math.min(minYear, years[0]);
+      console.log(`  [bts]   ${name}: ${(buf.length/1e6).toFixed(1)}MB zip, years ${years[0] ?? "?"}–${years[years.length-1] ?? "?"}`);
+      if (minYear <= T100_START_YEAR) break;   // enough history — stop downloading
     } catch (e) {
-      console.log(`  [bts]   ERR ${url} (${e.message})`);
+      console.warn(`  [bts]   ${name}: ${e.message}`);
     }
   }
+  if (!parsed || !Object.keys(acc).length) return null;
+  for (const code of Object.keys(acc)) {
+    for (const k of ["pax", "atm", "cargo"]) {
+      for (const ym of Object.keys(acc[code][k])) acc[code][k][ym] = Math.round(acc[code][k][ym]);
+    }
+  }
+  console.log(`  [bts] TranStats aggregation done — ${Object.keys(acc).length} airports, ${parsed} files, history back to ${minYear === Infinity ? "?" : minYear}`);
+  return acc;
 }
 
 async function seriesFor(ds, code) {
@@ -224,6 +329,20 @@ async function prevSeries(iata) {
   return doc?.series || null;
 }
 
+/* the Socrata route, kept as the cheap first try — if DOT ever publishes a
+   monthly airport-level table there, it wins automatically */
+async function fetchViaSocrata() {
+  const picked = await pickDataset();
+  if (!picked) return null;
+  console.log(`  [bts] using ${picked.domain}/${picked.id} "${picked.name}"`);
+  const out = {};
+  for (const code of US) {
+    try { out[code] = await seriesFor(picked, code); }
+    catch (e) { console.warn(`  ${code}  bts socrata failed (${e.message})`); }
+  }
+  return Object.keys(out).length ? out : null;
+}
+
 export async function main() {
   const indexDoc = (await loadJSON(OUT)) || {
     generatedAt: new Date().toISOString(),
@@ -233,26 +352,24 @@ export async function main() {
   const airports = indexDoc.airports = indexDoc.airports || {};
   const ref = (await loadJSON(REF))?.airports || {};
 
-  const picked = await pickDataset();
-  if (!picked) {
-    await probePrezip();
-    console.error("  [bts] no monthly T-100 dataset with origin/month/year/pax found on any DOT domain — US airports keep last-good data");
+  const seriesByCode = (await fetchViaSocrata()) || (await fetchViaTranstats());
+  if (!seriesByCode) {
+    console.error("  [bts] no monthly T-100 source produced data (Socrata + TranStats both failed) — US airports keep last-good data");
     process.exit(1);   // loud: the health step reports this
   }
-  console.log(`  [bts] using ${picked.domain}/${picked.id} "${picked.name}"`);
 
   await mkdir(SERIES_DIR, { recursive: true });
   let live = 0, kept = 0;
   for (const code of US) {
     let series = null;
-    try {
-      const s = await seriesFor(picked, code);
+    const s = seriesByCode[code];
+    if (s) {
       const candidate = {};
-      for (const k of ["pax", "atm", "cargo"]) if (Object.keys(s[k]).length >= 12) candidate[k] = s[k];
+      for (const k of ["pax", "atm", "cargo"]) if (s[k] && Object.keys(s[k]).length >= 12) candidate[k] = s[k];
       if (candidate.pax && Object.keys(candidate.pax).length >= MIN_MONTHS) { series = candidate; live++; }
-      else console.warn(`  ${code}  bts: insufficient pax (${Object.keys(s.pax).length}mo)`);
-    } catch (e) {
-      console.warn(`  ${code}  bts failed (${e.message})`);
+      else console.warn(`  ${code}  bts: insufficient pax (${Object.keys(s.pax || {}).length}mo)`);
+    } else {
+      console.warn(`  ${code}  bts: no rows in source`);
     }
     if (!series) {
       const prev = await prevSeries(code);
