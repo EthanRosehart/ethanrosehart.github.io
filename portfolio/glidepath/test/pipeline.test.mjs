@@ -325,3 +325,14 @@ test("aggregateT100Csv: sums by origin airport x month, converts freight lbs->to
   assert.equal(acc.ATL.pax["2024-01"], 80000, "earlier months untouched");
   assert.throws(() => aggregateT100Csv("A,B\n1,2\n", new Set(["ATL"])), /missing YEAR/);
 });
+
+test("mergeSeriesFirstWins: overlapping cached extracts can't double-count — first file wins per month", async () => {
+  const { mergeSeriesFirstWins } = await import("../scripts/fetch-bts.mjs");
+  const target = {};
+  mergeSeriesFirstWins(target, { ATL: { pax: { "2024-01": 100 }, atm: {}, cargo: {} } });
+  // a second overlapping extract must NOT add on top, only fill gaps
+  mergeSeriesFirstWins(target, { ATL: { pax: { "2024-01": 999, "2024-02": 50 }, atm: { "2024-01": 7 }, cargo: {} } });
+  assert.equal(target.ATL.pax["2024-01"], 100, "first file wins for a month it already covered");
+  assert.equal(target.ATL.pax["2024-02"], 50, "gaps fill from later files");
+  assert.equal(target.ATL.atm["2024-01"], 7, "per-metric independence");
+});

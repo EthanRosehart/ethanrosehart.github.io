@@ -242,10 +242,12 @@ export function unzipFirstCsv(buf) {
 export function aggregateT100Csv(csv, usSet, acc = {}) {
   const lines = String(csv).replace(/^﻿/, "").split(/\r?\n/);
   const header = parseCsvLine(lines[0] || "").map((h) => h.trim().toUpperCase());
-  const iY = header.indexOf("YEAR"), iM = header.indexOf("MONTH"), iO = header.indexOf("ORIGIN");
+  const iY = header.indexOf("YEAR") >= 0 ? header.indexOf("YEAR") : header.indexOf("DATA_YEAR");
+  const iM = header.indexOf("MONTH"), iO = header.indexOf("ORIGIN");
   const iP = header.indexOf("PASSENGERS"), iF = header.indexOf("FREIGHT"), iD = header.indexOf("DEPARTURES_PERFORMED");
   if (iY < 0 || iM < 0 || iO < 0 || iP < 0) {
-    throw new Error("T-100 csv missing YEAR/MONTH/ORIGIN/PASSENGERS — header: " + header.slice(0, 25).join(","));
+    // full header, deliberately — run 29033499468 truncated this and cost an iteration
+    throw new Error("T-100 csv missing YEAR/MONTH/ORIGIN/PASSENGERS — full header: " + header.join(","));
   }
   const years = new Set();
   for (let i = 1; i < lines.length; i++) {
@@ -265,8 +267,77 @@ export function aggregateT100Csv(csv, usSet, acc = {}) {
   return { acc, years: [...years].sort((a, b) => a - b) };
 }
 
+/* month-level first-wins merge — PREZIP files are cached USER extracts
+   (run 29033499468: rotating request ids, arbitrary field subsets and
+   possibly overlapping year windows), so blind accumulation across files
+   would double-count. First file to provide an airport+metric+month wins. */
+export function mergeSeriesFirstWins(target, add) {
+  for (const code of Object.keys(add || {})) {
+    const t = target[code] || (target[code] = { pax: {}, atm: {}, cargo: {} });
+    for (const k of ["pax", "atm", "cargo"]) {
+      for (const ym of Object.keys(add[code][k] || {})) {
+        if (t[k][ym] == null) t[k][ym] = add[code][k][ym];
+      }
+    }
+  }
+  return target;
+}
+
+function roundAcc(acc) {
+  for (const code of Object.keys(acc)) {
+    for (const k of ["pax", "atm", "cargo"]) {
+      for (const ym of Object.keys(acc[code][k])) acc[code][k][ym] = Math.round(acc[code][k][ym]);
+    }
+  }
+  return acc;
+}
+
+/* The deterministic TranStats route: DownLoad_Table.asp is the endpoint
+   the site's own "Download" button posts to — we request exactly the six
+   columns we need from T_T100_SEGMENT_ALL_CARRIER, one year per request,
+   so scope is consistent (all carriers, domestic + international) and
+   years are disjoint by construction. Response is a zip with one CSV.
+   Everything about the exchange is logged so a contract surprise costs
+   one readable run, not a debugging session. */
+async function fetchViaDownloadTable() {
+  console.log("  [bts] trying TranStats DownLoad_Table.asp (deterministic per-year extracts)");
+  const usSet = new Set(US);
+  const acc = {};
+  const thisYear = new Date().getFullYear();
+  let ok = 0, consecFail = 0;
+  for (let y = thisYear; y >= T100_START_YEAR && consecFail < 2; y--) {
+    const sql = `SELECT YEAR,MONTH,ORIGIN,PASSENGERS,FREIGHT,DEPARTURES_PERFORMED FROM T_T100_SEGMENT_ALL_CARRIER WHERE YEAR=${y}`;
+    const body = new URLSearchParams({
+      UserTableName: "T_100_Segment_All_Carrier",
+      DBShortName: "Air_Carriers",
+      RawDataTable: "T_T100_SEGMENT_ALL_CARRIER",
+      sqlstr: " " + sql,
+    }).toString();
+    try {
+      const r = await fetch("https://www.transtats.bts.gov/DownLoad_Table.asp?Table_ID=293&Has_Group=3&Is_Zipped=0", {
+        method: "POST", headers: { ...UA, "Content-Type": "application/x-www-form-urlencoded" }, body,
+      });
+      const ct = r.headers.get("content-type") || "?";
+      if (!r.ok) { console.warn(`  [bts]   ${y}: HTTP ${r.status} (${ct})`); consecFail++; continue; }
+      const buf = Buffer.from(await r.arrayBuffer());
+      const isZip = buf.length > 4 && buf[0] === 0x50 && buf[1] === 0x4b;
+      const csv = isZip ? unzipFirstCsv(buf).toString("utf8") : buf.toString("utf8");
+      if (!/^"?(YEAR|DATA_YEAR)"?,/i.test(csv.slice(0, 24))) {
+        console.warn(`  [bts]   ${y}: unexpected response (${ct}, ${buf.length}b, zip:${isZip}): ${JSON.stringify(csv.slice(0, 200))}`);
+        consecFail++; continue;
+      }
+      const { years } = aggregateT100Csv(csv, usSet, acc);
+      ok++; consecFail = 0;
+      console.log(`  [bts]   ${y}: ${(buf.length / 1e6).toFixed(1)}MB (zip:${isZip}), years ${years.join("/") || "?"}`);
+    } catch (e) { console.warn(`  [bts]   ${y}: ${e.message}`); consecFail++; }
+  }
+  if (!ok || !Object.keys(acc).length) return null;
+  console.log(`  [bts] DownLoad_Table done — ${Object.keys(acc).length} airports over ${ok} year files`);
+  return roundAcc(acc);
+}
+
 async function fetchViaTranstats() {
-  console.log("  [bts] Socrata has no monthly airport-level T-100 — using TranStats PREZIP bulk files");
+  console.log("  [bts] using TranStats PREZIP bulk files (cached extracts — merged month-first-wins)");
   let host = null, names = [];
   for (const base of ["https://transtats.bts.gov/PREZIP/", "https://www.transtats.bts.gov/PREZIP/"]) {
     try {
@@ -281,7 +352,7 @@ async function fetchViaTranstats() {
   console.log(`  [bts] ${host}: ${names.length} T-100 segment zips, newest first (target history back to ${T100_START_YEAR})`);
 
   const usSet = new Set(US);
-  const acc = {};
+  const merged = {};
   let minYear = Infinity, parsed = 0;
   for (const name of names.slice(0, MAX_ZIPS)) {
     try {
@@ -290,7 +361,10 @@ async function fetchViaTranstats() {
       const buf = Buffer.from(await r.arrayBuffer());
       if (buf.length > MAX_ZIP_BYTES) { console.warn(`  [bts]   ${name}: ${(buf.length/1e6).toFixed(0)}MB — larger than expected for a per-period file, skipping`); continue; }
       const csv = unzipFirstCsv(buf).toString("utf8");
-      const { years } = aggregateT100Csv(csv, usSet, acc);
+      // aggregate each file in isolation, then merge month-first-wins —
+      // cached user extracts can overlap in coverage
+      const { acc, years } = aggregateT100Csv(csv, usSet, {});
+      mergeSeriesFirstWins(merged, acc);
       parsed++;
       if (years.length) minYear = Math.min(minYear, years[0]);
       console.log(`  [bts]   ${name}: ${(buf.length/1e6).toFixed(1)}MB zip, years ${years[0] ?? "?"}–${years[years.length-1] ?? "?"}`);
@@ -299,14 +373,9 @@ async function fetchViaTranstats() {
       console.warn(`  [bts]   ${name}: ${e.message}`);
     }
   }
-  if (!parsed || !Object.keys(acc).length) return null;
-  for (const code of Object.keys(acc)) {
-    for (const k of ["pax", "atm", "cargo"]) {
-      for (const ym of Object.keys(acc[code][k])) acc[code][k][ym] = Math.round(acc[code][k][ym]);
-    }
-  }
-  console.log(`  [bts] TranStats aggregation done — ${Object.keys(acc).length} airports, ${parsed} files, history back to ${minYear === Infinity ? "?" : minYear}`);
-  return acc;
+  if (!parsed || !Object.keys(merged).length) return null;
+  console.log(`  [bts] PREZIP aggregation done — ${Object.keys(merged).length} airports, ${parsed} files, history back to ${minYear === Infinity ? "?" : minYear}`);
+  return roundAcc(merged);
 }
 
 async function seriesFor(ds, code) {
@@ -352,9 +421,9 @@ export async function main() {
   const airports = indexDoc.airports = indexDoc.airports || {};
   const ref = (await loadJSON(REF))?.airports || {};
 
-  const seriesByCode = (await fetchViaSocrata()) || (await fetchViaTranstats());
+  const seriesByCode = (await fetchViaSocrata()) || (await fetchViaDownloadTable()) || (await fetchViaTranstats());
   if (!seriesByCode) {
-    console.error("  [bts] no monthly T-100 source produced data (Socrata + TranStats both failed) — US airports keep last-good data");
+    console.error("  [bts] no monthly T-100 source produced data (Socrata + DownLoad_Table + PREZIP all failed) — US airports keep last-good data");
     process.exit(1);   // loud: the health step reports this
   }
 
