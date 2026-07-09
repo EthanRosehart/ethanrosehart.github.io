@@ -91,6 +91,7 @@ function setAirportSeries(iata, json){
 }
 function hasAirportSeries(iata){ return !!OBSERVED[iata]; }
 function getObservedSeries(iata){ return OBSERVED[iata] || null; }
+function getSegments(iata){ return SEGMENTS[iata] || null; }
 function getActivityMeta(iata){ return (ACTIVITY_META && ACTIVITY_META.airports && ACTIVITY_META.airports[iata]) || null; }
 
 /* ============================================================
@@ -106,10 +107,21 @@ function getActivityMeta(iata){ return (ACTIVITY_META && ACTIVITY_META.airports 
    error, so a custom airport degrades gracefully with zero extra plumbing
    there — see app.jsx / DataCaveat for the one place that explains why.
    ============================================================ */
-function registerCustomAirport(iata, meta, series){
+function registerCustomAirport(iata, meta, series, paxSeg){
   if (!ACTIVITY_META || !ACTIVITY_META.airports) ACTIVITY_META = { airports:{} };
   OBSERVED[iata] = series;
-  delete SEGMENTS[iata]; // custom uploads don't support the segment split
+  // optional sector split (domestic / transborder / international) from the
+  // upload — kept only when at least two sectors actually carry data (one
+  // sector isn't a split). Runs through the exact same SEGMENTS store the
+  // pipeline feeds, so the mix donut, per-sector levers and sector-targeted
+  // events all work for uploaded gateways too.
+  const segKeys = paxSeg ? PAX_SEGMENTS.map(s=>s.k).filter(k => paxSeg[k] && Object.keys(paxSeg[k]).length) : [];
+  if (segKeys.length >= 2) {
+    SEGMENTS[iata] = {};
+    segKeys.forEach(k => { SEGMENTS[iata][k] = paxSeg[k]; });
+  } else {
+    delete SEGMENTS[iata];
+  }
   const paxKeys = Object.keys(series.pax || {});
   // register metadata (incl. `metrics`) BEFORE computing annualPax — buildHistory()
   // reads availableMetrics(), which reads this same metadata, so annualPax's
@@ -118,7 +130,7 @@ function registerCustomAirport(iata, meta, series){
     ...meta,
     observed: true, source: "custom", custom: true,
     metrics: METRIC_KEYS.filter(m => series[m] && Object.keys(series[m]).length),
-    hasPaxSeg: false,
+    hasPaxSeg: segKeys.length >= 2,
     months: paxKeys.length,
     latest: paxKeys.sort().pop() || null,
     annualPax: null,
@@ -161,10 +173,15 @@ function parseMonthKey(raw){
 }
 
 /* best-effort column-role guess from a spreadsheet header cell, for the
-   upload wizard's default mapping — the user can always override it. */
+   upload wizard's default mapping — the user can always override it.
+   Sector columns are tested BEFORE the plain pax pattern so a header like
+   "Domestic passengers" maps to the domestic sector, not to the headline. */
 function guessColumnRole(header){
   const h = String(header || "").toLowerCase();
   if (/date|month|period/.test(h)) return "date";
+  if (/domestic|^dom\b|^dom[. ]/.test(h)) return "seg_domestic";
+  if (/transborder|trans-border|transb/.test(h)) return "seg_transborder";
+  if (/internat|intl|int'l/.test(h)) return "seg_international";
   if (/pax|passenger/.test(h)) return "pax";
   if (/atm|movement|flight|depart/.test(h)) return "atm";
   if (/cargo|freight/.test(h)) return "cargo";
@@ -945,7 +962,7 @@ Object.assign(window, {
   GP_segmentsFor:segmentsFor, GP_PAX_SEGMENTS:PAX_SEGMENTS,
   GP_fmt:fmt, GP_activityFor:activityFor,
   GP_setActivityIndex:setActivityIndex, GP_setAirportSeries:setAirportSeries, GP_hasAirportSeries:hasAirportSeries,
-  GP_getObservedSeries:getObservedSeries, GP_getActivityMeta:getActivityMeta,
+  GP_getObservedSeries:getObservedSeries, GP_getActivityMeta:getActivityMeta, GP_getSegments:getSegments,
   GP_setForecastMeta:setForecastMeta, GP_setAirportForecast:setAirportForecast,
   GP_setReference:setReference, GP_rebuildAirports:rebuildAirports, GP_ensureMacro:ensureMacro,
   GP_registerCustomAirport:registerCustomAirport, GP_removeCustomAirport:removeCustomAirport, GP_parseMonthKey:parseMonthKey,

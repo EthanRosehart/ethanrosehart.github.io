@@ -45,6 +45,14 @@ Notable changes to Glidepath. Dates are UTC.
 - Fetcher pure-logic exported and covered by recorded-fixture tests
   (Eurostat JSON-stat decode, IMF per-capita derivation).
 
+### Uploads
+- Sector (passenger-mix) upload: domestic / transborder / international
+  columns are recognized in the mapping (before the plain pax pattern),
+  editable in the working table, included in the template, and register
+  through the same SEGMENTS machinery as pipeline airports — mix donut,
+  per-sector levers and sector-targeted events now work for uploaded
+  gateways. Splits persist through localStorage and session files.
+
 ### Planner features (Phase 3)
 - Capacity constraints as a coupled system: a slot cap squeezes passengers
   (softened by a bounded up-gauging response — rate and ceiling are levers),
