@@ -112,16 +112,17 @@ test("decodeRows: SODA aggregate rows -> monthly series, pounds to tonnes, junk 
   assert.deepEqual(decodeRows(null), { pax: {}, atm: {}, cargo: {} });
 });
 
-test("orderCandidates: T-100 segment datasets probe first", () => {
+test("orderCandidates: T-100 segment datasets probe first, merged queries dedupe by id", () => {
   const ordered = orderCandidates([
     { resource: { id: "aaaa-1111", name: "Bridge Conditions" } },
     { resource: { id: "bbbb-2222", name: "Air Carriers: T-100 Domestic Segment (All Carriers)" } },
     { resource: { id: "cccc-3333", name: "T-100 Market (All Carriers)" } },
+    { resource: { id: "bbbb-2222", name: "Air Carriers: T-100 Domestic Segment (All Carriers)" } }, // dupe from a second query
     { resource: {} },   // no id -> dropped
   ]);
   assert.equal(ordered[0].id, "bbbb-2222", "T-100 + segment outranks everything");
   assert.equal(ordered[1].id, "cccc-3333");
-  assert.equal(ordered.length, 3);
+  assert.equal(ordered.length, 3, "results merged across queries dedupe by id");
 });
 
 test("US airport list: unique, IATA-shaped, bounded like the EU cap", () => {

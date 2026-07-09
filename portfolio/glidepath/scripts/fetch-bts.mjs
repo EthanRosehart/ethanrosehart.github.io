@@ -85,26 +85,44 @@ export function decodeRows(rows) {
   return { pax, atm, cargo };
 }
 
-/* enumerate candidate datasets on one domain, best-looking first —
+/* enumerate candidate datasets, best-looking first, deduped by id —
    exported for the fixture tests */
 export function orderCandidates(results) {
-  const all = (results || [])
-    .map((x) => ({ id: x.resource?.id, name: x.resource?.name || "" }))
-    .filter((c) => c.id);
+  const byId = new Map();
+  for (const x of results || []) {
+    const id = x.resource?.id;
+    if (id && !byId.has(id)) byId.set(id, { id, name: x.resource?.name || "" });
+  }
   const score = (c) => (/t-?100/i.test(c.name) ? 2 : 0) + (/segment/i.test(c.name) ? 1 : 0);
-  return all.sort((a, b) => score(b) - score(a));
+  return [...byId.values()].sort((a, b) => score(b) - score(a));
 }
 
+/* Socrata catalog search. Live-run finding (Actions run 29029212909): a
+   multi-word q like "T-100 segment" returns ZERO results — Socrata ANDs
+   the terms against sparse metadata — while single-word queries return
+   plenty. So several queries are tried and merged, on both the domain's
+   own catalog endpoint and the federated api.us.socrata.com host (some
+   DOT domains only index reliably through the federated one). */
+const CATALOG_QUERIES = ["T-100", "t100", "air carrier"];
 async function discover(domain) {
-  const cat = `https://${domain}/api/catalog/v1?domains=${domain}&search_context=${domain}&only=dataset&limit=100&q=${encodeURIComponent("T-100 segment")}`;
-  try {
-    const results = (await jget(cat)).results || [];
-    console.log(`  [bts] ${domain}: catalog returned ${results.length} datasets`);
-    return orderCandidates(results);
-  } catch (e) {
-    console.warn(`  [bts] ${domain}: catalog failed (${e.message})`);
-    return [];
+  const hosts = [
+    `https://${domain}/api/catalog/v1?domains=${domain}&search_context=${domain}`,
+    `https://api.us.socrata.com/api/catalog/v1?domains=${domain}&search_context=${domain}`,
+  ];
+  const collected = [];
+  for (const base of hosts) {
+    for (const q of CATALOG_QUERIES) {
+      try {
+        const results = (await jget(`${base}&only=dataset&limit=100&q=${encodeURIComponent(q)}`)).results || [];
+        console.log(`  [bts] ${domain} q="${q}"${base.includes("api.us.socrata") ? " (federated)" : ""}: ${results.length} datasets`);
+        collected.push(...results);
+      } catch (e) {
+        console.warn(`  [bts] ${domain} q="${q}"${base.includes("api.us.socrata") ? " (federated)" : ""}: catalog failed (${e.message})`);
+      }
+    }
+    if (collected.length) break;   // this host works — no need to double-hit via the other
   }
+  return orderCandidates(collected);
 }
 
 async function pickDataset() {
