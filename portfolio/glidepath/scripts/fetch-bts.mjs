@@ -93,36 +93,40 @@ export function orderCandidates(results) {
     const id = x.resource?.id;
     if (id && !byId.has(id)) byId.set(id, { id, name: x.resource?.name || "" });
   }
-  const score = (c) => (/t-?100/i.test(c.name) ? 2 : 0) + (/segment/i.test(c.name) ? 1 : 0);
+  const score = (c) => (/t-?100/i.test(c.name) ? 4 : 0) + (/segment/i.test(c.name) ? 2 : 0)
+    + (/domestic/i.test(c.name) ? 1 : 0) + (/passenger/i.test(c.name) ? 1 : 0);
   return [...byId.values()].sort((a, b) => score(b) - score(a));
 }
 
-/* Socrata catalog search. Live-run finding (Actions run 29029212909): a
-   multi-word q like "T-100 segment" returns ZERO results — Socrata ANDs
-   the terms against sparse metadata — while single-word queries return
-   plenty. So several queries are tried and merged, on both the domain's
-   own catalog endpoint and the federated api.us.socrata.com host (some
-   DOT domains only index reliably through the federated one). */
-const CATALOG_QUERIES = ["T-100", "t100", "air carrier"];
-async function discover(domain) {
-  const hosts = [
-    `https://${domain}/api/catalog/v1?domains=${domain}&search_context=${domain}`,
-    `https://api.us.socrata.com/api/catalog/v1?domains=${domain}&search_context=${domain}`,
-  ];
-  const collected = [];
-  for (const base of hosts) {
-    for (const q of CATALOG_QUERIES) {
-      try {
-        const results = (await jget(`${base}&only=dataset&limit=100&q=${encodeURIComponent(q)}`)).results || [];
-        console.log(`  [bts] ${domain} q="${q}"${base.includes("api.us.socrata") ? " (federated)" : ""}: ${results.length} datasets`);
-        collected.push(...results);
-      } catch (e) {
-        console.warn(`  [bts] ${domain} q="${q}"${base.includes("api.us.socrata") ? " (federated)" : ""}: catalog failed (${e.message})`);
-      }
+/* Socrata catalog discovery by FULL ENUMERATION, not keyword search.
+   Live-run findings (Actions runs 29029212909 / 29031604896): multi-word
+   q returns zero (terms are ANDed against sparse metadata), and even
+   single-word queries miss real tables — a monthly airport-level dataset
+   ("International_Passengers_Freight_All_Types", udzf-9fvh) matched none
+   of "T-100"/"t100"/"air carrier". DOT domains carry a few hundred
+   datasets, so paging through all of them and ranking locally is cheap
+   and can't be defeated by bad upstream metadata. */
+async function listAllDatasets(domain) {
+  const out = [];
+  for (let offset = 0; offset < 3000; offset += 100) {
+    let results;
+    try {
+      results = (await jget(`https://${domain}/api/catalog/v1?domains=${domain}&search_context=${domain}&only=dataset&limit=100&offset=${offset}`)).results || [];
+    } catch (e) {
+      console.warn(`  [bts] ${domain} enumeration failed at offset ${offset} (${e.message})`);
+      break;
     }
-    if (collected.length) break;   // this host works — no need to double-hit via the other
+    out.push(...results);
+    if (results.length < 100) break;
   }
-  return orderCandidates(collected);
+  return out;
+}
+async function discover(domain) {
+  const all = await listAllDatasets(domain);
+  const aviation = all.filter((x) => /t-?100|segment|passenger|freight|air.?carrier|airport|aviation/i.test(x.resource?.name || ""));
+  console.log(`  [bts] ${domain}: enumerated ${all.length} datasets, ${aviation.length} aviation-ish:`);
+  for (const x of aviation.slice(0, 40)) console.log(`  [bts]     ${x.resource.id} "${x.resource.name}"`);
+  return orderCandidates(aviation);
 }
 
 async function pickDataset() {
@@ -139,8 +143,11 @@ async function pickDataset() {
       if (m.origin && m.month && m.year && m.pax) return { domain, id: c.id, name: c.name, m };
       // near-miss diagnostics: a monthly table whose airport/pax columns our
       // mapper didn't recognize is a mapping bug we can fix from the log —
-      // dump its full schema so the next iteration doesn't have to guess
-      if (m.month && m.year) console.log(`  [bts]   near-miss full columns: ${keys.join(", ")}`);
+      // dump its full schema + a sample row so the next iteration doesn't guess
+      if (m.month && m.year) {
+        console.log(`  [bts]   near-miss full columns: ${keys.join(", ")}`);
+        try { console.log(`  [bts]   near-miss sample row: ${JSON.stringify((await jget(`https://${domain}/resource/${c.id}.json?$limit=1`))[0]).slice(0, 500)}`); } catch {}
+      }
     }
   }
   return null;
@@ -167,7 +174,23 @@ export function prezipCandidates(year) {
 }
 async function probePrezip() {
   console.log("  [bts] probing TranStats PREZIP candidates (diagnostic — logs which bulk-file URLs exist):");
-  for (const url of prezipCandidates()) {
+  // a directory listing, if enabled, settles the filename question outright
+  for (const base of ["https://transtats.bts.gov/PREZIP/", "https://www.transtats.bts.gov/PREZIP/"]) {
+    try {
+      const r = await fetch(base, { headers: UA });
+      const body = r.ok ? await r.text() : "";
+      const zips = [...new Set(body.match(/[A-Za-z0-9_().%-]+\.zip/g) || [])];
+      const t100 = zips.filter((n) => /t_?-?100/i.test(n));
+      console.log(`  [bts]   ${r.status} ${base} listing -> ${zips.length} zips visible, T-100ish: ${t100.slice(0, 30).join(", ") || "(none)"}`);
+    } catch (e) {
+      console.log(`  [bts]   ERR ${base} (${e.message})`);
+    }
+  }
+  // sanity check: a filename family known to exist for the on-time table —
+  // a 200 here proves the host serves PREZIP and our T-100 names are wrong,
+  // a 404 says the whole PREZIP path assumption is off
+  const sanity = "https://transtats.bts.gov/PREZIP/On_Time_Reporting_Carrier_On_Time_Performance_1987_present_2024_1.zip";
+  for (const url of [sanity, ...prezipCandidates()]) {
     try {
       const r = await fetch(url, { method: "GET", headers: { ...UA, Range: "bytes=0-3" } });
       const ct = r.headers.get("content-type") || "?";
