@@ -394,7 +394,7 @@ function UploadData({ onDone, onCancel }){
 /* ---------- Connect data sources ----------------------------- */
 const SOURCES = [
   { id:"openflights", abbr:"OF", name:"OpenFlights Airport DB", desc:"Identifiers, geography & timezone reference", rows:"reference DB", live:true, wired:true, kind:"openflights" },
-  { id:"activity",    abbr:"AVIA", name:"Eurostat / StatCan Aviation", desc:"Monthly passengers by airport — the series the forecasts run on", rows:"monthly series", live:true, wired:true, kind:"activity" },
+  { id:"activity",    abbr:"AVIA", name:"Eurostat / StatCan / US BTS Aviation", desc:"Monthly passengers by airport — the series the forecasts run on", rows:"monthly series", live:true, wired:true, kind:"activity" },
   { id:"worldbank",   abbr:"WB", name:"World Bank Open Data", desc:"Population & historical GDP/capita — catchment driver", rows:"Indicators API", live:true, wired:true, kind:"macro" },
   { id:"imf",         abbr:"IMF", name:"IMF World Economic Outlook", desc:"Forward-looking real GDP/capita growth forecast — the GDP lever's default, and a Prophet input", rows:"DataMapper API", live:true, wired:true, kind:"imf" },
 ];

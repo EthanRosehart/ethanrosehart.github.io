@@ -14,7 +14,7 @@ import assert from "node:assert/strict";
 
 import { esDecode, normMonth } from "../scripts/fetch-activity.mjs";
 import { perCapitaRates } from "../scripts/fetch-imf.mjs";
-import { mapCols } from "../scripts/fetch-bts.mjs";
+import { mapCols, decodeRows, orderCandidates, US } from "../scripts/fetch-bts.mjs";
 import { lastFullYearTotal, metricsIn } from "../scripts/_util.mjs";
 import { checkSeriesDoc, checkActivityIndex, checkForecastDoc } from "../scripts/validate-data.mjs";
 import { staleSnapshots, droppedAirports, seriesAnomalies, ageDays } from "../scripts/check-snapshots.mjs";
@@ -77,13 +77,58 @@ test("perCapitaRates: a year missing gdp or population is dropped, not guessed",
   assert.equal(out.length, 0);
 });
 
-/* ---- fetch-bts: column mapping --------------------------------- */
+/* ---- fetch-bts: column mapping + row decoding + discovery ------- */
 
 test("mapCols: recognizes a T-100-shaped header row", () => {
   const m = mapCols(["origin_airport_code", "year", "month", "passengers", "freight", "departures_performed"]);
   assert.equal(m.origin, "origin_airport_code");
   assert.equal(m.pax, "passengers");
   assert.equal(m.flights, "departures_performed");
+});
+
+test("mapCols: bare T-100 field names (the DOT vintage) map too", () => {
+  const m = mapCols(["origin", "year", "month", "passengers", "freight", "departures_performed", "distance"]);
+  assert.equal(m.origin, "origin");
+  assert.equal(m.year, "year");
+  assert.equal(m.month, "month");
+  assert.equal(m.freight, "freight");
+});
+
+test("decodeRows: SODA aggregate rows -> monthly series, pounds to tonnes, junk dropped", () => {
+  // SODA returns aggregate values as STRINGS — exactly this shape
+  const rows = [
+    { year: "2024", month: "1", pax: "412345", freight: "2204624", flights: "3120" },  // 2,204,624 lb ≈ 1,000 t
+    { year: "2024", month: "2", pax: "398000", flights: "3001" },                       // no freight column that month
+    { year: "0",    month: "1", pax: "999" },        // junk year -> dropped
+    { year: "2024", month: "13", pax: "999" },       // junk month -> dropped
+    { year: "2024", month: "3", pax: "not-a-number" },
+  ];
+  const s = decodeRows(rows);
+  assert.deepEqual(Object.keys(s.pax).sort(), ["2024-01", "2024-02"]);
+  assert.equal(s.pax["2024-01"], 412345);
+  assert.equal(s.atm["2024-01"], 3120);
+  assert.equal(s.cargo["2024-01"], 1000, "freight arrives in pounds and must land in tonnes");
+  assert.ok(!("2024-02" in s.cargo));
+  assert.deepEqual(decodeRows(null), { pax: {}, atm: {}, cargo: {} });
+});
+
+test("orderCandidates: T-100 segment datasets probe first", () => {
+  const ordered = orderCandidates([
+    { resource: { id: "aaaa-1111", name: "Bridge Conditions" } },
+    { resource: { id: "bbbb-2222", name: "Air Carriers: T-100 Domestic Segment (All Carriers)" } },
+    { resource: { id: "cccc-3333", name: "T-100 Market (All Carriers)" } },
+    { resource: {} },   // no id -> dropped
+  ]);
+  assert.equal(ordered[0].id, "bbbb-2222", "T-100 + segment outranks everything");
+  assert.equal(ordered[1].id, "cccc-3333");
+  assert.equal(ordered.length, 3);
+});
+
+test("US airport list: unique, IATA-shaped, bounded like the EU cap", () => {
+  assert.ok(US.length >= 30 && US.length <= 40, "bounded so the nightly Prophet build stays affordable");
+  assert.equal(new Set(US).size, US.length, "no duplicates");
+  assert.ok(US.every((c) => /^[A-Z]{3}$/.test(c)));
+  for (const major of ["ATL", "ORD", "JFK", "LAX", "DEN"]) assert.ok(US.includes(major), major + " missing");
 });
 
 /* ---- _util ------------------------------------------------------ */

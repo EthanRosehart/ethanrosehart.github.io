@@ -312,11 +312,16 @@ to `main` and trigger that same redeploy: the nightly data refresh
   complexity yet). Its short-term forecast is in-browser Holt-Winters, not
   Prophet — same screen, honest model card; see
   [Bring your own data](#bring-your-own-data).
-- **US coverage is defined but not populated.** `scripts/fetch-bts.mjs`
-  discovers and fetches BTS T-100 data by design, but as of the last nightly
-  run the Socrata catalog exposes no working monthly segment dataset, so no
-  US airports currently ship in `data/activity-index.json`. See
-  [`data/README.md`](data/README.md) for status.
+- **US coverage is wired but awaits its first successful nightly.**
+  `scripts/fetch-bts.mjs` discovers a monthly BTS T-100 segment dataset via
+  the Socrata SODA API — now searching **data.transportation.gov** first
+  (the earlier version only searched data.bts.gov, which is why it never
+  found one) — and targets the ~35 largest US gateways with full catalogue
+  metadata. US airports appear in `data/activity-index.json` once the
+  nightly (or a manual "Refresh data" workflow run) completes a successful
+  pull; a failed discovery exits non-zero and lands in the pipeline-health
+  issue instead of failing silently, and snapshot validation gates the
+  commit either way. See [`data/README.md`](data/README.md).
 - Charts are hand-rolled SVG with no text/table fallback for screen
   readers — fine for a portfolio demo, worth revisiting for a
   production-grade dashboard.

@@ -28,8 +28,11 @@ only for the airport a visitor selects). This keeps the initial page load to a
 few tens of KB instead of downloading every airport's history up front.
 
 The pipeline runs in this order (see `.github/workflows/refresh-data.yml`):
-`fetch-openflights` → `fetch-activity` → `fetch-bts` → `fetch-data` →
-`fetch-imf` → `build-forecast`. Each step is best-effort and keeps the last
+`fetch-openflights` → `fetch-bts` → `fetch-activity` → `fetch-data` →
+`fetch-imf` → `build-forecast`. (BTS runs before the Eurostat/StatCan step
+because it needs the still-untrimmed OpenFlights reference for US airport
+names/coords; `fetch-activity` then carries the BTS entries forward and
+trims the reference to the union of both catalogues.) Each step is best-effort and keeps the last
 good snapshot on failure — but failures are **not silent**: after the
 fetchers, `scripts/validate-data.mjs` schema-checks every snapshot as a
 hard gate before anything is committed, `scripts/check-snapshots.mjs`
@@ -67,16 +70,20 @@ Each airport's actual monthly numbers live in their own
 selected.
 
 `fetch-activity.mjs` owns the Eurostat/StatCan-sourced entries; `fetch-bts.mjs`
-runs after it and separately maintains its own (currently empty, see below)
-entries in the same index + `series/` directory, so the two scripts never
-clobber each other's airports. Both prune `series/<IATA>.json` files for
-airports that drop out of their respective sets.
+runs before it and separately maintains its own entries in the same index +
+`series/` directory, so the two scripts never clobber each other's airports.
+Both prune `series/<IATA>.json` files for airports that drop out of their
+respective sets — with a **total-outage guard**: if a whole source produces
+nothing on a run but the previous index carried its airports, the previous
+entries are carried forward untouched (their series files stay, including
+their last-good `paxSeg` splits) and the run exits non-zero for the
+pipeline-health issue, so one bad night can never wipe a market.
 
 | Market | Source | Notes |
 |--------|--------|-------|
 | Europe | Eurostat `avia_paoa` (PAS_CRD pax, CAF_PAS flights) + `avia_gooa` (FRM_LD_NLD cargo, tonnes) | A single all-airports pull is rejected with HTTP 413 (async). The script enumerates reporting airports with a small `lastTimePeriod` call, ranks by recent volume, and batch-fetches full series for the busiest ~70 in `rep_airp` chunks, splitting any chunk that still trips the 413 guard. Passenger composition is also pulled by transport coverage (`tra_cov` NAT/INTL) into `paxSeg`. |
 | Canada | StatCan WDS — 23-10-0312 (screened pax) + 23-10-0296 (aircraft movements, with 23-10-0008 as fallback) | The eight CATSA Class-1 airports, resolved by airport name against the cube metadata. StatCan stopped updating the older movements cube 23-10-0008 after 2022-09, so the current cube 23-10-0296 ("NAV CANADA services and other selected airports") is tried first. Screened pax are also split by sector (domestic / transborder / international) into `paxSeg`. |
-| US | BTS T-100 (`scripts/fetch-bts.mjs`) | Not currently wired — the Socrata catalog exposes no monthly segment table. US airports are simply absent (no modeling). |
+| US | DOT BTS T-100 segment via the Socrata SODA API (`scripts/fetch-bts.mjs`) | Discovers a monthly T-100 segment dataset across **data.transportation.gov** (where DOT actually publishes T-100 — the fetcher's earlier failure was searching only data.bts.gov) then data.bts.gov, and aggregates passengers / departures / freight (lbs→tonnes) by month for the ~35 largest US airports. Best-effort with last-good fallback; a failed discovery exits non-zero and lands in the pipeline-health issue rather than failing silently. |
 
 Eurostat airport codes are `<geo>_<ICAO>` (e.g. `ES_LEMD`, `AT_LOWG`); the geo
 prefix gives the country (`EL`→GR, `UK`→GB, else ISO-3166 alpha-2). The country,

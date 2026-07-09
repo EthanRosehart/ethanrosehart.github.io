@@ -57,15 +57,19 @@ jobs:
         run: node portfolio/glidepath/scripts/fetch-openflights.mjs
         continue-on-error: true
 
-      - name: Fetch monthly activity — Europe + Canada (Eurostat + StatCan)
-        id: activity
-        run: node portfolio/glidepath/scripts/fetch-activity.mjs
-        continue-on-error: true   # a feed outage keeps the last good snapshot
-
+      # BTS runs BEFORE fetch-activity: it needs the still-untrimmed
+      # OpenFlights reference for US airport names/coords, and
+      # fetch-activity then carries its index entries forward and trims
+      # the reference to the union of both catalogues.
       - name: Fetch monthly activity — US (BTS T-100)
         id: bts
         run: node portfolio/glidepath/scripts/fetch-bts.mjs
         continue-on-error: true
+
+      - name: Fetch monthly activity — Europe + Canada (Eurostat + StatCan)
+        id: activity
+        run: node portfolio/glidepath/scripts/fetch-activity.mjs
+        continue-on-error: true   # a feed outage keeps the last good snapshot
 
       - name: Fetch macro snapshot from World Bank
         id: macro

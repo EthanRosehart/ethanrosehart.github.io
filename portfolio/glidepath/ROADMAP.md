@@ -44,10 +44,13 @@ an end-to-end browser smoke run:
 - **Phase 2 — offline-verifiable subset done:** schema validation as a CI +
   nightly gate, staleness/anomaly checker, provenance manifest,
   fixture-tested fetcher parsing (Eurostat JSON-stat, IMF derivation, BTS
-  column mapping). *Deferred:* new live feeds (BTS TranStats, UK CAA, ANAC,
-  BITRE) — each needs live API probing against the real endpoints, which
-  the execution sandbox couldn't reach; shipping untested fetchers would
-  violate the no-garbage-data rule.
+  column mapping/row decoding). **US BTS is now wired** (multi-domain
+  Socrata discovery led by data.transportation.gov, ~35 major gateways,
+  full catalogue metadata, last-good fallback, loud failure) — first live
+  validation happens on the nightly/manual workflow run, protected by the
+  schema gate and health issue, since the execution sandbox can't reach
+  DOT hosts. *Deferred:* UK CAA, ANAC, BITRE feeds — same live-probing
+  constraint, without an existing fetcher skeleton to de-risk them.
 - **Phase 3 — gate items done:** capacity constraints as a **coupled
   system** — a slot cap squeezes passengers softened by a bounded
   up-gauging response (rate + ceiling are levers), a terminal cap pulls
