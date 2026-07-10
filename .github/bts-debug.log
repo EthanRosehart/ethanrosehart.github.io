@@ -1,5 +1,5 @@
-commit: 805faf8d288596edb279ba34fe91fba7db1b9e02
-run: 29065871267 (2026-07-10T03:00:42Z)
+commit: 6be1f81cfa5e001485e43df1716a0741711d9b0e
+started: 2026-07-10T03:07:17Z
   [bts] data.transportation.gov: enumerated 413 datasets, 9 aviation-ish:
   [bts]     yj5y-b2ir "Consumer Airfare Report: Table 6 - Contiguous State City-Pair Markets That Average At Least 10 Passengers Per Day"
   [bts]     tfrh-tu9e "Consumer Airfare Report: Table 1a - All U.S. Airport Pair Markets"
@@ -85,17 +85,16 @@ run: 29065871267 (2026-07-10T03:00:42Z)
   [bts] data.bts.gov/dkbd-kjgw "Population potentially exposed to passenger rail noise, 2018" cols-> origin:undefined y:undefined m:undefined pax:undefined
   [bts] data.bts.gov/3z7h-xatu "Top 25 Ports by Cruise Ship Passenger Arrivals 2023 Data" cols-> origin:undefined y:undefined m:undefined pax:undefined
   [bts] data.bts.gov/xe7p-6h9t "PTFF_Average Number of Ferry Passengers and Vehicles" cols-> origin:undefined y:year m:undefined pax:passengers
-  [bts] data.bts.gov/uxyn-8v2z "Cruise Ship Counts and Passengers by Arrival at Ports Top 25 Ports 2019 thru 2023" cols-> origin:undefined y:year m:undefined pax:total_number_of_passengers
   [bts] data.bts.gov/w8ea-nba4 "AFF - P12a - Air Carrier Fuel Efficiency by Year" cols-> origin:undefined y:year m:undefined pax:undefined
   [bts] data.bts.gov/bpqk-hyst "Commercial Aviation Departures" cols-> origin:undefined y:undefined m:undefined pax:undefined
   [bts] data.bts.gov/y5ut-ibwt "Supply Chain and Freight Indicators" cols-> origin:undefined y:year m:undefined pax:undefined
-  [bts] trying TranStats DownLoad_Table.asp (deterministic per-year extracts)
-  [bts]   2026 www.transtats.bts.gov: HTTP 500 (text/html) body: "An error occurred on the server when processing the URL. Please contact the system administrator. If you are the system administrator please click here to find out more about this error."
-  [bts]   2026 transtats.bts.gov: HTTP 500 (text/html) body: "An error occurred on the server when processing the URL. Please contact the system administrator. If you are the system administrator please click here to find out more about this error."
-  [bts]   2025 www.transtats.bts.gov: HTTP 500 (text/html) body: "An error occurred on the server when processing the URL. Please contact the system administrator. If you are the system administrator please click here to find out more about this error."
-  [bts]   2025 transtats.bts.gov: HTTP 500 (text/html) body: "An error occurred on the server when processing the URL. Please contact the system administrator. If you are the system administrator please click here to find out more about this error."
+  [bts] trying TranStats DL_SelectFields.aspx (WebForms download, per-year extracts)
+  [bts]   index lists 0 T-100 links: none
+  [bts]   index lists 0 T-100 links: none
   [bts] using TranStats PREZIP bulk files (cached extracts — merged month-first-wins)
   [bts] https://transtats.bts.gov/PREZIP/ T100-ish zip families: T_T100D_MARKET_ALL_CARRIER.zip, T_T100D_MARKET_US_CARRIER_ONLY.zip, T_T100D_SEGMENT_ALL_CARRIER.zip, T_T100D_SEGMENT_US_CARRIER_ONLY.zip, T_T100I_MARKET_ALL_CARRIER.zip, T_T100_MARKET_ALL_CARRIER.zip, T_T100_SEGMENT_ALL_CARRIER.zip, T_T100_SEGMENT_US_CARRIER_ONLY.zip
   [bts] https://transtats.bts.gov/PREZIP/: 1 T-100 segment zips, newest first (target history back to 2015)
   [bts]   896816367_T_T100_SEGMENT_ALL_CARRIER.zip: T-100 csv missing YEAR/MONTH/ORIGIN/PASSENGERS — full header: FREIGHT,UNIQUE_CARRIER,UNIQUE_CARRIER_NAME,ORIGIN_AIRPORT_ID,ORIGIN,DEST_AIRPORT_ID,DEST,AIRCRAFT_TYPE,MONTH,
-  [bts] no monthly T-100 source produced data (Socrata + DownLoad_Table + PREZIP all failed) — US airports keep last-good data
+  [bts] no monthly T-100 source produced data (Socrata + DL_SelectFields + PREZIP all failed) — US airports keep last-good data
+fetch-bts exit: 1
+finished: 2026-07-10T03:08:31Z
