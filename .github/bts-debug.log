@@ -1,5 +1,5 @@
-commit: 9248d51c5a8c04953cd86e9acec9a94657bc7792
-started: 2026-07-10T05:20:05Z
+commit: e0dcfacfc5fec2a38cbdda9287c04abd8feaf08d
+run: 29098228534 (2026-07-10T14:04:58Z)
   [bts] data.transportation.gov: enumerated 413 datasets, 9 aviation-ish:
   [bts]     yj5y-b2ir "Consumer Airfare Report: Table 6 - Contiguous State City-Pair Markets That Average At Least 10 Passengers Per Day"
   [bts]     tfrh-tu9e "Consumer Airfare Report: Table 1a - All U.S. Airport Pair Markets"
@@ -76,7 +76,6 @@ started: 2026-07-10T05:20:05Z
   [bts] data.bts.gov/xx9i-2dhw "National Census of Ferry Operators (NCFO) 2018: Segment Data" cols-> origin:undefined y:undefined m:undefined pax:undefined
   [bts] data.bts.gov/d38r-yvh5 "National Census of Ferry Operators (NCFO) 2018: Operator Segment Data" cols-> origin:undefined y:undefined m:undefined pax:passengers
   [bts] data.bts.gov/7umd-qc2k "2024 NCFO Operator Segment File" cols-> origin:undefined y:undefined m:undefined pax:passengers
-  [bts] data.bts.gov/2ygc-ds4z "2024 NCFO Segments File" cols-> origin:undefined y:undefined m:undefined pax:undefined
   [bts] data.bts.gov/3jux-kwvh "Annual Passenger Border Crossings with Michigan & New York" cols-> origin:undefined y:undefined m:undefined pax:undefined
   [bts] data.bts.gov/tchw-zxud "Passenger Indicators (weekly)" cols-> origin:undefined y:undefined m:undefined pax:undefined
   [bts] data.bts.gov/amn9-4jcb "Pocket Guide to Transportation-Daily Passenger Travel" cols-> origin:undefined y:year m:undefined pax:undefined
@@ -147,5 +146,3 @@ started: 2026-07-10T05:20:05Z
   DCA  bts  pax 135mo (latest 2026-03) atm 135 cargo 135
   MSY  bts  pax 135mo (latest 2026-03) atm 135 cargo 135
 BTS merge done — 35 US airports refreshed, 0 kept last-good.
-fetch-bts exit: 0
-finished: 2026-07-10T05:22:24Z
