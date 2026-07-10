@@ -383,4 +383,5 @@ test("formIntel: reads controls, postback targets and download-ish js off a WebF
   assert.deepEqual(i.postbacks, ["grid$ctl00"]);
   assert.ok(i.downloadish.some((c) => c.name === "btnDownload"), "download button spotted");
   assert.ok(i.jsLines.some((l) => l.includes("DownLoad_Table.asp")), "js download endpoint surfaced");
+  assert.deepEqual(i.selects.cboYear, ["2025"], "select option values captured");
 });

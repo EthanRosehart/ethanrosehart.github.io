@@ -389,7 +389,15 @@ export function formIntel(html) {
   const postbacks = [...new Set([...s.matchAll(/__doPostBack\('([^']+)'/g)].map((m) => m[1]))];
   const downloadish = controls.filter((c) => /download|dl_|btn/i.test(c.name + c.onclick + c.value));
   const jsLines = [...new Set((s.match(/[^\n{;]{0,90}(?:[Dd]ownload_?Table|\.asp\b|submit\(\))[^\n};]{0,90}/g) || []).map((l) => l.replace(/\s+/g, " ").trim()))];
-  return { controls, postbacks, downloadish, jsLines };
+  // each <select>'s option values — cboYear/cboPeriod/cboGeography drive the
+  // extract window and EVENTVALIDATION rejects values it never registered
+  const selects = {};
+  for (const m of s.matchAll(/<select\b[^>]*name=["']?([^"'\s>]+)[^>]*>([\s\S]*?)<\/select>/gi)) {
+    // a value-less <option> submits its text — capture whichever exists
+    selects[m[1]] = [...m[2].matchAll(/<option\b([^>]*)>([^<]*)/gi)]
+      .map((o) => /value=["']?([^"'>]*)/i.exec(o[1])?.[1] ?? o[2].trim());
+  }
+  return { controls, postbacks, downloadish, jsLines, selects };
 }
 
 async function fetchViaDlSelectFields() {
@@ -429,22 +437,35 @@ async function fetchViaDlSelectFields() {
       const intel = formIntel(pageHtml);
       console.log(`  [bts]   controls (${intel.controls.length}): ${intel.controls.slice(0, 60).map((c) => `${c.type}:${c.name}`).join(", ")}`);
       if (intel.postbacks.length) console.log(`  [bts]   __doPostBack targets: ${intel.postbacks.slice(0, 12).join(", ")}`);
-      if (intel.downloadish.length) console.log(`  [bts]   download-ish controls: ${intel.downloadish.map((c) => `${c.type}:${c.name}${c.onclick ? ` onclick=${c.onclick}` : ""}`).join(" | ")}`);
-      if (intel.jsLines.length) console.log(`  [bts]   download-ish js: ${intel.jsLines.slice(0, 8).join(" || ")}`);
+      for (const sel of ["cboGeography", "cboYear", "cboPeriod"]) {
+        const opts = intel.selects[sel];
+        if (opts) console.log(`  [bts]   ${sel} options (${opts.length}): ${opts.slice(0, 18).join(", ")}${opts.length > 18 ? ", …" : ""}`);
+      }
 
-      // 3) strategy matrix on the newest year with data; lock the winner.
-      // The page re-renders (not downloads) when the click isn't conveyed
-      // the way WebForms expects, so several framings are tried:
-      const btn = intel.downloadish.find((c) => ["submit", "button", "image"].includes(c.type))?.name || "btnDownload";
+      // 3) the form takes REAL controls (run 29066354287): per-column
+      // checkboxes named exactly like the fields, cboGeography/cboYear/
+      // cboPeriod selects, chkDownloadZip, and the btnDownload submit —
+      // the legacy sqlstr/varlist fields are ignored, which is why earlier
+      // posts just re-rendered the page. Option values come off the page
+      // so EVENTVALIDATION sees only values it registered.
+      const geoVal = intel.selects.cboGeography?.find((v) => /all/i.test(v)) ?? "All";
+      const periodVal = intel.selects.cboPeriod?.find((v) => /all/i.test(v)) ?? "All Months";
+      const yearOk = (y) => !intel.selects.cboYear || intel.selects.cboYear.includes(String(y));
+      const formFields = (y) => ({
+        ...hidden,
+        cboGeography: geoVal, cboYear: String(y), cboPeriod: periodVal,
+        chkDownloadZip: "on",
+        YEAR: "on", MONTH: "on", ORIGIN: "on", PASSENGERS: "on", FREIGHT: "on", DEPARTURES_PERFORMED: "on",
+        btnDownload: "Download",
+      });
       const strategies = [
-        { tag: `submit:${btn}`, url: pageUrl, fields: (y) => ({ ...hidden, ...dlQueryFields(y), [btn]: "Download" }) },
-        { tag: `eventtarget:${btn}`, url: pageUrl, fields: (y) => ({ ...hidden, __EVENTTARGET: btn, ...dlQueryFields(y) }) },
-        // the classic endpoint 500'd session-less (runs 29042555380,
-        // 29065871267); retry it carrying the live .aspx session cookies
-        { tag: "classic-asp+session", url: `${host}/DownLoad_Table.asp?Table_ID=293&Has_Group=3&Is_Zipped=0`, fields: (y) => dlQueryFields(y) },
+        { tag: "form", fields: formFields },
+        // belt-and-suspenders: same controls plus the legacy fields, in
+        // case the server still reads sqlstr for the actual query
+        { tag: "form+legacy", fields: (y) => ({ ...formFields(y), ...dlQueryFields(y) }) },
       ];
       const post = async (st, y) => {
-        const r = await fetch(st.url, {
+        const r = await fetch(pageUrl, {
           method: "POST",
           headers: { ...TT_UA, "Content-Type": "application/x-www-form-urlencoded", Referer: pageUrl, Origin: host, Cookie: cookieHeader(jar) },
           body: new URLSearchParams(st.fields(y)).toString(),
@@ -452,11 +473,13 @@ async function fetchViaDlSelectFields() {
         const ct = r.headers.get("content-type") || "?";
         const buf = Buffer.from(await r.arrayBuffer());
         const isZip = buf.length > 4 && buf[0] === 0x50 && buf[1] === 0x4b;
-        if (!r.ok || !isZip) {
-          const snippet = buf.toString("utf8", 0, 4000).replace(/<[^>]+>/g, " ").replace(/\s+/g, " ").trim().slice(0, 160);
+        const asText = isZip ? "" : buf.toString("utf8", 0, 4000);
+        const isCsv = !isZip && /^"?(YEAR|DATA_YEAR)"?,/i.test(asText.slice(0, 24));
+        if (!r.ok || (!isZip && !isCsv)) {
+          const snippet = asText.replace(/<[^>]+>/g, " ").replace(/\s+/g, " ").trim().slice(0, 220);
           throw new Error(`HTTP ${r.status} (${ct}, ${buf.length}b, zip:${isZip}) body: ${JSON.stringify(snippet)}`);
         }
-        return buf;
+        return { buf, isZip };
       };
 
       const usSet = new Set(US);
@@ -464,17 +487,18 @@ async function fetchViaDlSelectFields() {
       const thisYear = new Date().getFullYear();
       let winner = null, ok = 0, consecFail = 0;
       for (let y = thisYear; y >= T100_START_YEAR && consecFail < 2; y--) {
-        let buf = null;
+        if (!yearOk(y)) { console.log(`  [bts]   ${y}: not offered by cboYear — stopping`); break; }
+        let got = null;
         for (const st of winner ? [winner] : strategies) {
-          try { buf = await post(st, y); winner = st; break; }
+          try { got = await post(st, y); winner = st; break; }
           catch (e) { console.warn(`  [bts]   ${y} [${st.tag}]: ${e.message}`); }
         }
-        if (!buf) { consecFail++; continue; }
+        if (!got) { consecFail++; continue; }
         try {
-          const csv = unzipFirstCsv(buf).toString("utf8");
+          const csv = got.isZip ? unzipFirstCsv(got.buf).toString("utf8") : got.buf.toString("utf8");
           const { years } = aggregateT100Csv(csv, usSet, acc);
           ok++; consecFail = 0;
-          console.log(`  [bts]   ${y} [${winner.tag}]: ${(buf.length / 1e6).toFixed(1)}MB zip, years ${years.join("/") || "?"}`);
+          console.log(`  [bts]   ${y} [${winner.tag}]: ${(got.buf.length / 1e6).toFixed(1)}MB (zip:${got.isZip}), years ${years.join("/") || "?"}`);
         } catch (e) { console.warn(`  [bts]   ${y}: ${e.message}`); consecFail++; }
       }
       if (ok && Object.keys(acc).length) {
