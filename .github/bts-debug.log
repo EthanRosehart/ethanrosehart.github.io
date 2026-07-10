@@ -1,5 +1,5 @@
-commit: 8639a83591af018defd3f7edef13cee823b3f4e8
-started: 2026-07-10T05:17:07Z
+commit: 9248d51c5a8c04953cd86e9acec9a94657bc7792
+started: 2026-07-10T05:20:05Z
   [bts] data.transportation.gov: enumerated 413 datasets, 9 aviation-ish:
   [bts]     yj5y-b2ir "Consumer Airfare Report: Table 6 - Contiguous State City-Pair Markets That Average At Least 10 Passengers Per Day"
   [bts]     tfrh-tu9e "Consumer Airfare Report: Table 1a - All U.S. Airport Pair Markets"
@@ -98,22 +98,54 @@ started: 2026-07-10T05:17:07Z
   [bts]   cboGeography options (67): All, Alabama, Alaska, Alberta, Arizona, Arkansas, British Columbia, California, Colorado, Connecticut, Delaware, Florida, Georgia, Hawaii, Idaho, Illinois, Indiana, Iowa, …
   [bts]   cboYear options (37): 1990, 1991, 1992, 1993, 1994, 1995, 1996, 1997, 1998, 1999, 2000, 2001, 2002, 2003, 2004, 2005, 2006, 2007, …
   [bts]   cboPeriod options (13): All, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12
-  [bts]   2026: T-100 csv missing YEAR/MONTH/ORIGIN/PASSENGERS — full header: SYS_FIELD_NAME,FIELD_DESC
-  [bts]   2025: T-100 csv missing YEAR/MONTH/ORIGIN/PASSENGERS — full header: SYS_FIELD_NAME,FIELD_DESC
-  [bts]   index "OST_R | BTS | Transtats Data Tables" (110kB) lists 0 T-100 links: none
-  [bts]   falling back to the decoded deep link (Table_ID 293)
-  [bts]   download page: https://transtats.bts.gov/DL_SelectFields.aspx?gnoyr_VQ=FMG&QO_fu146_anzr=Nv4%20Pn44vr45
-  [bts]   page "Download page" — 7 hidden fields (__EVENTTARGET, __EVENTARGUMENT, __LASTFOCUS, __VIEWSTATE, __VIEWSTATEGENERATOR, __EVENTVALIDATION)
-  [bts]   controls (65): search:query, hidden:affiliate, submit:edit-submit, text:txtSearch, s:cboGeography, s:cboYear, s:cboPeriod, checkbox:chkAllVars, checkbox:chkAllGroups, checkbox:chkDownloadZip, checkbox:chkshowNull, checkbox:chkMergeSub, checkbox:chkDocument, checkbox:chkTermDef, submit:btnDownload, checkbox:DEPARTURES_SCHEDULED, checkbox:DEPARTURES_PERFORMED, checkbox:PAYLOAD, checkbox:SEATS, checkbox:PASSENGERS, checkbox:FREIGHT, checkbox:MAIL, checkbox:DISTANCE, checkbox:RAMP_TO_RAMP, checkbox:AIR_TIME, checkbox:UNIQUE_CARRIER, checkbox:AIRLINE_ID, checkbox:UNIQUE_CARRIER_NAME, checkbox:UNIQUE_CARRIER_ENTITY, checkbox:REGION, checkbox:CARRIER, checkbox:CARRIER_NAME, checkbox:CARRIER_GROUP, checkbox:CARRIER_GROUP_NEW, checkbox:ORIGIN_AIRPORT_ID, checkbox:ORIGIN_AIRPORT_SEQ_ID, checkbox:ORIGIN_CITY_MARKET_ID, checkbox:ORIGIN, checkbox:ORIGIN_CITY_NAME, checkbox:ORIGIN_STATE_ABR, checkbox:ORIGIN_STATE_FIPS, checkbox:ORIGIN_STATE_NM, checkbox:ORIGIN_COUNTRY, checkbox:ORIGIN_COUNTRY_NAME, checkbox:ORIGIN_WAC, checkbox:DEST_AIRPORT_ID, checkbox:DEST_AIRPORT_SEQ_ID, checkbox:DEST_CITY_MARKET_ID, checkbox:DEST, checkbox:DEST_CITY_NAME, checkbox:DEST_STATE_ABR, checkbox:DEST_STATE_FIPS, checkbox:DEST_STATE_NM, checkbox:DEST_COUNTRY, checkbox:DEST_COUNTRY_NAME, checkbox:DEST_WAC, checkbox:AIRCRAFT_GROUP, checkbox:AIRCRAFT_TYPE, checkbox:AIRCRAFT_CONFIG, checkbox:YEAR
-  [bts]   cboGeography options (67): All, Alabama, Alaska, Alberta, Arizona, Arkansas, British Columbia, California, Colorado, Connecticut, Delaware, Florida, Georgia, Hawaii, Idaho, Illinois, Indiana, Iowa, …
-  [bts]   cboYear options (37): 1990, 1991, 1992, 1993, 1994, 1995, 1996, 1997, 1998, 1999, 2000, 2001, 2002, 2003, 2004, 2005, 2006, 2007, …
-  [bts]   cboPeriod options (13): All, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12
-  [bts]   2026: T-100 csv missing YEAR/MONTH/ORIGIN/PASSENGERS — full header: SYS_FIELD_NAME,FIELD_DESC
-  [bts]   2025: T-100 csv missing YEAR/MONTH/ORIGIN/PASSENGERS — full header: SYS_FIELD_NAME,FIELD_DESC
-  [bts] using TranStats PREZIP bulk files (cached extracts — merged month-first-wins)
-  [bts] https://transtats.bts.gov/PREZIP/ T100-ish zip families: T_T100D_MARKET_ALL_CARRIER.zip, T_T100D_MARKET_US_CARRIER_ONLY.zip, T_T100D_SEGMENT_ALL_CARRIER.zip, T_T100D_SEGMENT_US_CARRIER_ONLY.zip, T_T100I_MARKET_ALL_CARRIER.zip, T_T100_MARKET_ALL_CARRIER.zip, T_T100_SEGMENT_ALL_CARRIER.zip, T_T100_SEGMENT_US_CARRIER_ONLY.zip
-  [bts] https://transtats.bts.gov/PREZIP/: 1 T-100 segment zips, newest first (target history back to 2015)
-  [bts]   896816367_T_T100_SEGMENT_ALL_CARRIER.zip: T-100 csv missing YEAR/MONTH/ORIGIN/PASSENGERS — full header: FREIGHT,UNIQUE_CARRIER,UNIQUE_CARRIER_NAME,ORIGIN_AIRPORT_ID,ORIGIN,DEST_AIRPORT_ID,DEST,AIRCRAFT_TYPE,MONTH,
-  [bts] no monthly T-100 source produced data (Socrata + DL_SelectFields + PREZIP all failed) — US airports keep last-good data
-fetch-bts exit: 1
-finished: 2026-07-10T05:17:58Z
+  [bts]   2026 [form]: 0.8MB, T_T100_SEGMENT_ALL_CARRIER.csv, years 2026
+  [bts]   2025 [form]: 3.1MB, T_T100_SEGMENT_ALL_CARRIER.csv, years 2025
+  [bts]   2024 [form]: 3.0MB, T_T100_SEGMENT_ALL_CARRIER.csv, years 2024
+  [bts]   2023 [form]: 2.9MB, T_T100_SEGMENT_ALL_CARRIER.csv, years 2023
+  [bts]   2022 [form]: 2.8MB, T_T100_SEGMENT_ALL_CARRIER.csv, years 2022
+  [bts]   2021 [form]: 2.5MB, T_T100_SEGMENT_ALL_CARRIER.csv, years 2021
+  [bts]   2020 [form]: 2.0MB, T_T100_SEGMENT_ALL_CARRIER.csv, years 2020
+  [bts]   2019 [form]: 2.8MB, T_T100_SEGMENT_ALL_CARRIER.csv, years 2019
+  [bts]   2018 [form]: 2.7MB, T_T100_SEGMENT_ALL_CARRIER.csv, years 2018
+  [bts]   2017 [form]: 2.7MB, T_T100_SEGMENT_ALL_CARRIER.csv, years 2017
+  [bts]   2016 [form]: 2.7MB, T_T100_SEGMENT_ALL_CARRIER.csv, years 2016
+  [bts]   2015 [form]: 2.6MB, T_T100_SEGMENT_ALL_CARRIER.csv, years 2015
+  [bts] DL_SelectFields done — 35 airports over 12 year files
+  ATL  bts  pax 135mo (latest 2026-03) atm 135 cargo 135
+  DFW  bts  pax 135mo (latest 2026-03) atm 135 cargo 135
+  DEN  bts  pax 135mo (latest 2026-03) atm 135 cargo 135
+  ORD  bts  pax 135mo (latest 2026-03) atm 135 cargo 135
+  LAX  bts  pax 135mo (latest 2026-03) atm 135 cargo 135
+  CLT  bts  pax 135mo (latest 2026-03) atm 135 cargo 135
+  LAS  bts  pax 135mo (latest 2026-03) atm 135 cargo 135
+  PHX  bts  pax 135mo (latest 2026-03) atm 135 cargo 135
+  MCO  bts  pax 135mo (latest 2026-03) atm 135 cargo 135
+  SEA  bts  pax 135mo (latest 2026-03) atm 135 cargo 135
+  MIA  bts  pax 135mo (latest 2026-03) atm 135 cargo 135
+  IAH  bts  pax 135mo (latest 2026-03) atm 135 cargo 135
+  JFK  bts  pax 135mo (latest 2026-03) atm 135 cargo 135
+  EWR  bts  pax 135mo (latest 2026-03) atm 135 cargo 135
+  FLL  bts  pax 135mo (latest 2026-03) atm 135 cargo 135
+  MSP  bts  pax 135mo (latest 2026-03) atm 135 cargo 135
+  SFO  bts  pax 135mo (latest 2026-03) atm 135 cargo 135
+  DTW  bts  pax 135mo (latest 2026-03) atm 135 cargo 135
+  BOS  bts  pax 135mo (latest 2026-03) atm 135 cargo 135
+  PHL  bts  pax 135mo (latest 2026-03) atm 135 cargo 135
+  LGA  bts  pax 135mo (latest 2026-03) atm 135 cargo 135
+  IAD  bts  pax 135mo (latest 2026-03) atm 135 cargo 135
+  BWI  bts  pax 135mo (latest 2026-03) atm 135 cargo 135
+  TPA  bts  pax 135mo (latest 2026-03) atm 135 cargo 135
+  SAN  bts  pax 135mo (latest 2026-03) atm 135 cargo 135
+  AUS  bts  pax 135mo (latest 2026-03) atm 135 cargo 135
+  BNA  bts  pax 135mo (latest 2026-03) atm 135 cargo 135
+  MDW  bts  pax 135mo (latest 2026-03) atm 135 cargo 135
+  HNL  bts  pax 135mo (latest 2026-03) atm 135 cargo 135
+  DAL  bts  pax 135mo (latest 2026-03) atm 135 cargo 135
+  PDX  bts  pax 135mo (latest 2026-03) atm 135 cargo 135
+  STL  bts  pax 135mo (latest 2026-03) atm 135 cargo 135
+  SLC  bts  pax 135mo (latest 2026-03) atm 135 cargo 135
+  DCA  bts  pax 135mo (latest 2026-03) atm 135 cargo 135
+  MSY  bts  pax 135mo (latest 2026-03) atm 135 cargo 135
+BTS merge done — 35 US airports refreshed, 0 kept last-good.
+fetch-bts exit: 0
+finished: 2026-07-10T05:22:24Z
