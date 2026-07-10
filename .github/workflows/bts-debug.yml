@@ -8,6 +8,7 @@ name: BTS debug (temporary)
 # says [skip ci] and touches no watched path, so it cannot retrigger.
 
 on:
+  workflow_dispatch: {}
   push:
     branches: [claude/glidepath-architecture-roadmap-pffmye]
     paths:
