@@ -358,7 +358,8 @@ test("findSegmentAllCarriersHref: picks the all-carrier segment table off the da
   const html = `
     <a href="DL_SelectFields.aspx?gnoyr_VQ=FLM&amp;QO_fu146_anzr=Nv4">T-100 Domestic Segment (U.S. Carriers)</a>
     <a href="DL_SelectFields.aspx?gnoyr_VQ=FMF&amp;QO_fu146_anzr=Nv4">T-100 Market (All Carriers)</a>
-    <a href="DL_SelectFields.aspx?gnoyr_VQ=FMG&amp;QO_fu146_anzr=Nv4">T-100 Segment (All Carriers)</a>
+    <a href="DL_SelectFields.aspx?gnoyr_VQ=FMG&amp;QO_fu146_anzr=Nv4"><span class="t">T-100 Segment
+      (All Carriers)</span></a>
     <a href="other.aspx">Airline Fuel Cost</a>`;
   const { href, seen } = findSegmentAllCarriersHref(html);
   assert.equal(href, "DL_SelectFields.aspx?gnoyr_VQ=FMG&QO_fu146_anzr=Nv4", "combined segment table chosen, entities decoded");

@@ -339,13 +339,23 @@ export function parseHiddenInputs(html) {
 }
 
 /* the T-100 Segment (All Carriers) download-page href from the database
-   index — anchor text is readable even though hrefs are obfuscated */
+   index — anchor text is readable even though hrefs are obfuscated.
+   Run 29066103806 matched nothing because anchors nest markup inside;
+   the inner HTML is captured lazily and stripped of tags before testing. */
 export function findSegmentAllCarriersHref(html) {
-  const anchors = [...String(html).matchAll(/<a\s[^>]*href=["']?([^"'\s>]+)["']?[^>]*>([^<]{0,120})<\/a>/gi)];
-  const t100 = anchors.filter(([, , text]) => /T-?\s?100/i.test(text));
-  const hit = t100.find(([, , text]) => /Segment/i.test(text) && /All\s*Carriers/i.test(text) && !/U\.?S\.?\s*Carriers/i.test(text));
-  return { href: hit ? hit[1].replace(/&amp;/g, "&") : null, seen: t100.map(([, href, text]) => `${text.trim()} -> ${href.slice(0, 80)}`) };
+  const anchors = [...String(html).matchAll(/<a\s[^>]*href=["']?([^"'\s>]+)["']?[^>]*>([\s\S]{0,400}?)<\/a>/gi)]
+    .map(([, href, inner]) => [href, inner.replace(/<[^>]+>/g, " ").replace(/\s+/g, " ").trim()]);
+  const t100 = anchors.filter(([, text]) => /T-?\s?100/i.test(text));
+  const hit = t100.find(([, text]) => /Segment/i.test(text) && /All\s*Carriers/i.test(text) && !/U\.?S\.?\s*Carriers/i.test(text));
+  return { href: hit ? hit[0].replace(/&amp;/g, "&") : null, seen: t100.map(([href, text]) => `${text} -> ${href.slice(0, 80)}`) };
 }
+
+/* deterministic fallback if index discovery fails: TranStats obfuscates
+   query params with ROT13 for letters and chr(68+d) for digits, so
+   Table_ID 293 encodes as "FMG" and "Air Carriers" as "Nv4 Pn44vr45"
+   (r→4, s→5 ride along in the letter map). Verified against circulating
+   TranStats deep links. */
+const DL_PAGE_FALLBACK = "/DL_SelectFields.aspx?gnoyr_VQ=FMG&QO_fu146_anzr=Nv4%20Pn44vr45";
 
 function dlQueryFields(y) {
   const sql = `SELECT YEAR,MONTH,ORIGIN,PASSENGERS,FREIGHT,DEPARTURES_PERFORMED FROM T_T100_SEGMENT_ALL_CARRIER WHERE YEAR=${y}`;
@@ -366,13 +376,23 @@ async function fetchViaDlSelectFields() {
   for (const host of DT_HOSTS) {
     try {
       const jar = {};
-      // 1) locate the download page from the database index
-      const ir = await fetch(`${host}/Tables.asp?DB_ID=111`, { headers: TT_UA });
-      takeCookies(ir, jar);
-      if (!ir.ok) { console.warn(`  [bts]   ${host.replace("https://", "")} Tables.asp?DB_ID=111: HTTP ${ir.status}`); continue; }
-      const { href, seen } = findSegmentAllCarriersHref(await ir.text());
-      console.log(`  [bts]   index lists ${seen.length} T-100 links${href ? "" : `: ${seen.join(" | ") || "none"}`}`);
-      if (!href) continue;
+      // 1) locate the download page from the database index; if the index
+      // yields nothing (run 29066103806: 0 anchors matched), fall back to
+      // the decoded deep link — FMG == Table_ID 293, see DL_PAGE_FALLBACK
+      let href = null;
+      try {
+        const ir = await fetch(`${host}/Tables.asp?DB_ID=111`, { headers: TT_UA });
+        takeCookies(ir, jar);
+        if (!ir.ok) console.warn(`  [bts]   ${host.replace("https://", "")} Tables.asp?DB_ID=111: HTTP ${ir.status}`);
+        else {
+          const ihtml = await ir.text();
+          const found = findSegmentAllCarriersHref(ihtml);
+          href = found.href;
+          const ititle = /<title>([^<]*)<\/title>/i.exec(ihtml)?.[1]?.trim() || "?";
+          console.log(`  [bts]   index "${ititle}" (${(ihtml.length / 1e3).toFixed(0)}kB) lists ${found.seen.length} T-100 links${href ? "" : `: ${found.seen.slice(0, 12).join(" | ") || "none"}`}`);
+        }
+      } catch (e) { console.warn(`  [bts]   index fetch failed: ${e.message}`); }
+      if (!href) { href = DL_PAGE_FALLBACK; console.log("  [bts]   falling back to the decoded deep link (Table_ID 293)"); }
       const pageUrl = new URL(href, host + "/").toString();
       console.log(`  [bts]   download page: ${pageUrl}`);
 
