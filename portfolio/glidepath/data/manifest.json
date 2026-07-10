@@ -1,5 +1,5 @@
 {
-  "generatedAt": "2026-07-10T07:01:20.781Z",
+  "generatedAt": "2026-07-10T16:11:30.779Z",
   "note": "Provenance manifest for every snapshot under data/. Rebuilt at the end of each nightly refresh (scripts/build-manifest.mjs).",
   "upstreams": {
     "openflights": {
@@ -17,6 +17,11 @@
       "url": "https://www.statcan.gc.ca",
       "terms": "Statistics Canada Open Licence"
     },
+    "bts": {
+      "source": "US DOT BTS T-100 segment, all carriers (TranStats download form, per-year extracts)",
+      "url": "https://www.transtats.bts.gov",
+      "terms": "U.S. Government work — public domain"
+    },
     "worldbank": {
       "source": "World Bank Open Data Indicators API",
       "url": "https://data.worldbank.org",
@@ -30,37 +35,38 @@
   },
   "snapshots": {
     "activity-index.json": {
-      "generatedAt": "2026-07-10T06:54:10.795Z",
-      "airports": 78,
+      "generatedAt": "2026-07-10T16:02:46.852Z",
+      "airports": 113,
       "airportsBySource": {
+        "bts": 35,
         "eurostat": 70,
         "statcan": 8
       }
     },
     "series/": {
-      "files": 78
+      "files": 113
     },
     "airports.json": {
-      "generatedAt": "2026-07-10T06:53:49.997Z",
-      "airports": 78,
+      "generatedAt": "2026-07-10T15:59:39.580Z",
+      "airports": 113,
       "upstream": "openflights"
     },
     "macro.json": {
-      "generatedAt": "2026-07-10T06:54:12.036Z",
+      "generatedAt": "2026-07-10T16:02:48.062Z",
       "countries": 31,
       "upstream": "worldbank"
     },
     "imf-weo.json": {
-      "generatedAt": "2026-07-10T06:54:12.682Z",
+      "generatedAt": "2026-07-10T16:02:48.828Z",
       "countries": 31,
       "upstream": "imf"
     },
     "forecast-meta.json": {
-      "generatedAt": "2026-07-10T07:01:20.418694+00:00",
+      "generatedAt": "2026-07-10T16:11:30.317080+00:00",
       "model": "Meta Prophet (additive trend + multiplicative yearly + country holidays + COVID 2020-21 events + GDP/capita regressor where available)"
     },
     "forecasts/": {
-      "files": 78
+      "files": 113
     }
   }
 }
