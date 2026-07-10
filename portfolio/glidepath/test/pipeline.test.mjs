@@ -367,3 +367,20 @@ test("findSegmentAllCarriersHref: picks the all-carrier segment table off the da
   const none = findSegmentAllCarriersHref("<a href='x.aspx'>T-100 Domestic Segment (U.S. Carriers)</a>");
   assert.equal(none.href, null, "US-carriers-only table never mistaken for all-carriers");
 });
+
+test("formIntel: reads controls, postback targets and download-ish js off a WebForms page", async () => {
+  const { formIntel } = await import("../scripts/fetch-bts.mjs");
+  const html = `
+    <input type="hidden" name="__VIEWSTATE" value="x"/>
+    <select name="cboYear"><option>2025</option></select>
+    <input type="checkbox" id="chkAllVars"/>
+    <button type="button" id="btnDownload" onclick="tryDownload(1)">Download</button>
+    <script>function tryDownload(z){ form.action="DownLoad_Table.asp?Table_ID=293"; form.submit(); }
+    __doPostBack('grid$ctl00','')</script>`;
+  const i = formIntel(html);
+  assert.ok(i.controls.some((c) => c.name === "cboYear"), "selects captured");
+  assert.ok(!i.controls.some((c) => c.name === "__VIEWSTATE"), "hidden __ fields excluded");
+  assert.deepEqual(i.postbacks, ["grid$ctl00"]);
+  assert.ok(i.downloadish.some((c) => c.name === "btnDownload"), "download button spotted");
+  assert.ok(i.jsLines.some((l) => l.includes("DownLoad_Table.asp")), "js download endpoint surfaced");
+});

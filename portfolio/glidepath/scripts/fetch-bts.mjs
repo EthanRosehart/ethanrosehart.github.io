@@ -371,6 +371,27 @@ function dlQueryFields(y) {
   };
 }
 
+/* named form controls + download-related JS from the download page —
+   run 29066216819 got the page but every POST just re-rendered it, so
+   the exact control names / postback contract must be read off the page
+   itself. Exported for tests. */
+export function formIntel(html) {
+  const s = String(html);
+  const controls = [...s.matchAll(/<(input|select|button)\b[^>]*>/gi)]
+    .map(([tag]) => {
+      const type = /type=["']?(\w+)/i.exec(tag)?.[1]?.toLowerCase() || "";
+      const name = /name=["']?([^"'\s>]+)/i.exec(tag)?.[1] || /id=["']?([^"'\s>]+)/i.exec(tag)?.[1] || "";
+      const value = /value=["']([^"']{0,40})/i.exec(tag)?.[1] || "";
+      const onclick = /onclick=["']([^"']{0,80})/i.exec(tag)?.[1] || "";
+      return { type: type || tag[1], name, value, onclick };
+    })
+    .filter((c) => c.name && !c.name.startsWith("__"));
+  const postbacks = [...new Set([...s.matchAll(/__doPostBack\('([^']+)'/g)].map((m) => m[1]))];
+  const downloadish = controls.filter((c) => /download|dl_|btn/i.test(c.name + c.onclick + c.value));
+  const jsLines = [...new Set((s.match(/[^\n{;]{0,90}(?:[Dd]ownload_?Table|\.asp\b|submit\(\))[^\n};]{0,90}/g) || []).map((l) => l.replace(/\s+/g, " ").trim()))];
+  return { controls, postbacks, downloadish, jsLines };
+}
+
 async function fetchViaDlSelectFields() {
   console.log("  [bts] trying TranStats DL_SelectFields.aspx (WebForms download, per-year extracts)");
   for (const host of DT_HOSTS) {
@@ -396,7 +417,8 @@ async function fetchViaDlSelectFields() {
       const pageUrl = new URL(href, host + "/").toString();
       console.log(`  [bts]   download page: ${pageUrl}`);
 
-      // 2) GET the page — hidden WebForms state + session cookie
+      // 2) GET the page — hidden WebForms state + session cookie — and read
+      // the form contract off it
       const pr = await fetch(pageUrl, { headers: { ...TT_UA, Cookie: cookieHeader(jar) } });
       takeCookies(pr, jar);
       if (!pr.ok) { console.warn(`  [bts]   download page: HTTP ${pr.status}`); continue; }
@@ -404,32 +426,55 @@ async function fetchViaDlSelectFields() {
       const hidden = parseHiddenInputs(pageHtml);
       const title = /<title>([^<]*)<\/title>/i.exec(pageHtml)?.[1]?.trim() || "?";
       console.log(`  [bts]   page "${title}" — ${Object.keys(hidden).length} hidden fields (${Object.keys(hidden).filter((k) => k.startsWith("__")).join(", ") || "no __ fields"})`);
-      if (!hidden.__VIEWSTATE) console.warn("  [bts]   no __VIEWSTATE on the page — posting anyway with what's there");
+      const intel = formIntel(pageHtml);
+      console.log(`  [bts]   controls (${intel.controls.length}): ${intel.controls.slice(0, 60).map((c) => `${c.type}:${c.name}`).join(", ")}`);
+      if (intel.postbacks.length) console.log(`  [bts]   __doPostBack targets: ${intel.postbacks.slice(0, 12).join(", ")}`);
+      if (intel.downloadish.length) console.log(`  [bts]   download-ish controls: ${intel.downloadish.map((c) => `${c.type}:${c.name}${c.onclick ? ` onclick=${c.onclick}` : ""}`).join(" | ")}`);
+      if (intel.jsLines.length) console.log(`  [bts]   download-ish js: ${intel.jsLines.slice(0, 8).join(" || ")}`);
 
-      // 3) one POST per year, newest first
+      // 3) strategy matrix on the newest year with data; lock the winner.
+      // The page re-renders (not downloads) when the click isn't conveyed
+      // the way WebForms expects, so several framings are tried:
+      const btn = intel.downloadish.find((c) => ["submit", "button", "image"].includes(c.type))?.name || "btnDownload";
+      const strategies = [
+        { tag: `submit:${btn}`, url: pageUrl, fields: (y) => ({ ...hidden, ...dlQueryFields(y), [btn]: "Download" }) },
+        { tag: `eventtarget:${btn}`, url: pageUrl, fields: (y) => ({ ...hidden, __EVENTTARGET: btn, ...dlQueryFields(y) }) },
+        // the classic endpoint 500'd session-less (runs 29042555380,
+        // 29065871267); retry it carrying the live .aspx session cookies
+        { tag: "classic-asp+session", url: `${host}/DownLoad_Table.asp?Table_ID=293&Has_Group=3&Is_Zipped=0`, fields: (y) => dlQueryFields(y) },
+      ];
+      const post = async (st, y) => {
+        const r = await fetch(st.url, {
+          method: "POST",
+          headers: { ...TT_UA, "Content-Type": "application/x-www-form-urlencoded", Referer: pageUrl, Origin: host, Cookie: cookieHeader(jar) },
+          body: new URLSearchParams(st.fields(y)).toString(),
+        });
+        const ct = r.headers.get("content-type") || "?";
+        const buf = Buffer.from(await r.arrayBuffer());
+        const isZip = buf.length > 4 && buf[0] === 0x50 && buf[1] === 0x4b;
+        if (!r.ok || !isZip) {
+          const snippet = buf.toString("utf8", 0, 4000).replace(/<[^>]+>/g, " ").replace(/\s+/g, " ").trim().slice(0, 160);
+          throw new Error(`HTTP ${r.status} (${ct}, ${buf.length}b, zip:${isZip}) body: ${JSON.stringify(snippet)}`);
+        }
+        return buf;
+      };
+
       const usSet = new Set(US);
       const acc = {};
       const thisYear = new Date().getFullYear();
-      let ok = 0, consecFail = 0;
+      let winner = null, ok = 0, consecFail = 0;
       for (let y = thisYear; y >= T100_START_YEAR && consecFail < 2; y--) {
+        let buf = null;
+        for (const st of winner ? [winner] : strategies) {
+          try { buf = await post(st, y); winner = st; break; }
+          catch (e) { console.warn(`  [bts]   ${y} [${st.tag}]: ${e.message}`); }
+        }
+        if (!buf) { consecFail++; continue; }
         try {
-          const body = new URLSearchParams({ ...hidden, ...dlQueryFields(y), btnDownload: "Download" }).toString();
-          const r = await fetch(pageUrl, {
-            method: "POST",
-            headers: { ...TT_UA, "Content-Type": "application/x-www-form-urlencoded", Referer: pageUrl, Origin: host, Cookie: cookieHeader(jar) },
-            body,
-          });
-          const ct = r.headers.get("content-type") || "?";
-          const buf = Buffer.from(await r.arrayBuffer());
-          const isZip = buf.length > 4 && buf[0] === 0x50 && buf[1] === 0x4b;
-          if (!r.ok || !isZip) {
-            const snippet = buf.toString("utf8", 0, 4000).replace(/<[^>]+>/g, " ").replace(/\s+/g, " ").trim().slice(0, 300);
-            throw new Error(`HTTP ${r.status} (${ct}, ${buf.length}b, zip:${isZip}) body: ${JSON.stringify(snippet)}`);
-          }
           const csv = unzipFirstCsv(buf).toString("utf8");
           const { years } = aggregateT100Csv(csv, usSet, acc);
           ok++; consecFail = 0;
-          console.log(`  [bts]   ${y}: ${(buf.length / 1e6).toFixed(1)}MB zip, years ${years.join("/") || "?"}`);
+          console.log(`  [bts]   ${y} [${winner.tag}]: ${(buf.length / 1e6).toFixed(1)}MB zip, years ${years.join("/") || "?"}`);
         } catch (e) { console.warn(`  [bts]   ${y}: ${e.message}`); consecFail++; }
       }
       if (ok && Object.keys(acc).length) {
