@@ -28,6 +28,14 @@ Notable changes to Glidepath. Dates are UTC.
   forecast-vs-realized tracking over time.
 
 ### Data platform (Phase 2, offline-verifiable subset)
+- US measures restated to the total-passengers convention: T-100 rows are now
+  aggregated on BOTH segment ends — pax = enplaned + deplaned, movements =
+  departures + arrivals, freight = loaded + unloaded — matching Eurostat's
+  PAS_CRD / CAF_PAS / FRM_LD_NLD definitions. The first cut summed origins
+  only, i.e. enplanements (~half an airport's published total: ATL showed
+  51.5M for 2025 against ~104M actual), which skewed cross-market comparisons
+  and made user-entered capacity caps ~2x off. One-time restatement flags in
+  check-snapshots are expected on the first refresh after this lands.
 - US airports live: `fetch-bts.mjs` pulls monthly T-100 segment data (all
   carriers) straight from the TranStats download form — one per-year zip back
   to 2015, WebForms state + session cookies handled in-script, data CSV picked

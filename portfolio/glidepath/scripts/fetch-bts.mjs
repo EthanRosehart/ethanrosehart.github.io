@@ -62,6 +62,7 @@ export function mapCols(keys) {
   const find = (re) => keys.find((k) => re.test(k));
   return {
     origin: find(/^origin$/i) || find(/origin.*(code|airport)/i) || find(/^orig/i),
+    dest: find(/^dest$/i) || find(/dest.*(code|airport)/i) || find(/^dest/i),
     month: find(/^month$/i),
     year: find(/^year$/i),
     pax: find(/^passengers?$/i) || find(/passenger/i),
@@ -140,8 +141,10 @@ async function pickDataset() {
         keys = Object.keys(rows[0] || {});
       } catch { continue; }
       const m = mapCols(keys);
-      console.log(`  [bts] ${domain}/${c.id} "${c.name}" cols-> origin:${m.origin} y:${m.year} m:${m.month} pax:${m.pax}`);
-      if (m.origin && m.month && m.year && m.pax) return { domain, id: c.id, name: c.name, m };
+      console.log(`  [bts] ${domain}/${c.id} "${c.name}" cols-> origin:${m.origin} dest:${m.dest} y:${m.year} m:${m.month} pax:${m.pax}`);
+      // dest is required: an origin-only table could only yield enplanements,
+      // which would silently break the catalogue's total-passengers convention
+      if (m.origin && m.dest && m.month && m.year && m.pax) return { domain, id: c.id, name: c.name, m };
       // near-miss diagnostics: a monthly table whose airport/pax columns our
       // mapper didn't recognize is a mapping bug we can fix from the log —
       // dump its full schema + a sample row so the next iteration doesn't guess
@@ -273,26 +276,42 @@ export function aggregateT100Csv(csv, usSet, acc = {}) {
   const lines = String(csv).replace(/^﻿/, "").split(/\r?\n/);
   const header = parseCsvLine(lines[0] || "").map((h) => h.trim().toUpperCase());
   const iY = header.indexOf("YEAR") >= 0 ? header.indexOf("YEAR") : header.indexOf("DATA_YEAR");
-  const iM = header.indexOf("MONTH"), iO = header.indexOf("ORIGIN");
+  const iM = header.indexOf("MONTH"), iO = header.indexOf("ORIGIN"), iDst = header.indexOf("DEST");
   const iP = header.indexOf("PASSENGERS"), iF = header.indexOf("FREIGHT"), iD = header.indexOf("DEPARTURES_PERFORMED");
-  if (iY < 0 || iM < 0 || iO < 0 || iP < 0) {
-    // full header, deliberately — run 29033499468 truncated this and cost an iteration
-    throw new Error("T-100 csv missing YEAR/MONTH/ORIGIN/PASSENGERS — full header: " + header.join(","));
+  if (iY < 0 || iM < 0 || iO < 0 || iP < 0 || iDst < 0) {
+    // full header, deliberately — run 29033499468 truncated this and cost an
+    // iteration. DEST is required: origin-only aggregation yields
+    // ENPLANEMENTS, not the total-passengers convention the rest of the
+    // catalogue uses (see the both-sides note below).
+    throw new Error("T-100 csv missing YEAR/MONTH/ORIGIN/DEST/PASSENGERS — full header: " + header.join(","));
   }
   const years = new Set();
   for (let i = 1; i < lines.length; i++) {
     if (!lines[i]) continue;
     const c = parseCsvLine(lines[i]);
-    const o = (c[iO] || "").trim();
-    if (!usSet.has(o)) continue;
+    const o = (c[iO] || "").trim(), d = (c[iDst] || "").trim();
+    const oIn = usSet.has(o), dIn = usSet.has(d);
+    if (!oIn && !dIn) continue;
     const y = +c[iY], m = +c[iM];
     if (!(y >= 1980 && y <= 2100) || !(m >= 1 && m <= 12)) continue;
     years.add(y);
     const ym = `${y}-${String(m).padStart(2, "0")}`;
-    const a = acc[o] || (acc[o] = { pax: {}, atm: {}, cargo: {} });
-    a.pax[ym] = (a.pax[ym] || 0) + (+c[iP] || 0);
-    if (iD >= 0) a.atm[ym] = (a.atm[ym] || 0) + (+c[iD] || 0);
-    if (iF >= 0) a.cargo[ym] = (a.cargo[ym] || 0) + (+c[iF] || 0) * LB_TO_T;
+    const pax = +c[iP] || 0;
+    const dep = iD >= 0 ? +c[iD] || 0 : null;
+    const frt = iF >= 0 ? (+c[iF] || 0) * LB_TO_T : null;
+    // both sides of every segment, so the measures match the rest of the
+    // catalogue (Eurostat PAS_CRD / CAF_PAS / FRM_LD_NLD conventions):
+    //   pax    = enplaned at ORIGIN + deplaned at DEST  (total passengers)
+    //   atm    = departures at ORIGIN + arrivals at DEST (total movements)
+    //   cargo  = tonnes loaded at ORIGIN + unloaded at DEST (handled freight)
+    // Origin-only sums are ENPLANEMENTS — half an airport's published total.
+    for (const [code, hit] of [[o, oIn], [d, dIn]]) {
+      if (!hit) continue;
+      const a = acc[code] || (acc[code] = { pax: {}, atm: {}, cargo: {} });
+      a.pax[ym] = (a.pax[ym] || 0) + pax;
+      if (dep != null) a.atm[ym] = (a.atm[ym] || 0) + dep;
+      if (frt != null) a.cargo[ym] = (a.cargo[ym] || 0) + frt;
+    }
   }
   return { acc, years: [...years].sort((a, b) => a - b) };
 }
@@ -386,13 +405,13 @@ export function findSegmentAllCarriersHref(html) {
 const DL_PAGE_FALLBACK = "/DL_SelectFields.aspx?gnoyr_VQ=FMG&QO_fu146_anzr=Nv4%20Pn44vr45";
 
 function dlQueryFields(y) {
-  const sql = `SELECT YEAR,MONTH,ORIGIN,PASSENGERS,FREIGHT,DEPARTURES_PERFORMED FROM T_T100_SEGMENT_ALL_CARRIER WHERE YEAR=${y}`;
+  const sql = `SELECT YEAR,MONTH,ORIGIN,DEST,PASSENGERS,FREIGHT,DEPARTURES_PERFORMED FROM T_T100_SEGMENT_ALL_CARRIER WHERE YEAR=${y}`;
   return {
     UserTableName: "T_100_Segment_All_Carrier",
     DBShortName: "Air_Carriers",
     RawDataTable: "T_T100_SEGMENT_ALL_CARRIER",
     sqlstr: " " + sql,
-    varlist: "YEAR,MONTH,ORIGIN,PASSENGERS,FREIGHT,DEPARTURES_PERFORMED",
+    varlist: "YEAR,MONTH,ORIGIN,DEST,PASSENGERS,FREIGHT,DEPARTURES_PERFORMED",
     grouplist: "", suml: "", sumRegion: "", filter1: "title=", filter2: "title=",
     geo: "All ", time: "All Months", timename: "Month",
     GEOGRAPHY: "All", XYEAR: String(y), FREQUENCY: "All",
@@ -483,7 +502,7 @@ async function fetchViaDlSelectFields() {
         ...hidden,
         cboGeography: geoVal, cboYear: String(y), cboPeriod: periodVal,
         chkDownloadZip: "on",
-        YEAR: "on", MONTH: "on", ORIGIN: "on", PASSENGERS: "on", FREIGHT: "on", DEPARTURES_PERFORMED: "on",
+        YEAR: "on", MONTH: "on", ORIGIN: "on", DEST: "on", PASSENGERS: "on", FREIGHT: "on", DEPARTURES_PERFORMED: "on",
         btnDownload: "Download",
       });
       const strategies = [
@@ -591,10 +610,21 @@ async function seriesFor(ds, code) {
   const sel = [m.year, m.month, `sum(${m.pax}) as pax`,
     m.freight ? `sum(${m.freight}) as freight` : null,
     m.flights ? `sum(${m.flights}) as flights` : null].filter(Boolean).join(",");
-  const url = `https://${domain}/resource/${id}.json?$select=${encodeURIComponent(sel)}` +
-    `&$where=${encodeURIComponent(`${m.origin}='${code}'`)}` +
-    `&$group=${encodeURIComponent(`${m.year},${m.month}`)}&$limit=5000`;
-  return decodeRows(await jget(url));
+  const side = async (col) => {
+    const url = `https://${domain}/resource/${id}.json?$select=${encodeURIComponent(sel)}` +
+      `&$where=${encodeURIComponent(`${col}='${code}'`)}` +
+      `&$group=${encodeURIComponent(`${m.year},${m.month}`)}&$limit=5000`;
+    return decodeRows(await jget(url));
+  };
+  // both directions, same convention as the DL_SelectFields route: totals
+  // (enplaned+deplaned / dep+arr / loaded+unloaded), not enplanements
+  const dep = await side(m.origin);
+  if (!m.dest) return dep;
+  const arr = await side(m.dest);
+  for (const k of ["pax", "atm", "cargo"]) {
+    for (const ym of Object.keys(arr[k])) dep[k][ym] = (dep[k][ym] || 0) + arr[k][ym];
+  }
+  return dep;
 }
 
 async function loadJSON(path) { try { return JSON.parse(await readFile(path, "utf8")); } catch { return null; } }
@@ -674,7 +704,10 @@ export async function main() {
       annualPax: lastFullYearTotal(series.pax),
     };
     await writeFile(resolve(SERIES_DIR, `${code}.json`), JSON.stringify({ series }) + "\n", "utf8");
-    console.log(`  ${code}  bts  pax ${pk.length}mo (latest ${pk[pk.length - 1]}) atm ${Object.keys(series.atm || {}).length} cargo ${Object.keys(series.cargo || {}).length}`);
+    // annual total in the log on purpose: total passengers (arr+dep) vs
+    // enplanements is a factor-of-2 error that months-counts can't catch
+    const ap = airports[code].annualPax;
+    console.log(`  ${code}  bts  pax ${pk.length}mo (latest ${pk[pk.length - 1]}${ap ? `, last full year ${(ap / 1e6).toFixed(1)}M total` : ""}) atm ${Object.keys(series.atm || {}).length} cargo ${Object.keys(series.cargo || {}).length}`);
   }
 
   await writeFile(OUT, JSON.stringify(indexDoc) + "\n", "utf8");
