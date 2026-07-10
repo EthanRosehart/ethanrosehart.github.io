@@ -63,36 +63,8 @@ jobs:
       # the reference to the union of both catalogues.
       - name: Fetch monthly activity — US (BTS T-100)
         id: bts
-        run: |
-          set -o pipefail
-          node portfolio/glidepath/scripts/fetch-bts.mjs 2>&1 | tee /tmp/bts-run.log
+        run: node portfolio/glidepath/scripts/fetch-bts.mjs
         continue-on-error: true
-
-      # TEMPORARY (branch only — remove before merging to main): commit the
-      # BTS fetcher's log back to this branch so a manual run's diagnostics
-      # can be read with a plain `git pull` when the Actions API isn't
-      # reachable. [skip ci] on the log commit; the ref guard keeps the
-      # nightly main run out of this step entirely. continue-on-error +
-      # autostash because run 29071108569 lost its downstream steps to a
-      # push race here — diagnostics must never block the pipeline.
-      - name: Publish BTS debug log to branch (non-main only)
-        if: github.ref_name != 'main'
-        continue-on-error: true
-        run: |
-          {
-            echo "commit: $GITHUB_SHA"
-            echo "run: $GITHUB_RUN_ID ($(date -u +%FT%TZ))"
-            cat /tmp/bts-run.log 2>/dev/null || echo "(no bts log captured)"
-          } > .github/bts-debug.log
-          git config user.name "github-actions[bot]"
-          git config user.email "github-actions[bot]@users.noreply.github.com"
-          git add .github/bts-debug.log
-          git commit -m "bts-debug: run log for $GITHUB_SHA [skip ci]" || exit 0
-          for i in 1 2 3; do
-            git push origin "HEAD:$GITHUB_REF_NAME" && break
-            git pull --rebase --autostash origin "$GITHUB_REF_NAME" || true
-            sleep 3
-          done
 
       - name: Fetch monthly activity — Europe + Canada (Eurostat + StatCan)
         id: activity
