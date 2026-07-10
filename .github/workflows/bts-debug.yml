@@ -1,0 +1,48 @@
+name: BTS debug (temporary)
+
+# TEMPORARY — remove before merging to main.
+# Fast iteration loop for wiring the US BTS T-100 fetcher: runs ONLY
+# fetch-bts.mjs on every push to the working branch and commits its full
+# log back to the branch (.github/bts-debug.log), so results can be read
+# with a plain `git pull` — no Actions API access needed. The log commit
+# says [skip ci] and touches no watched path, so it cannot retrigger.
+
+on:
+  push:
+    branches: [claude/glidepath-architecture-roadmap-pffmye]
+    paths:
+      - "portfolio/glidepath/scripts/fetch-bts.mjs"
+      - ".github/workflows/bts-debug.yml"
+
+permissions:
+  contents: write
+
+concurrency:
+  group: bts-debug
+  cancel-in-progress: true
+
+jobs:
+  bts:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - name: Run fetch-bts and capture the log
+        run: |
+          set -o pipefail
+          {
+            echo "commit: $GITHUB_SHA"
+            echo "started: $(date -u +%FT%TZ)"
+            node portfolio/glidepath/scripts/fetch-bts.mjs && echo "fetch-bts exit: 0" || echo "fetch-bts exit: $?"
+            echo "finished: $(date -u +%FT%TZ)"
+          } 2>&1 | tee .github/bts-debug.log
+      - name: Commit the log back to the branch
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add .github/bts-debug.log
+          git commit -m "bts-debug: run log for $GITHUB_SHA [skip ci]" || exit 0
+          git push origin "HEAD:${GITHUB_REF_NAME}"
