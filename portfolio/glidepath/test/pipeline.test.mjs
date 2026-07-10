@@ -336,3 +336,33 @@ test("mergeSeriesFirstWins: overlapping cached extracts can't double-count — f
   assert.equal(target.ATL.pax["2024-02"], 50, "gaps fill from later files");
   assert.equal(target.ATL.atm["2024-01"], 7, "per-metric independence");
 });
+
+test("parseHiddenInputs: WebForms hidden state harvested, entities decoded, non-hidden skipped", async () => {
+  const { parseHiddenInputs } = await import("../scripts/fetch-bts.mjs");
+  const html = `
+    <input type="hidden" name="__VIEWSTATE" id="__VIEWSTATE" value="dDwtMTA&quot;x&amp;y" />
+    <input name="__EVENTVALIDATION" type='hidden' value="abc123"/>
+    <INPUT TYPE=hidden NAME=__VIEWSTATEGENERATOR value="F14B4A"/>
+    <input type="text" name="txtSearch" value="not me" />
+    <input type="hidden" value="anonymous" />`;
+  const h = parseHiddenInputs(html);
+  assert.equal(h.__VIEWSTATE, 'dDwtMTA"x&y', "entities decoded");
+  assert.equal(h.__EVENTVALIDATION, "abc123", "attribute order irrelevant");
+  assert.equal(h.__VIEWSTATEGENERATOR, "F14B4A", "unquoted attributes accepted");
+  assert.ok(!("txtSearch" in h), "non-hidden inputs skipped");
+  assert.equal(Object.keys(h).length, 3);
+});
+
+test("findSegmentAllCarriersHref: picks the all-carrier segment table off the database index", async () => {
+  const { findSegmentAllCarriersHref } = await import("../scripts/fetch-bts.mjs");
+  const html = `
+    <a href="DL_SelectFields.aspx?gnoyr_VQ=FLM&amp;QO_fu146_anzr=Nv4">T-100 Domestic Segment (U.S. Carriers)</a>
+    <a href="DL_SelectFields.aspx?gnoyr_VQ=FMF&amp;QO_fu146_anzr=Nv4">T-100 Market (All Carriers)</a>
+    <a href="DL_SelectFields.aspx?gnoyr_VQ=FMG&amp;QO_fu146_anzr=Nv4">T-100 Segment (All Carriers)</a>
+    <a href="other.aspx">Airline Fuel Cost</a>`;
+  const { href, seen } = findSegmentAllCarriersHref(html);
+  assert.equal(href, "DL_SelectFields.aspx?gnoyr_VQ=FMG&QO_fu146_anzr=Nv4", "combined segment table chosen, entities decoded");
+  assert.equal(seen.length, 3, "only T-100 anchors reported");
+  const none = findSegmentAllCarriersHref("<a href='x.aspx'>T-100 Domestic Segment (U.S. Carriers)</a>");
+  assert.equal(none.href, null, "US-carriers-only table never mistaken for all-carriers");
+});

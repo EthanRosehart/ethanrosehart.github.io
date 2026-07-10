@@ -294,28 +294,62 @@ function roundAcc(acc) {
   return acc;
 }
 
-/* The deterministic TranStats route: DownLoad_Table.asp is the endpoint
-   the site's own "Download" button posts to — we request exactly the six
-   columns we need from T_T100_SEGMENT_ALL_CARRIER, one year per request,
-   so scope is consistent (all carriers, domestic + international) and
-   years are disjoint by construction. Response is a zip with one CSV.
+/* The deterministic TranStats route, post-redesign edition.
 
-   Run 29042555380 answered with bare "HTTP 500" twice and we had not
-   logged the response body — TranStats returns descriptive ASP error
-   pages, so this version (a) logs the body of every failure, (b) sends
-   browser-shaped headers (the old glidepath-data-bot UA is a plausible
-   500 trigger on IIS), (c) carries the full set of form fields the real
-   download page posts, and (d) tries both hosts. The first variant that
-   yields a usable CSV is locked in for the remaining years. */
+   Run 29065871267 proved the classic endpoint is DEAD: DownLoad_Table.asp
+   returns the generic ASP crash page ("An error occurred on the server
+   when processing the URL") on both hosts regardless of headers or form
+   body. The modern site serves downloads from DL_SelectFields.aspx — an
+   ASP.NET WebForms page — and the working exchange is: GET the table's
+   download page, harvest its hidden form state (__VIEWSTATE /
+   __EVENTVALIDATION / friends) plus cookies, then POST the OLD-style
+   query fields (RawDataTable, sqlstr, varlist, …) together with that
+   hidden state back to the same .aspx URL. Response is a zip with one
+   CSV.
+
+   The download page's URL carries obfuscated query params, so it is not
+   hardcoded: the Form 41 Traffic database index (Tables.asp?DB_ID=111)
+   lists every T-100 table with human-readable anchor text, and the
+   "T-100 Segment (All Carriers)" href is taken from there. Every step
+   logs what it saw, so an upstream change costs one readable run. */
 const TT_UA = {
   "User-Agent": "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0 Safari/537.36",
   Accept: "*/*",
 };
 const DT_HOSTS = ["https://www.transtats.bts.gov", "https://transtats.bts.gov"];
 
-function downloadTableBody(y) {
+/* tiny cookie jar — WebForms wants the ASP.NET session cookie back */
+function takeCookies(r, jar) {
+  const set = r.headers.getSetCookie ? r.headers.getSetCookie() : [];
+  for (const c of set) { const [kv] = c.split(";"); const i = kv.indexOf("="); if (i > 0) jar[kv.slice(0, i).trim()] = kv.slice(i + 1).trim(); }
+  return jar;
+}
+const cookieHeader = (jar) => Object.entries(jar).map(([k, v]) => `${k}=${v}`).join("; ");
+
+/* hidden <input> fields (VIEWSTATE and friends) — exported for tests */
+export function parseHiddenInputs(html) {
+  const out = {};
+  const re = /<input[^>]*type=["']?hidden["']?[^>]*>/gi;
+  for (const tag of String(html).match(re) || []) {
+    const name = /name=["']?([^"'\s>]+)/i.exec(tag)?.[1];
+    const value = /value=["']([^"']*)["']/i.exec(tag)?.[1] ?? "";
+    if (name) out[name] = value.replace(/&quot;/g, '"').replace(/&amp;/g, "&");
+  }
+  return out;
+}
+
+/* the T-100 Segment (All Carriers) download-page href from the database
+   index — anchor text is readable even though hrefs are obfuscated */
+export function findSegmentAllCarriersHref(html) {
+  const anchors = [...String(html).matchAll(/<a\s[^>]*href=["']?([^"'\s>]+)["']?[^>]*>([^<]{0,120})<\/a>/gi)];
+  const t100 = anchors.filter(([, , text]) => /T-?\s?100/i.test(text));
+  const hit = t100.find(([, , text]) => /Segment/i.test(text) && /All\s*Carriers/i.test(text) && !/U\.?S\.?\s*Carriers/i.test(text));
+  return { href: hit ? hit[1].replace(/&amp;/g, "&") : null, seen: t100.map(([, href, text]) => `${text.trim()} -> ${href.slice(0, 80)}`) };
+}
+
+function dlQueryFields(y) {
   const sql = `SELECT YEAR,MONTH,ORIGIN,PASSENGERS,FREIGHT,DEPARTURES_PERFORMED FROM T_T100_SEGMENT_ALL_CARRIER WHERE YEAR=${y}`;
-  return new URLSearchParams({
+  return {
     UserTableName: "T_100_Segment_All_Carrier",
     DBShortName: "Air_Carriers",
     RawDataTable: "T_T100_SEGMENT_ALL_CARRIER",
@@ -324,58 +358,67 @@ function downloadTableBody(y) {
     grouplist: "", suml: "", sumRegion: "", filter1: "title=", filter2: "title=",
     geo: "All ", time: "All Months", timename: "Month",
     GEOGRAPHY: "All", XYEAR: String(y), FREQUENCY: "All",
-  }).toString();
+  };
 }
 
-async function tryDownloadTable(host, y) {
-  const r = await fetch(`${host}/DownLoad_Table.asp?Table_ID=293&Has_Group=3&Is_Zipped=0`, {
-    method: "POST",
-    headers: {
-      ...TT_UA,
-      "Content-Type": "application/x-www-form-urlencoded",
-      Referer: `${host}/DL_SelectFields.aspx?Table_ID=293`,
-      Origin: host,
-    },
-    body: downloadTableBody(y),
-  });
-  const ct = r.headers.get("content-type") || "?";
-  if (!r.ok) {
-    let snippet = "";
-    try { snippet = (await r.text()).replace(/<[^>]+>/g, " ").replace(/\s+/g, " ").trim().slice(0, 300); } catch {}
-    throw new Error(`HTTP ${r.status} (${ct}) body: ${JSON.stringify(snippet)}`);
-  }
-  const buf = Buffer.from(await r.arrayBuffer());
-  const isZip = buf.length > 4 && buf[0] === 0x50 && buf[1] === 0x4b;
-  const csv = isZip ? unzipFirstCsv(buf).toString("utf8") : buf.toString("utf8");
-  if (!/^"?(YEAR|DATA_YEAR)"?,/i.test(csv.slice(0, 24))) {
-    throw new Error(`unexpected response (${ct}, ${buf.length}b, zip:${isZip}): ${JSON.stringify(csv.replace(/<[^>]+>/g, " ").replace(/\s+/g, " ").slice(0, 300))}`);
-  }
-  return { csv, bytes: buf.length, isZip };
-}
-
-async function fetchViaDownloadTable() {
-  console.log("  [bts] trying TranStats DownLoad_Table.asp (deterministic per-year extracts)");
-  const usSet = new Set(US);
-  const acc = {};
-  const thisYear = new Date().getFullYear();
-  let ok = 0, consecFail = 0, lockedHost = null;
-  for (let y = thisYear; y >= T100_START_YEAR && consecFail < 2; y--) {
-    const hosts = lockedHost ? [lockedHost] : DT_HOSTS;
-    let got = null;
-    for (const host of hosts) {
-      try { got = await tryDownloadTable(host, y); lockedHost = host; break; }
-      catch (e) { console.warn(`  [bts]   ${y} ${host.replace("https://", "")}: ${e.message}`); }
-    }
-    if (!got) { consecFail++; continue; }
+async function fetchViaDlSelectFields() {
+  console.log("  [bts] trying TranStats DL_SelectFields.aspx (WebForms download, per-year extracts)");
+  for (const host of DT_HOSTS) {
     try {
-      const { years } = aggregateT100Csv(got.csv, usSet, acc);
-      ok++; consecFail = 0;
-      console.log(`  [bts]   ${y}: ${(got.bytes / 1e6).toFixed(1)}MB (zip:${got.isZip}), years ${years.join("/") || "?"}`);
-    } catch (e) { console.warn(`  [bts]   ${y}: ${e.message}`); consecFail++; }
+      const jar = {};
+      // 1) locate the download page from the database index
+      const ir = await fetch(`${host}/Tables.asp?DB_ID=111`, { headers: TT_UA });
+      takeCookies(ir, jar);
+      if (!ir.ok) { console.warn(`  [bts]   ${host.replace("https://", "")} Tables.asp?DB_ID=111: HTTP ${ir.status}`); continue; }
+      const { href, seen } = findSegmentAllCarriersHref(await ir.text());
+      console.log(`  [bts]   index lists ${seen.length} T-100 links${href ? "" : `: ${seen.join(" | ") || "none"}`}`);
+      if (!href) continue;
+      const pageUrl = new URL(href, host + "/").toString();
+      console.log(`  [bts]   download page: ${pageUrl}`);
+
+      // 2) GET the page — hidden WebForms state + session cookie
+      const pr = await fetch(pageUrl, { headers: { ...TT_UA, Cookie: cookieHeader(jar) } });
+      takeCookies(pr, jar);
+      if (!pr.ok) { console.warn(`  [bts]   download page: HTTP ${pr.status}`); continue; }
+      const pageHtml = await pr.text();
+      const hidden = parseHiddenInputs(pageHtml);
+      const title = /<title>([^<]*)<\/title>/i.exec(pageHtml)?.[1]?.trim() || "?";
+      console.log(`  [bts]   page "${title}" — ${Object.keys(hidden).length} hidden fields (${Object.keys(hidden).filter((k) => k.startsWith("__")).join(", ") || "no __ fields"})`);
+      if (!hidden.__VIEWSTATE) console.warn("  [bts]   no __VIEWSTATE on the page — posting anyway with what's there");
+
+      // 3) one POST per year, newest first
+      const usSet = new Set(US);
+      const acc = {};
+      const thisYear = new Date().getFullYear();
+      let ok = 0, consecFail = 0;
+      for (let y = thisYear; y >= T100_START_YEAR && consecFail < 2; y--) {
+        try {
+          const body = new URLSearchParams({ ...hidden, ...dlQueryFields(y), btnDownload: "Download" }).toString();
+          const r = await fetch(pageUrl, {
+            method: "POST",
+            headers: { ...TT_UA, "Content-Type": "application/x-www-form-urlencoded", Referer: pageUrl, Origin: host, Cookie: cookieHeader(jar) },
+            body,
+          });
+          const ct = r.headers.get("content-type") || "?";
+          const buf = Buffer.from(await r.arrayBuffer());
+          const isZip = buf.length > 4 && buf[0] === 0x50 && buf[1] === 0x4b;
+          if (!r.ok || !isZip) {
+            const snippet = buf.toString("utf8", 0, 4000).replace(/<[^>]+>/g, " ").replace(/\s+/g, " ").trim().slice(0, 300);
+            throw new Error(`HTTP ${r.status} (${ct}, ${buf.length}b, zip:${isZip}) body: ${JSON.stringify(snippet)}`);
+          }
+          const csv = unzipFirstCsv(buf).toString("utf8");
+          const { years } = aggregateT100Csv(csv, usSet, acc);
+          ok++; consecFail = 0;
+          console.log(`  [bts]   ${y}: ${(buf.length / 1e6).toFixed(1)}MB zip, years ${years.join("/") || "?"}`);
+        } catch (e) { console.warn(`  [bts]   ${y}: ${e.message}`); consecFail++; }
+      }
+      if (ok && Object.keys(acc).length) {
+        console.log(`  [bts] DL_SelectFields done — ${Object.keys(acc).length} airports over ${ok} year files`);
+        return roundAcc(acc);
+      }
+    } catch (e) { console.warn(`  [bts]   ${host.replace("https://", "")}: ${e.message}`); }
   }
-  if (!ok || !Object.keys(acc).length) return null;
-  console.log(`  [bts] DownLoad_Table done — ${Object.keys(acc).length} airports over ${ok} year files`);
-  return roundAcc(acc);
+  return null;
 }
 
 async function fetchViaTranstats() {
@@ -469,9 +512,9 @@ export async function main() {
   const airports = indexDoc.airports = indexDoc.airports || {};
   const ref = (await loadJSON(REF))?.airports || {};
 
-  const seriesByCode = (await fetchViaSocrata()) || (await fetchViaDownloadTable()) || (await fetchViaTranstats());
+  const seriesByCode = (await fetchViaSocrata()) || (await fetchViaDlSelectFields()) || (await fetchViaTranstats());
   if (!seriesByCode) {
-    console.error("  [bts] no monthly T-100 source produced data (Socrata + DownLoad_Table + PREZIP all failed) — US airports keep last-good data");
+    console.error("  [bts] no monthly T-100 source produced data (Socrata + DL_SelectFields + PREZIP all failed) — US airports keep last-good data");
     process.exit(1);   // loud: the health step reports this
   }
 
