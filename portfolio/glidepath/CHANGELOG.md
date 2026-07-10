@@ -28,6 +28,16 @@ Notable changes to Glidepath. Dates are UTC.
   forecast-vs-realized tracking over time.
 
 ### Data platform (Phase 2, offline-verifiable subset)
+- US airports live: `fetch-bts.mjs` pulls monthly T-100 segment data (all
+  carriers) straight from the TranStats download form — one per-year zip back
+  to 2015, WebForms state + session cookies handled in-script, data CSV picked
+  over the bundled field-description file — after live probing (Actions runs
+  48–59) showed Socrata carries only annual summaries, PREZIP only cached user
+  extracts, and the classic DownLoad_Table.asp endpoint is dead. 35 major US
+  gateways with full catalogue metadata, pounds→tonnes freight, last-good
+  fallback, loud non-zero failure. Pipeline reordered (BTS before
+  Eurostat/StatCan) so US names/coords survive the reference trim; first
+  verified end-to-end in run 29071108569 (135 months × 35 airports).
 - `scripts/validate-data.mjs`: structural schema validation for every snapshot
   shape, run in CI and as a nightly pre-commit gate.
 - `scripts/check-snapshots.mjs`: staleness + anomaly checks (shrinking series,
@@ -36,6 +46,14 @@ Notable changes to Glidepath. Dates are UTC.
   (source, generatedAt, counts).
 - Fetcher pure-logic exported and covered by recorded-fixture tests
   (Eurostat JSON-stat decode, IMF per-capita derivation).
+
+### Uploads
+- Sector (passenger-mix) upload: domestic / transborder / international
+  columns are recognized in the mapping (before the plain pax pattern),
+  editable in the working table, included in the template, and register
+  through the same SEGMENTS machinery as pipeline airports — mix donut,
+  per-sector levers and sector-targeted events now work for uploaded
+  gateways. Splits persist through localStorage and session files.
 
 ### Planner features (Phase 3)
 - Capacity constraints as a coupled system: a slot cap squeezes passengers

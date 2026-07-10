@@ -23,6 +23,7 @@ const UPSTREAM = {
   openflights: { source: "OpenFlights airports.dat", url: "https://openflights.org/data", terms: "ODbL (database) — attribution + share-alike" },
   eurostat: { source: "Eurostat avia_paoa / avia_gooa", url: "https://ec.europa.eu/eurostat", terms: "CC BY 4.0 (Eurostat reuse policy)" },
   statcan: { source: "Statistics Canada WDS 23-10-0312 / 23-10-0296", url: "https://www.statcan.gc.ca", terms: "Statistics Canada Open Licence" },
+  bts: { source: "US DOT BTS T-100 segment, all carriers (TranStats download form, per-year extracts)", url: "https://www.transtats.bts.gov", terms: "U.S. Government work — public domain" },
   worldbank: { source: "World Bank Open Data Indicators API", url: "https://data.worldbank.org", terms: "CC BY 4.0" },
   imf: { source: "IMF World Economic Outlook (DataMapper API)", url: "https://www.imf.org/external/datamapper", terms: "IMF terms — attribution" },
 };

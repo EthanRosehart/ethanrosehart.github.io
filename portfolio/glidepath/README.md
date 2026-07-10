@@ -121,7 +121,17 @@ same way `ExportView` loads it for downloads), confirm/fix the column mapping
 `GP_guessColumnRoles()` in `data.jsx` for what it recognizes, including
 falling back to "passengers" for a lone unrecognized column like a plain
 "Count" header when nothing else on the sheet could be it), then edit the
-monthly numbers directly in a table before building the forecast. Every
+monthly numbers directly in a table before building the forecast. Besides
+passengers/movements/cargo, the upload accepts an optional **passenger-mix
+split by sector** — columns for domestic / transborder / international
+passengers (headers like "Domestic passengers" or "Intl PAX" are recognized,
+and sector patterns are matched before the plain passenger pattern so they
+don't get mistaken for the headline). Any two or more sectors register
+through the same `SEGMENTS` machinery the pipeline feeds, unlocking the mix
+donut, per-sector demand levers and sector-targeted shock events; sectors
+don't need to sum exactly to the headline total, which stays the source of
+truth (the model rescales them). The downloadable template includes the
+sector columns with a note that they're optional. Every
 non-empty sheet in a workbook is read, not just the first — if there's more
 than one, a picker lets you combine them all (the common case: the same
 monthly series split across tabs, e.g. by year) or pick a single one. Nothing
@@ -307,16 +317,17 @@ to `main` and trigger that same redeploy: the nightly data refresh
 
 ## Known limitations
 
-- **Uploaded data has no passenger-segment split** (a deliberate scope
-  choice — segment upload adds a column-mapping case not worth the
-  complexity yet). Its short-term forecast is in-browser Holt-Winters, not
-  Prophet — same screen, honest model card; see
+- **Uploaded data's short-term forecast is in-browser Holt-Winters, not
+  Prophet** — same screen, honest model card; see
   [Bring your own data](#bring-your-own-data).
-- **US coverage is defined but not populated.** `scripts/fetch-bts.mjs`
-  discovers and fetches BTS T-100 data by design, but as of the last nightly
-  run the Socrata catalog exposes no working monthly segment dataset, so no
-  US airports currently ship in `data/activity-index.json`. See
-  [`data/README.md`](data/README.md) for status.
+- **US coverage: ~35 largest gateways via BTS T-100 (all carriers, segment).**
+  `scripts/fetch-bts.mjs` requests one extract per year (back to 2015) from
+  the TranStats download form — the run log documents the whole exchange —
+  and aggregates passengers / movements / freight by origin airport × month.
+  Socrata discovery still runs first (it wins automatically if DOT ever
+  publishes a monthly table there); a total failure keeps last-good data and
+  exits non-zero into the pipeline-health issue. T-100 publishes on a ~2–3
+  month lag, so US airports trail the European feed slightly.
 - Charts are hand-rolled SVG with no text/table fallback for screen
   readers — fine for a portfolio demo, worth revisiting for a
   production-grade dashboard.

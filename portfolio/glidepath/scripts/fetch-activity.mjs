@@ -24,10 +24,11 @@
  *   • Canada → StatCan WDS 23-10-0312 (screened passengers, monthly) +
  *              23-10-0296 (aircraft movements; retired 23-10-0008 as
  *              fallback), resolved by airport name.
- *   • US     → fetch-bts.mjs (separate), maintains its own entries in the
- *              same index + series directory; this script only touches
- *              the airports it computes (eurostat ∪ statcan) and leaves
- *              BTS-sourced entries untouched.
+ *   • US     → fetch-bts.mjs (separate, runs BEFORE this script so it
+ *              still sees the untrimmed reference), maintains its own
+ *              entries in the same index + series directory; this script
+ *              only touches the airports it computes (eurostat ∪ statcan)
+ *              and carries BTS-sourced entries forward untouched.
  *
  * Best-effort + per-metric: a failure keeps the last good series (read
  * back from the previous data/series/<IATA>.json) and never injects
@@ -263,6 +264,13 @@ async function prevSeries(iata, metric) {
   const s = await prevAirportSeries(iata);
   return (s && s[metric] && Object.keys(s[metric]).length) ? s[metric] : null;
 }
+/* last-good passenger-segment split — a failed seg sub-fetch must not
+   silently strip paxSeg from an airport whose headline series was kept */
+async function prevPaxSeg(iata) {
+  const doc = await loadJSON(resolve(SERIES_DIR, `${iata}.json`));
+  const seg = doc?.paxSeg;
+  return (seg && Object.keys(seg).length >= 2) ? seg : null;
+}
 const recent12 = (m) => Object.keys(m).sort().slice(-12).reduce((t, k) => t + (m[k] || 0), 0);
 
 async function main() {
@@ -326,10 +334,14 @@ async function main() {
       else { const kept = await prevSeries(iata, metric); if (kept) series[metric] = kept; }
     }
     if (!series.pax || Object.keys(series.pax).length < MIN_MONTHS) continue;
-    const paxSeg = {};
+    let paxSeg = {};
     for (const sk of ["domestic", "international"]) {
       const ms = euSeg[sk]?.[icao]?.monthly;
       if (ms && Object.keys(ms).length >= 12) paxSeg[sk] = ms;
+    }
+    if (Object.keys(paxSeg).length < 2) {
+      const kept = await prevPaxSeg(iata);
+      if (kept) { paxSeg = kept; console.warn(`  ${iata} eurostat: seg fetch thin — kept previous paxSeg`); }
     }
     const r = ref[iata] || {};
     const paxKeys = Object.keys(series.pax);
@@ -368,12 +380,16 @@ async function main() {
     if (!series.pax || Object.keys(series.pax).length < MIN_MONTHS) { console.warn(`  ${iata} statcan: insufficient pax — skipped`); continue; }
 
     // passenger composition by sector (domestic / transborder / international)
-    const paxSeg = {};
+    let paxSeg = {};
     for (const [segKey, segRe] of Object.entries(STATCAN_SEG)) {
       try {
         const m = await statcanSeries(STATCAN_PID.pax, await statcanCoord(STATCAN_PID.pax, re, "pax", segRe));
         if (Object.keys(m).length >= 12) paxSeg[segKey] = m;
       } catch { /* sector absent for this airport — skip */ }
+    }
+    if (Object.keys(paxSeg).length < 2) {
+      const kept = await prevPaxSeg(iata);
+      if (kept) { paxSeg = kept; console.warn(`  ${iata} statcan: seg fetch thin — kept previous paxSeg`); }
     }
 
     const r = ref[iata] || {};
@@ -392,17 +408,34 @@ async function main() {
 
   /* ---------- split into index metadata + per-airport series files ----------
      This script owns the eurostat ∪ statcan airports; BTS-sourced entries
-     (maintained independently by fetch-bts.mjs, which runs after this script
-     in the workflow) are carried over from the previous index untouched. */
+     (maintained independently by fetch-bts.mjs, which runs BEFORE this
+     script in the workflow) are carried over from the index it wrote,
+     untouched — so tonight's fresh US data survives this rewrite. */
   const btsCarry = {};
   if (prev?.airports) for (const [k, v] of Object.entries(prev.airports)) {
     if (v?.source === "bts") btsCarry[k] = v;
   }
 
+  /* TOTAL-outage guard: if a whole source produced nothing tonight but the
+     previous index carried airports from it, writing the index without them
+     would also prune their series files — one bad night becoming data loss.
+     Carry the previous entries forward untouched (their series are still on
+     disk) and exit non-zero so the pipeline-health step reports it. */
+  let outage = false;
+  const sourceCarry = {};
+  for (const src of ["eurostat", "statcan"]) {
+    if (Object.values(airports).some((a) => a.source === src)) continue;
+    const prevOfSrc = Object.entries(prev?.airports || {}).filter(([, v]) => v?.source === src);
+    if (!prevOfSrc.length) continue;
+    outage = true;
+    console.error(`  ${src}: produced NOTHING tonight — carrying ${prevOfSrc.length} previous airports forward instead of wiping them`);
+    for (const [k, v] of prevOfSrc) sourceCarry[k] = v;
+  }
+
   await mkdir(DATA, { recursive: true });
   await mkdir(SERIES_DIR, { recursive: true });
 
-  const indexAirports = { ...btsCarry };
+  const indexAirports = { ...btsCarry, ...sourceCarry };
   for (const [iata, a] of Object.entries(airports)) {
     const { series, monthly, paxSeg, ...meta } = a;
     indexAirports[iata] = {
@@ -440,7 +473,8 @@ async function main() {
     await writeFile(REF, JSON.stringify(refDoc) + "\n", "utf8");
   }
 
-  console.log(`Wrote ${OUT} — ${Object.keys(indexAirports).length} airports (${Object.keys(airports).length} eurostat/statcan + ${Object.keys(btsCarry).length} carried BTS), ${live} live metric-series.`);
+  console.log(`Wrote ${OUT} — ${Object.keys(indexAirports).length} airports (${Object.keys(airports).length} eurostat/statcan + ${Object.keys(btsCarry).length} carried BTS + ${Object.keys(sourceCarry).length} outage-carried), ${live} live metric-series.`);
+  if (outage) process.exitCode = 1;   // data preserved, but the health step must hear about it
 }
 
 if (process.argv[1] === fileURLToPath(import.meta.url)) {

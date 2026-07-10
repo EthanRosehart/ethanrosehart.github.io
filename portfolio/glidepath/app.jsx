@@ -77,7 +77,7 @@ function App(){
   // it can be restored synchronously on mount, before any fetch resolves.
   useEffectApp(()=>{
     if (saved.customAirport && saved.customAirport.meta && saved.customAirport.series && !airport && !shared) {
-      GP_registerCustomAirport(saved.customAirport.iata, saved.customAirport.meta, saved.customAirport.series);
+      GP_registerCustomAirport(saved.customAirport.iata, saved.customAirport.meta, saved.customAirport.series, saved.customAirport.paxSeg || null);
       const a = AIRPORTS.find(x => x.iata === saved.customAirport.iata);
       if (a) setAirport(a);
       setActVer(v => v + 1);
@@ -251,6 +251,7 @@ function App(){
         iata: airport.iata,
         meta: GP_getActivityMeta(airport.iata),
         series: GP_getObservedSeries(airport.iata),
+        paxSeg: GP_getSegments(airport.iata),
       };
     }
     try { localStorage.setItem(LS, JSON.stringify(payload)); }
@@ -270,8 +271,8 @@ function App(){
   const startUpload = ()=>{ setCustomPending(true); setScreen("connect"); };
   const cancelUpload = ()=>{ setCustomPending(false); setScreen("select"); };
   const finishConnect = ()=>{ setConnected(true); setScreen("overview"); };
-  const finishCustomUpload = (iata, meta, series)=>{
-    GP_registerCustomAirport(iata, meta, series);
+  const finishCustomUpload = (iata, meta, series, paxSeg)=>{
+    GP_registerCustomAirport(iata, meta, series, paxSeg || null);
     const a = AIRPORTS.find(x=>x.iata===iata);
     setAirport(a);
     setScenario(GP_defaultScenario(iata));
@@ -304,7 +305,7 @@ function App(){
     }
     let a;
     if (session.airport.custom && session.customAirport){
-      GP_registerCustomAirport(session.customAirport.iata, session.customAirport.meta, session.customAirport.series);
+      GP_registerCustomAirport(session.customAirport.iata, session.customAirport.meta, session.customAirport.series, session.customAirport.paxSeg || null);
       a = AIRPORTS.find(x=>x.iata===session.customAirport.iata);
       if (!a) return "couldn't rebuild the uploaded gateway from that session";
     } else {

@@ -121,7 +121,15 @@ function Onboarding({ onSelect, selected, onUpload, onImportSession }){
    forecast, which is fit server-side nightly and isn't available here
    (see DataCaveat). Nothing leaves the browser; there's no server this
    data could be sent to even if we wanted to. */
-const ROLE_LABELS = { date:"Month", pax:"Passengers", atm:"Movements", cargo:"Cargo", ignore:"Ignore" };
+const ROLE_LABELS = { date:"Month", pax:"Passengers", atm:"Movements", cargo:"Cargo",
+  seg_domestic:"Domestic pax", seg_transborder:"Transborder pax", seg_international:"International pax",
+  ignore:"Ignore" };
+/* sector (passenger-mix) columns — optional; at least two make a split */
+const SEG_FIELDS = [
+  { k:"seg_domestic", segKey:"domestic", head:"Domestic" },
+  { k:"seg_transborder", segKey:"transborder", head:"Transb." },
+  { k:"seg_international", segKey:"international", head:"Intl." },
+];
 const UPLOAD_COUNTRIES = Object.keys(MACRO).map(cc => ({ cc, label: MACRO[cc].label })).concat([{ cc:"OTH", label:"Other / not listed" }]);
 
 function UploadData({ onDone, onCancel }){
@@ -186,7 +194,7 @@ function UploadData({ onDone, onCancel }){
         if (!month) continue;
         const rec = byMonth[month] || { month };
         roles.forEach((role, ci) => {
-          if (role !== "pax" && role !== "atm" && role !== "cargo") return;
+          if (!["pax","atm","cargo","seg_domestic","seg_transborder","seg_international"].includes(role)) return;
           const v = raw[ci];
           const n = typeof v === "number" ? v : parseFloat(String(v ?? "").replace(/[,\s]/g, ""));
           if (!isNaN(n)) rec[role] = n;
@@ -209,17 +217,23 @@ function UploadData({ onDone, onCancel }){
   // the series this table would produce, and whether it's enough to build
   // on — reuses the app's real long-term-model threshold (>=1 complete
   // calendar year), not an arbitrary made-up minimum
-  const { series, fullYearCount, monthCount } = useMemoA(() => {
+  const { series, paxSeg, segCount, fullYearCount, monthCount } = useMemoA(() => {
     const s = { pax:{} };
+    const seg = {};
     rows.forEach(r => {
       if (!r.month) return;
       if (r.pax !== "" && r.pax != null && !isNaN(+r.pax)) s.pax[r.month] = +r.pax;
       if (r.atm !== "" && r.atm != null && !isNaN(+r.atm)) (s.atm ||= {})[r.month] = +r.atm;
       if (r.cargo !== "" && r.cargo != null && !isNaN(+r.cargo)) (s.cargo ||= {})[r.month] = +r.cargo;
+      SEG_FIELDS.forEach(f => {
+        const v = r[f.k];
+        if (v !== "" && v != null && !isNaN(+v)) (seg[f.segKey] ||= {})[r.month] = +v;
+      });
     });
     const hist = Object.keys(s.pax).map(k => ({ y:+k.slice(0,4), m:+k.slice(5,7)-1, pax:s.pax[k] }));
     const fy = GP_fullYears(hist, "pax");
-    return { series:s, fullYearCount:fy.length, monthCount: Object.keys(s.pax).length };
+    return { series:s, paxSeg:seg, segCount:Object.keys(seg).length,
+      fullYearCount:fy.length, monthCount: Object.keys(s.pax).length };
   }, [rows]);
 
   const canSubmit = name.trim().length>0 && code.trim().length>0 && fullYearCount>=1 && !busy;
@@ -240,17 +254,20 @@ function UploadData({ onDone, onCancel }){
       name: name.trim(), cc, countryName: country.label, region:"Your data",
       city:"", icao:"", lat:null, lon:null, rep_airp:null, country:null,
     };
-    onDone(iata, meta, series);
+    onDone(iata, meta, series, segCount >= 2 ? paxSeg : null);
   };
 
   const dateColIdx = roles.indexOf("date");
 
   const downloadTemplate = () => {
+    // sector columns are optional — delete them if you only track totals.
+    // Each sector row sums to the Passengers column here, but it doesn't
+    // have to: the model rescales sectors to the headline total.
     const rows = [
-      ["Month","Passengers","Movements","Cargo (t)"],
-      ["2024-01","52000","430","26"],
-      ["2024-02","49500","415","25"],
-      ["2024-03","61000","505","30"],
+      ["Month","Passengers","Movements","Cargo (t)","Domestic passengers","Transborder passengers","International passengers"],
+      ["2024-01","52000","430","26","31000","9000","12000"],
+      ["2024-02","49500","415","25","29500","8500","11500"],
+      ["2024-03","61000","505","30","36000","10500","14500"],
     ];
     GP_saveBlob(new Blob([rows.map(r=>r.join(",")).join("\n")], {type:"text/csv;charset=utf-8"}), "glidepath_upload_template.csv");
   };
@@ -292,9 +309,12 @@ function UploadData({ onDone, onCancel }){
         <SectionHead kicker="Source file" title="Upload a CSV or Excel file"/>
         <p style={{color:"var(--dim)", fontSize:13.5, lineHeight:1.6, marginBottom:16, maxWidth:640}}>
           One row per month, with a column for the month and at least one for passengers — movements and cargo are
-          optional. Column headers don't have to match exactly: common ones (Month, Date, Passengers, PAX,
-          Movements, Flights, Cargo) are detected automatically, and you can fix the mapping below if we guess
-          wrong. Not sure what that should look like? Grab the template. This all happens
+          optional, and so is a <b style={{color:"var(--text)"}}>passenger-mix split by sector</b> (columns for
+          domestic / transborder / international passengers; any two or more unlock the mix donut, per-sector
+          demand levers and sector-targeted shock events). Column headers don't have to match exactly: common ones
+          (Month, Date, Passengers, PAX, Movements, Flights, Cargo, Domestic, Transborder, International) are
+          detected automatically, and you can fix the mapping below if we guess wrong. Not sure what that should
+          look like? Grab the template. This all happens
           {" "}<b style={{color:"var(--text)"}}>right here in your browser</b> — the file is never sent anywhere;
           there's no server on the other end of this screen for it to go to.
         </p>
@@ -345,9 +365,14 @@ function UploadData({ onDone, onCancel }){
             right={<span className="air-meta" style={{color: fullYearCount>=1 ? "var(--ok)" : "var(--bad)"}}>
               {fullYearCount>=1 ? `${fullYearCount} complete calendar year${fullYearCount>1?"s":""} — ready` : "needs one full Jan–Dec year of passengers"}
             </span>}/>
-          <div style={{maxHeight:320, overflowY:"auto"}}>
+          {(()=>{
+            // sector columns appear only when the mapping (or the data) uses them
+            const activeSegs = SEG_FIELDS.filter(f => roles.includes(f.k) || rows.some(r => r[f.k] != null && r[f.k] !== ""));
+            const fields = ["pax","atm","cargo",...activeSegs.map(f=>f.k)];
+            return (
+          <div style={{maxHeight:320, overflowY:"auto", overflowX:"auto"}}>
             <table className="tbl">
-              <thead><tr><th>Month</th><th>Passengers</th><th>Movements</th><th>Cargo (t)</th><th></th></tr></thead>
+              <thead><tr><th>Month</th><th>Passengers</th><th>Movements</th><th>Cargo (t)</th>{activeSegs.map(f=><th key={f.k}>{f.head}</th>)}<th></th></tr></thead>
               <tbody>
                 {rows.map((r,i)=>(
                   <tr key={i}>
@@ -355,10 +380,10 @@ function UploadData({ onDone, onCancel }){
                       <input type="month" value={r.month||""} onChange={e=>updateCell(i,"month",e.target.value)}
                         style={{background:"transparent",border:"none",color:"var(--text)",fontFamily:"var(--mono)",fontSize:13,outline:"none"}}/>
                     </td>
-                    {["pax","atm","cargo"].map(field=>(
+                    {fields.map(field=>(
                       <td key={field}>
                         <input type="number" value={r[field]??""} onChange={e=>updateCell(i,field,e.target.value)} placeholder="—"
-                          style={{width:88,background:"transparent",border:"none",borderBottom:"1px solid var(--line)",color:"var(--text)",fontFamily:"var(--mono)",fontSize:13,textAlign:"right",padding:"2px 0",outline:"none"}}/>
+                          style={{width:field.startsWith("seg_")?76:88,background:"transparent",border:"none",borderBottom:"1px solid var(--line)",color:"var(--text)",fontFamily:"var(--mono)",fontSize:13,textAlign:"right",padding:"2px 0",outline:"none"}}/>
                       </td>
                     ))}
                     <td style={{width:30}}>
@@ -371,6 +396,18 @@ function UploadData({ onDone, onCancel }){
               </tbody>
             </table>
           </div>
+            );
+          })()}
+          {segCount === 1 && <div className="caveat fade-in" style={{marginTop:12}}>
+            <b>One sector column mapped —</b> a passenger mix needs at least two sectors (domestic / transborder /
+            international) to be a split, so a single one will be ignored. Map a second sector column, or set this
+            one to Ignore.
+          </div>}
+          {segCount >= 2 && <div className="air-meta" style={{marginTop:10}}>
+            Sector split detected ({segCount} sectors) — it drives the passenger-mix donut, per-sector demand levers
+            and sector-targeted events. Sectors don't need to sum exactly to Passengers: the model rescales them to
+            the headline total, which stays the source of truth.
+          </div>}
           <div style={{display:"flex",alignItems:"center",gap:10,marginTop:14,paddingTop:14,borderTop:"1px solid var(--line)"}}>
             <input type="month" value={addMonth} onChange={e=>setAddMonth(e.target.value)} className="seg-select"/>
             <button className="btn btn-sm" disabled={!addMonth} onClick={addRow}>+ Add month</button>
@@ -394,7 +431,7 @@ function UploadData({ onDone, onCancel }){
 /* ---------- Connect data sources ----------------------------- */
 const SOURCES = [
   { id:"openflights", abbr:"OF", name:"OpenFlights Airport DB", desc:"Identifiers, geography & timezone reference", rows:"reference DB", live:true, wired:true, kind:"openflights" },
-  { id:"activity",    abbr:"AVIA", name:"Eurostat / StatCan Aviation", desc:"Monthly passengers by airport — the series the forecasts run on", rows:"monthly series", live:true, wired:true, kind:"activity" },
+  { id:"activity",    abbr:"AVIA", name:"Eurostat / StatCan / US BTS Aviation", desc:"Monthly passengers by airport — the series the forecasts run on", rows:"monthly series", live:true, wired:true, kind:"activity" },
   { id:"worldbank",   abbr:"WB", name:"World Bank Open Data", desc:"Population & historical GDP/capita — catchment driver", rows:"Indicators API", live:true, wired:true, kind:"macro" },
   { id:"imf",         abbr:"IMF", name:"IMF World Economic Outlook", desc:"Forward-looking real GDP/capita growth forecast — the GDP lever's default, and a Prophet input", rows:"DataMapper API", live:true, wired:true, kind:"imf" },
 ];

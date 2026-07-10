@@ -997,7 +997,8 @@ ${events.length?`<h2>Shock events</h2>
       scenario,
     };
     if (airport.custom) {
-      session.customAirport = { iata: airport.iata, meta: GP_getActivityMeta(airport.iata), series: GP_getObservedSeries(airport.iata) };
+      session.customAirport = { iata: airport.iata, meta: GP_getActivityMeta(airport.iata),
+        series: GP_getObservedSeries(airport.iata), paxSeg: GP_getSegments(airport.iata) };
     }
     GP_saveBlob(new Blob([JSON.stringify(session, null, 2)], {type:"application/json"}), fileBase+"_session.json");
   };

@@ -14,7 +14,7 @@ import assert from "node:assert/strict";
 
 import { esDecode, normMonth } from "../scripts/fetch-activity.mjs";
 import { perCapitaRates } from "../scripts/fetch-imf.mjs";
-import { mapCols } from "../scripts/fetch-bts.mjs";
+import { mapCols, decodeRows, orderCandidates, US } from "../scripts/fetch-bts.mjs";
 import { lastFullYearTotal, metricsIn } from "../scripts/_util.mjs";
 import { checkSeriesDoc, checkActivityIndex, checkForecastDoc } from "../scripts/validate-data.mjs";
 import { staleSnapshots, droppedAirports, seriesAnomalies, ageDays } from "../scripts/check-snapshots.mjs";
@@ -77,13 +77,59 @@ test("perCapitaRates: a year missing gdp or population is dropped, not guessed",
   assert.equal(out.length, 0);
 });
 
-/* ---- fetch-bts: column mapping --------------------------------- */
+/* ---- fetch-bts: column mapping + row decoding + discovery ------- */
 
 test("mapCols: recognizes a T-100-shaped header row", () => {
   const m = mapCols(["origin_airport_code", "year", "month", "passengers", "freight", "departures_performed"]);
   assert.equal(m.origin, "origin_airport_code");
   assert.equal(m.pax, "passengers");
   assert.equal(m.flights, "departures_performed");
+});
+
+test("mapCols: bare T-100 field names (the DOT vintage) map too", () => {
+  const m = mapCols(["origin", "year", "month", "passengers", "freight", "departures_performed", "distance"]);
+  assert.equal(m.origin, "origin");
+  assert.equal(m.year, "year");
+  assert.equal(m.month, "month");
+  assert.equal(m.freight, "freight");
+});
+
+test("decodeRows: SODA aggregate rows -> monthly series, pounds to tonnes, junk dropped", () => {
+  // SODA returns aggregate values as STRINGS — exactly this shape
+  const rows = [
+    { year: "2024", month: "1", pax: "412345", freight: "2204624", flights: "3120" },  // 2,204,624 lb ≈ 1,000 t
+    { year: "2024", month: "2", pax: "398000", flights: "3001" },                       // no freight column that month
+    { year: "0",    month: "1", pax: "999" },        // junk year -> dropped
+    { year: "2024", month: "13", pax: "999" },       // junk month -> dropped
+    { year: "2024", month: "3", pax: "not-a-number" },
+  ];
+  const s = decodeRows(rows);
+  assert.deepEqual(Object.keys(s.pax).sort(), ["2024-01", "2024-02"]);
+  assert.equal(s.pax["2024-01"], 412345);
+  assert.equal(s.atm["2024-01"], 3120);
+  assert.equal(s.cargo["2024-01"], 1000, "freight arrives in pounds and must land in tonnes");
+  assert.ok(!("2024-02" in s.cargo));
+  assert.deepEqual(decodeRows(null), { pax: {}, atm: {}, cargo: {} });
+});
+
+test("orderCandidates: T-100 segment datasets probe first, merged queries dedupe by id", () => {
+  const ordered = orderCandidates([
+    { resource: { id: "aaaa-1111", name: "Bridge Conditions" } },
+    { resource: { id: "bbbb-2222", name: "Air Carriers: T-100 Domestic Segment (All Carriers)" } },
+    { resource: { id: "cccc-3333", name: "T-100 Market (All Carriers)" } },
+    { resource: { id: "bbbb-2222", name: "Air Carriers: T-100 Domestic Segment (All Carriers)" } }, // dupe from a second query
+    { resource: {} },   // no id -> dropped
+  ]);
+  assert.equal(ordered[0].id, "bbbb-2222", "T-100 + segment outranks everything");
+  assert.equal(ordered[1].id, "cccc-3333");
+  assert.equal(ordered.length, 3, "results merged across queries dedupe by id");
+});
+
+test("US airport list: unique, IATA-shaped, bounded like the EU cap", () => {
+  assert.ok(US.length >= 30 && US.length <= 40, "bounded so the nightly Prophet build stays affordable");
+  assert.equal(new Set(US).size, US.length, "no duplicates");
+  assert.ok(US.every((c) => /^[A-Z]{3}$/.test(c)));
+  for (const major of ["ATL", "ORD", "JFK", "LAX", "DEN"]) assert.ok(US.includes(major), major + " missing");
 });
 
 /* ---- _util ------------------------------------------------------ */
@@ -182,4 +228,201 @@ test("droppedAirports + seriesAnomalies: catches vanished gateways, shrunk histo
   // wholesale level shift (unit change)
   const shifted = { pax: Object.fromEntries(Object.entries(prev.pax).map(([k, v]) => [k, v * 2])) };
   assert.ok(seriesAnomalies("TST", prev, shifted).some((w) => w.includes("restatement")));
+});
+
+/* ---- fetch-bts TranStats path: listing pick, zip reading, CSV aggregation ---- */
+
+import zlib from "node:zlib";
+import { parseCsvLine, pickT100Zips, unzipFirstCsv, aggregateT100Csv } from "../scripts/fetch-bts.mjs";
+
+test("parseCsvLine: quoted fields with embedded commas survive", () => {
+  assert.deepEqual(parseCsvLine('2024,1,"ATL","Atlanta, GA",50000'), ["2024", "1", "ATL", "Atlanta, GA", "50000"]);
+});
+
+test("pickT100Zips: prefers the combined all-carrier segment family, newest prefix first", () => {
+  // shaped like the real listing (run 29032448512): rotating numeric prefixes
+  const listing = `
+    <a href="896813517_T_T100D_MARKET_US_CARRIER_ONLY.zip">..</a>
+    <a href="896816367_T_T100_SEGMENT_ALL_CARRIER.zip">..</a>
+    <a href="896816158_T_T100_SEGMENT_ALL_CARRIER.zip">..</a>
+    <a href="896816999_T_T100_SEGMENT_ALL_CARRIER.zip">..</a>
+    <a href="896816367_T_T100_MARKET_ALL_CARRIER.zip">..</a>
+    <a href="896812000_T_T100D_SEGMENT_ALL_CARRIER.zip">..</a>`;
+  const picked = pickT100Zips(listing);
+  assert.deepEqual(picked, [
+    "896816999_T_T100_SEGMENT_ALL_CARRIER.zip",
+    "896816367_T_T100_SEGMENT_ALL_CARRIER.zip",
+    "896816158_T_T100_SEGMENT_ALL_CARRIER.zip",
+  ], "combined family only, sorted by numeric prefix descending; MARKET files excluded");
+
+  // no combined family -> interleave D/I newest-first so periods arrive whole
+  const di = pickT100Zips(`
+    <a href="100_T_T100D_SEGMENT_ALL_CARRIER.zip">..</a>
+    <a href="200_T_T100D_SEGMENT_ALL_CARRIER.zip">..</a>
+    <a href="150_T_T100I_SEGMENT_ALL_CARRIER.zip">..</a>`);
+  assert.deepEqual(di, [
+    "200_T_T100D_SEGMENT_ALL_CARRIER.zip",
+    "150_T_T100I_SEGMENT_ALL_CARRIER.zip",
+    "100_T_T100D_SEGMENT_ALL_CARRIER.zip",
+  ]);
+  assert.deepEqual(pickT100Zips("<html>nothing here</html>"), []);
+});
+
+/** build a minimal real zip (deflated entries) so unzipFirstCsv is tested
+ *  against the actual container format, not a mock */
+function buildZip(entries) {
+  const parts = [], central = [];
+  let offset = 0;
+  for (const [name, content] of entries) {
+    const nameB = Buffer.from(name), data = zlib.deflateRawSync(Buffer.from(content));
+    const local = Buffer.alloc(30);
+    local.writeUInt32LE(0x04034b50, 0); local.writeUInt16LE(8, 8);            // sig, method=deflate
+    local.writeUInt32LE(data.length, 18); local.writeUInt32LE(content.length, 22);
+    local.writeUInt16LE(nameB.length, 26);
+    const cd = Buffer.alloc(46);
+    cd.writeUInt32LE(0x02014b50, 0); cd.writeUInt16LE(8, 10);                 // sig, method
+    cd.writeUInt32LE(data.length, 20); cd.writeUInt32LE(content.length, 24);
+    cd.writeUInt16LE(nameB.length, 28); cd.writeUInt32LE(offset, 42);         // nameLen, local offset
+    parts.push(local, nameB, data);
+    central.push(Buffer.concat([cd, nameB]));
+    offset += local.length + nameB.length + data.length;
+  }
+  const cdBuf = Buffer.concat(central);
+  const eocd = Buffer.alloc(22);
+  eocd.writeUInt32LE(0x06054b50, 0);
+  eocd.writeUInt16LE(entries.length, 8); eocd.writeUInt16LE(entries.length, 10);
+  eocd.writeUInt32LE(cdBuf.length, 12); eocd.writeUInt32LE(offset, 16);
+  return Buffer.concat([...parts, cdBuf, eocd]);
+}
+
+test("unzipFirstCsv: extracts the CSV entry from a real zip container, skipping non-CSV entries", () => {
+  const csv = "YEAR,MONTH,ORIGIN\n2024,1,ATL\n";
+  const zip = buildZip([["readme.html", "<p>hi</p>"], ["T_T100_SEGMENT_ALL_CARRIER.csv", csv]]);
+  assert.equal(unzipFirstCsv(zip).toString("utf8"), csv);
+  assert.throws(() => unzipFirstCsv(Buffer.from("not a zip at all, definitely")), /end-of-central-directory/);
+});
+
+test("aggregateT100Csv: sums by origin airport x month, converts freight lbs->tonnes, skips non-targets", () => {
+  const csv = [
+    '"YEAR","MONTH","ORIGIN","DEST","PASSENGERS","FREIGHT","DEPARTURES_PERFORMED","ORIGIN_CITY_NAME"',
+    '2024,1,"ATL","JFK",50000,2204624,400,"Atlanta, GA"',      // 2,204,624 lb ~ 1000 t
+    '2024,1,"ATL","LAX",30000,0,200,"Atlanta, GA"',
+    '2024,1,"XXX","ATL",99999,0,50,"Not a target"',
+    '2024,2,"JFK","ATL",10000,0,100,"New York, NY"',
+    '1901,1,"ATL","JFK",5,0,1,"junk year dropped"',
+    "",
+  ].join("\n");
+  const { acc, years } = aggregateT100Csv(csv, new Set(["ATL", "JFK"]));
+  assert.equal(acc.ATL.pax["2024-01"], 80000, "two ATL segment rows sum");
+  assert.equal(acc.ATL.atm["2024-01"], 600);
+  assert.equal(Math.round(acc.ATL.cargo["2024-01"]), 1000, "freight lands in tonnes");
+  assert.equal(acc.JFK.pax["2024-02"], 10000);
+  assert.ok(!acc.XXX, "non-target origins skipped");
+  assert.deepEqual(years, [2024]);
+  // accumulation across files: a second file's rows add into the same acc
+  aggregateT100Csv('"YEAR","MONTH","ORIGIN","PASSENGERS"\n2023,12,"ATL",70000\n', new Set(["ATL"]), acc);
+  assert.equal(acc.ATL.pax["2023-12"], 70000);
+  assert.equal(acc.ATL.pax["2024-01"], 80000, "earlier months untouched");
+  assert.throws(() => aggregateT100Csv("A,B\n1,2\n", new Set(["ATL"])), /missing YEAR/);
+});
+
+test("mergeSeriesFirstWins: overlapping cached extracts can't double-count — first file wins per month", async () => {
+  const { mergeSeriesFirstWins } = await import("../scripts/fetch-bts.mjs");
+  const target = {};
+  mergeSeriesFirstWins(target, { ATL: { pax: { "2024-01": 100 }, atm: {}, cargo: {} } });
+  // a second overlapping extract must NOT add on top, only fill gaps
+  mergeSeriesFirstWins(target, { ATL: { pax: { "2024-01": 999, "2024-02": 50 }, atm: { "2024-01": 7 }, cargo: {} } });
+  assert.equal(target.ATL.pax["2024-01"], 100, "first file wins for a month it already covered");
+  assert.equal(target.ATL.pax["2024-02"], 50, "gaps fill from later files");
+  assert.equal(target.ATL.atm["2024-01"], 7, "per-metric independence");
+});
+
+test("parseHiddenInputs: WebForms hidden state harvested, entities decoded, non-hidden skipped", async () => {
+  const { parseHiddenInputs } = await import("../scripts/fetch-bts.mjs");
+  const html = `
+    <input type="hidden" name="__VIEWSTATE" id="__VIEWSTATE" value="dDwtMTA&quot;x&amp;y" />
+    <input name="__EVENTVALIDATION" type='hidden' value="abc123"/>
+    <INPUT TYPE=hidden NAME=__VIEWSTATEGENERATOR value="F14B4A"/>
+    <input type="text" name="txtSearch" value="not me" />
+    <input type="hidden" value="anonymous" />`;
+  const h = parseHiddenInputs(html);
+  assert.equal(h.__VIEWSTATE, 'dDwtMTA"x&y', "entities decoded");
+  assert.equal(h.__EVENTVALIDATION, "abc123", "attribute order irrelevant");
+  assert.equal(h.__VIEWSTATEGENERATOR, "F14B4A", "unquoted attributes accepted");
+  assert.ok(!("txtSearch" in h), "non-hidden inputs skipped");
+  assert.equal(Object.keys(h).length, 3);
+});
+
+test("findSegmentAllCarriersHref: picks the all-carrier segment table off the database index", async () => {
+  const { findSegmentAllCarriersHref } = await import("../scripts/fetch-bts.mjs");
+  const html = `
+    <a href="DL_SelectFields.aspx?gnoyr_VQ=FLM&amp;QO_fu146_anzr=Nv4">T-100 Domestic Segment (U.S. Carriers)</a>
+    <a href="DL_SelectFields.aspx?gnoyr_VQ=FMF&amp;QO_fu146_anzr=Nv4">T-100 Market (All Carriers)</a>
+    <a href="DL_SelectFields.aspx?gnoyr_VQ=FMG&amp;QO_fu146_anzr=Nv4"><span class="t">T-100 Segment
+      (All Carriers)</span></a>
+    <a href="other.aspx">Airline Fuel Cost</a>`;
+  const { href, seen } = findSegmentAllCarriersHref(html);
+  assert.equal(href, "DL_SelectFields.aspx?gnoyr_VQ=FMG&QO_fu146_anzr=Nv4", "combined segment table chosen, entities decoded");
+  assert.equal(seen.length, 3, "only T-100 anchors reported");
+  const none = findSegmentAllCarriersHref("<a href='x.aspx'>T-100 Domestic Segment (U.S. Carriers)</a>");
+  assert.equal(none.href, null, "US-carriers-only table never mistaken for all-carriers");
+});
+
+test("formIntel: reads controls, postback targets and download-ish js off a WebForms page", async () => {
+  const { formIntel } = await import("../scripts/fetch-bts.mjs");
+  const html = `
+    <input type="hidden" name="__VIEWSTATE" value="x"/>
+    <select name="cboYear"><option>2025</option></select>
+    <input type="checkbox" id="chkAllVars"/>
+    <button type="button" id="btnDownload" onclick="tryDownload(1)">Download</button>
+    <script>function tryDownload(z){ form.action="DownLoad_Table.asp?Table_ID=293"; form.submit(); }
+    __doPostBack('grid$ctl00','')</script>`;
+  const i = formIntel(html);
+  assert.ok(i.controls.some((c) => c.name === "cboYear"), "selects captured");
+  assert.ok(!i.controls.some((c) => c.name === "__VIEWSTATE"), "hidden __ fields excluded");
+  assert.deepEqual(i.postbacks, ["grid$ctl00"]);
+  assert.ok(i.downloadish.some((c) => c.name === "btnDownload"), "download button spotted");
+  assert.ok(i.jsLines.some((l) => l.includes("DownLoad_Table.asp")), "js download endpoint surfaced");
+  assert.deepEqual(i.selects.cboYear, ["2025"], "select option values captured");
+});
+
+test("unzipDataCsv: skips the field-description csv and returns the data csv", async () => {
+  const { unzipDataCsv, zipEntries } = await import("../scripts/fetch-bts.mjs");
+  const { deflateRawSync, crc32 } = zlib;
+  const mkzip = (files) => {
+    // minimal store/deflate zip builder for the fixture
+    const chunks = [], central = [];
+    let off = 0;
+    for (const [name, content] of files) {
+      const raw = Buffer.from(content);
+      const comp = deflateRawSync(raw);
+      const nameB = Buffer.from(name);
+      const lh = Buffer.alloc(30);
+      lh.writeUInt32LE(0x04034b50, 0); lh.writeUInt16LE(8, 8);
+      lh.writeUInt32LE(comp.length, 18); lh.writeUInt32LE(raw.length, 22);
+      lh.writeUInt16LE(nameB.length, 26);
+      chunks.push(lh, nameB, comp);
+      const ce = Buffer.alloc(46);
+      ce.writeUInt32LE(0x02014b50, 0); ce.writeUInt16LE(8, 10);
+      ce.writeUInt32LE(comp.length, 20); ce.writeUInt32LE(raw.length, 24);
+      ce.writeUInt16LE(nameB.length, 28); ce.writeUInt32LE(off, 42);
+      central.push(ce, nameB);
+      off += 30 + nameB.length + comp.length;
+    }
+    const cd = Buffer.concat(central);
+    const eocd = Buffer.alloc(22);
+    eocd.writeUInt32LE(0x06054b50, 0);
+    eocd.writeUInt16LE(files.length, 8); eocd.writeUInt16LE(files.length, 10);
+    eocd.writeUInt32LE(cd.length, 12); eocd.writeUInt32LE(off, 16);
+    return Buffer.concat([...chunks, cd, eocd]);
+  };
+  const dict = "SYS_FIELD_NAME,FIELD_DESC\nYEAR,The year\n";
+  const data = '"YEAR","MONTH","ORIGIN","PASSENGERS"\n2024,1,"JFK",1000\n';
+  const zip = mkzip([["readme.csv", dict], ["T_T100_SEGMENT.csv", data]]);
+  assert.equal(zipEntries(zip).length, 2);
+  const picked = unzipDataCsv(zip);
+  assert.equal(picked.name, "T_T100_SEGMENT.csv", "data csv chosen over the dictionary");
+  assert.ok(picked.text.startsWith('"YEAR"'));
+  const dictOnly = mkzip([["readme.csv", dict]]);
+  assert.throws(() => unzipDataCsv(dictOnly), /no data csv in zip — entries: readme\.csv/);
 });

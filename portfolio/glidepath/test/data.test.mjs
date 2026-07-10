@@ -703,3 +703,65 @@ test("phased capacity: a step can introduce a cap where none existed, and share 
   assert.equal(dec.scenario.capSteps[0].year, 2032);
   assert.equal(dec.scenario.capSteps[0].paxCap, 13000);
 });
+
+/* ---- sector (passenger-mix) upload support ---- */
+
+test("GP_guessColumnRole: sector headers map to sectors, not to headline pax", () => {
+  const win = loadDataModule();
+  assert.equal(win.GP_guessColumnRole("Domestic passengers"), "seg_domestic",
+    "'Domestic passengers' must be the domestic sector, not headline pax");
+  assert.equal(win.GP_guessColumnRole("Dom. Pax"), "seg_domestic");
+  assert.equal(win.GP_guessColumnRole("Transborder"), "seg_transborder");
+  assert.equal(win.GP_guessColumnRole("International passengers"), "seg_international");
+  assert.equal(win.GP_guessColumnRole("Intl PAX"), "seg_international");
+  assert.equal(win.GP_guessColumnRole("Passengers"), "pax", "plain totals still map to headline pax");
+  assert.equal(win.GP_guessColumnRole("Total PAX"), "pax");
+});
+
+test("GP_registerCustomAirport: an uploaded sector split drives the same segment machinery as a pipeline airport", () => {
+  const win = loadDataModule();
+  win.GP_setActivityIndex({ airports: {} });
+  const pax = monthlySeries(2023, 1, 36, 1000);
+  const domestic = monthlySeries(2023, 1, 36, 550);
+  const international = monthlySeries(2023, 1, 36, 350); // 550+350=900 != 1000 on purpose — model rescales
+  win.GP_registerCustomAirport("C-SEG", { name:"Seg Airport", cc:"CAN", countryName:"Canada", region:"Your data", city:"", icao:"", lat:null, lon:null },
+    { pax }, { domestic, international });
+
+  assert.equal(win.GP_getActivityMeta("C-SEG").hasPaxSeg, true);
+  assert.equal(win.GP_segmentsFor("C-SEG").length, 2, "both sectors detected");
+  assert.deepEqual(win.GP_getSegments("C-SEG") && Object.keys(win.GP_getSegments("C-SEG")).sort(), ["domestic","international"]);
+
+  const history = win.GP_buildHistory("C-SEG");
+  const lt = win.GP_longTerm("C-SEG", history, win.GP_defaultScenario("C-SEG"));
+  assert.ok(lt.hasSeg, "the long-term model picks the split up");
+  const segSum = lt.segKeys.reduce((t, k) => t + lt.rows[0].seg[k], 0);
+  assert.equal(segSum, lt.rows[0].pax,
+    "sectors are rescaled to reconcile exactly with the headline total — uploads don't need to sum perfectly");
+});
+
+test("GP_registerCustomAirport: a single sector isn't a split — ignored, not registered", () => {
+  const win = loadDataModule();
+  win.GP_setActivityIndex({ airports: {} });
+  const pax = monthlySeries(2023, 1, 36, 1000);
+  win.GP_registerCustomAirport("C-ONE", { name:"One Seg", cc:"CAN", countryName:"Canada", region:"Your data", city:"", icao:"", lat:null, lon:null },
+    { pax }, { domestic: monthlySeries(2023, 1, 36, 900) });
+  assert.equal(win.GP_getSegments("C-ONE"), null);
+  assert.equal(win.GP_getActivityMeta("C-ONE").hasPaxSeg, false);
+
+  // and re-registering WITHOUT a split (e.g. a corrected re-upload) clears an old one
+  win.GP_registerCustomAirport("C-SEG2", { name:"S", cc:"CAN", countryName:"Canada", region:"Your data", city:"", icao:"", lat:null, lon:null },
+    { pax }, { domestic: monthlySeries(2023, 1, 36, 600), international: monthlySeries(2023, 1, 36, 400) });
+  assert.ok(win.GP_getSegments("C-SEG2"));
+  win.GP_registerCustomAirport("C-SEG2", { name:"S", cc:"CAN", countryName:"Canada", region:"Your data", city:"", icao:"", lat:null, lon:null }, { pax }, null);
+  assert.equal(win.GP_getSegments("C-SEG2"), null, "re-upload without sectors must clear the stale split");
+});
+
+test("GP_removeCustomAirport: clears the sector split too", () => {
+  const win = loadDataModule();
+  win.GP_setActivityIndex({ airports: {} });
+  const pax = monthlySeries(2023, 1, 36, 1000);
+  win.GP_registerCustomAirport("C-GONE", { name:"G", cc:"CAN", countryName:"Canada", region:"Your data", city:"", icao:"", lat:null, lon:null },
+    { pax }, { domestic: monthlySeries(2023, 1, 36, 600), international: monthlySeries(2023, 1, 36, 400) });
+  win.GP_removeCustomAirport("C-GONE");
+  assert.equal(win.GP_getSegments("C-GONE"), null);
+});
