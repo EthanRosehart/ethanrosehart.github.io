@@ -1,0 +1,101 @@
+commit: 805faf8d288596edb279ba34fe91fba7db1b9e02
+run: 29065871267 (2026-07-10T03:00:42Z)
+  [bts] data.transportation.gov: enumerated 413 datasets, 9 aviation-ish:
+  [bts]     yj5y-b2ir "Consumer Airfare Report: Table 6 - Contiguous State City-Pair Markets That Average At Least 10 Passengers Per Day"
+  [bts]     tfrh-tu9e "Consumer Airfare Report: Table 1a - All U.S. Airport Pair Markets"
+  [bts]     d6nc-s8v6 "Consumer Airfare Report: Table 7 - Fare Premiums for Select Cities with More Than 20 Passengers per Day"
+  [bts]     ccjq-w54n "2015 HPMS - Dynamically Segmented"
+  [bts]     i3pw-uwab "2024 NTD Annual Data - Demand Response Geographic Area Coverage (Passenger Eligibility and Fares)"
+  [bts]     h9qc-expu "2023 NTD Annual Data - Demand Response Geographic Area Coverage (Passenger Eligibility and Fares)"
+  [bts]     udzf-9fvh "International_Passengers_Freight_ All_Types"
+  [bts]     buwj-ggyf "2016 HPMS - Dynamically Segmented"
+  [bts]     vtuk-ngz3 "Synthesize Data for Emerging Data Cleaning and Fusion Tool SegmentId to Link"
+  [bts] data.transportation.gov/ccjq-w54n "2015 HPMS - Dynamically Segmented" cols-> origin:undefined y:undefined m:undefined pax:undefined
+  [bts] data.transportation.gov/buwj-ggyf "2016 HPMS - Dynamically Segmented" cols-> origin:undefined y:undefined m:undefined pax:undefined
+  [bts] data.transportation.gov/vtuk-ngz3 "Synthesize Data for Emerging Data Cleaning and Fusion Tool SegmentId to Link" cols-> origin:undefined y:undefined m:undefined pax:undefined
+  [bts] data.transportation.gov/yj5y-b2ir "Consumer Airfare Report: Table 6 - Contiguous State City-Pair Markets That Average At Least 10 Passengers Per Day" cols-> origin:undefined y:year m:undefined pax:passengers
+  [bts] data.transportation.gov/d6nc-s8v6 "Consumer Airfare Report: Table 7 - Fare Premiums for Select Cities with More Than 20 Passengers per Day" cols-> origin:undefined y:year m:undefined pax:undefined
+  [bts] data.transportation.gov/i3pw-uwab "2024 NTD Annual Data - Demand Response Geographic Area Coverage (Passenger Eligibility and Fares)" cols-> origin:undefined y:undefined m:undefined pax:undefined
+  [bts] data.transportation.gov/h9qc-expu "2023 NTD Annual Data - Demand Response Geographic Area Coverage (Passenger Eligibility and Fares)" cols-> origin:undefined y:undefined m:undefined pax:undefined
+  [bts] data.transportation.gov/udzf-9fvh "International_Passengers_Freight_ All_Types" cols-> origin:undefined y:year m:month pax:undefined
+  [bts]   near-miss full columns: data_dte, year, month, usg_apt_id, usg_apt, usg_wac, fg_apt_id, fg_apt, fg_wac, airlineid, carrier, carriergroup, type, scheduled, charter, total, primary_key
+  [bts]   near-miss sample row: {"data_dte":"2006-05-01T00:00:00.000","year":"2006","month":"5","usg_apt_id":"12016","usg_apt":"GUM","usg_wac":"5","fg_apt_id":"13162","fg_apt":"MAJ","fg_wac":"844","airlineid":"20177","carrier":"PFQ","carriergroup":"1","type":"Departures","scheduled":"0","charter":"10","total":"10","primary_key":"2006512016GUM13162MAJ20177PFQD"}
+  [bts] data.transportation.gov/tfrh-tu9e "Consumer Airfare Report: Table 1a - All U.S. Airport Pair Markets" cols-> origin:undefined y:year m:undefined pax:passengers
+  [bts] data.bts.gov: enumerated 154 datasets, 43 aviation-ish:
+  [bts]     w8ea-nba4 "AFF - P12a - Air Carrier Fuel Efficiency by Year"
+  [bts]     bpqk-hyst "Commercial Aviation Departures"
+  [bts]     y5ut-ibwt "Supply Chain and Freight Indicators"
+  [bts]     iyde-f8k7 "2022 NCFO Segments File"
+  [bts]     as3z-m8rd "2022 NCFO Operator Segments File"
+  [bts]     3jux-kwvh "Annual Passenger Border Crossings with Michigan & New York"
+  [bts]     gn77-pp24 "2020 NCFO Segments File"
+  [bts]     hvq3-38u5 "Commercial Aviation Departures and TSA Screenings (simplified)"
+  [bts]     75qq-qmj6 "Freight Activity"
+  [bts]     r495-tyji "AFF - T100 Segment Summary By Origin Airport"
+  [bts]     bu82-4pwz "AFF - T100 Segment Summary"
+  [bts]     xyfb-hgtv "Commercial Aviation - Involuntary Denied Boarding"
+  [bts]     6u8d-47ih "Commercial Aviation - Mishandled Baggage and Mishandled Wheelchairs and Scooter"
+  [bts]     q4tb-tbff "AFF - T100 Segment Summary By Carrier"
+  [bts]     h7pv-kjj5 "Freight Indicators (weekly)"
+  [bts]     ggca-ddee "2020 NCFO Operator Segment File"
+  [bts]     tchw-zxud "Passenger Indicators (weekly)"
+  [bts]     56rv-9p75 "AFF - T100 Segment Summary By Country"
+  [bts]     iqwy-f8z4 "Population potentially exposed to aviation noise, 2016 and 2018"
+  [bts]     3xj5-daif "T100 - Preliminary Estimates"
+  [bts]     xrt2-b7j8 "AFF - Air Carrier Aircraft Fleet Age"
+  [bts]     xx9i-2dhw "National Census of Ferry Operators (NCFO) 2018: Segment Data"
+  [bts]     d38r-yvh5 "National Census of Ferry Operators (NCFO) 2018: Operator Segment Data"
+  [bts]     2ydv-qfge "PTFF_Enplanements at Top 50 US Airports"
+  [bts]     amn9-4jcb "Pocket Guide to Transportation-Daily Passenger Travel"
+  [bts]     pqmc-mnds "Passenger_Travel_Facts_and_Figures_Latest"
+  [bts]     ez58-m3b4 "BTS ATRI Freight Mobility Initiative: County-to-county truck travel times (2023) - Experimental"
+  [bts]     bqx9-a7yw "Pocket Guide to Transportation-Passenger Miles Traveled"
+  [bts]     k3id-nynu "Population potentially exposed to combined aviation, road and rail noise, 2016 and 2018"
+  [bts]     ecnj-b3e2 "Population potentially exposed to combined aviation and road noise, 2016 and 2018"
+  [bts]     dkbd-kjgw "Population potentially exposed to passenger rail noise, 2018"
+  [bts]     uta5-4eu5 "BTS ATRI Freight Mobility Initiative: County-to-county truck travel times (2024) - Experimental"
+  [bts]     3z7h-xatu "Top 25 Ports by Cruise Ship Passenger Arrivals 2023 Data"
+  [bts]     dggd-bg3y "BTS ATRI Freight Mobility Initiative: County-to-county truck travel times (2020) - Experimental"
+  [bts]     7umd-qc2k "2024 NCFO Operator Segment File"
+  [bts]     xnav-e47e "PTFF_Persons Traveling Into the United States at Land Border Crossings and International Airports"
+  [bts]     d7b8-pmxm "BTS ATRI Freight Mobility Initiative: County-to-county truck travel time (2022) - Experimental"
+  [bts]     2ygc-ds4z "2024 NCFO Segments File"
+  [bts]     sn4k-eiea "BTS ATRI Freight Mobility Initiative: County-to-county truck travel times (2019) - Experimental"
+  [bts]     xx4g-5dg2 "BTS ATRI Freight Mobility Initiative: County-to-county truck travel times (2018) - Experimental"
+  [bts] data.bts.gov/r495-tyji "AFF - T100 Segment Summary By Origin Airport" cols-> origin:origin_airport_id y:year m:undefined pax:total_passengers
+  [bts] data.bts.gov/bu82-4pwz "AFF - T100 Segment Summary" cols-> origin:undefined y:year m:undefined pax:passengers
+  [bts] data.bts.gov/q4tb-tbff "AFF - T100 Segment Summary By Carrier" cols-> origin:undefined y:year m:undefined pax:total_passengers
+  [bts] data.bts.gov/56rv-9p75 "AFF - T100 Segment Summary By Country" cols-> origin:undefined y:year m:undefined pax:undefined
+  [bts] data.bts.gov/3xj5-daif "T100 - Preliminary Estimates" cols-> origin:undefined y:year m:month pax:undefined
+  [bts]   near-miss full columns: year, month, date, checks, market, segment, market_fit, segment_fit
+  [bts]   near-miss sample row: {"year":"2019","month":"1","date":"2019-01-01T00:00:00.000","checks":"61694899","market":"76927270","segment":"77736885","market_fit":"76033251.05","segment_fit":"76652855.74"}
+  [bts] data.bts.gov/iyde-f8k7 "2022 NCFO Segments File" cols-> origin:undefined y:undefined m:undefined pax:undefined
+  [bts] data.bts.gov/as3z-m8rd "2022 NCFO Operator Segments File" cols-> origin:undefined y:undefined m:undefined pax:passengers
+  [bts] data.bts.gov/gn77-pp24 "2020 NCFO Segments File" cols-> origin:undefined y:undefined m:undefined pax:undefined
+  [bts] data.bts.gov/ggca-ddee "2020 NCFO Operator Segment File" cols-> origin:undefined y:undefined m:undefined pax:undefined
+  [bts] data.bts.gov/xx9i-2dhw "National Census of Ferry Operators (NCFO) 2018: Segment Data" cols-> origin:undefined y:undefined m:undefined pax:undefined
+  [bts] data.bts.gov/d38r-yvh5 "National Census of Ferry Operators (NCFO) 2018: Operator Segment Data" cols-> origin:undefined y:undefined m:undefined pax:passengers
+  [bts] data.bts.gov/7umd-qc2k "2024 NCFO Operator Segment File" cols-> origin:undefined y:undefined m:undefined pax:passengers
+  [bts] data.bts.gov/2ygc-ds4z "2024 NCFO Segments File" cols-> origin:undefined y:undefined m:undefined pax:undefined
+  [bts] data.bts.gov/3jux-kwvh "Annual Passenger Border Crossings with Michigan & New York" cols-> origin:undefined y:undefined m:undefined pax:undefined
+  [bts] data.bts.gov/tchw-zxud "Passenger Indicators (weekly)" cols-> origin:undefined y:undefined m:undefined pax:undefined
+  [bts] data.bts.gov/amn9-4jcb "Pocket Guide to Transportation-Daily Passenger Travel" cols-> origin:undefined y:year m:undefined pax:undefined
+  [bts] data.bts.gov/pqmc-mnds "Passenger_Travel_Facts_and_Figures_Latest" cols-> origin:undefined y:year m:undefined pax:undefined
+  [bts] data.bts.gov/bqx9-a7yw "Pocket Guide to Transportation-Passenger Miles Traveled" cols-> origin:undefined y:year m:undefined pax:undefined
+  [bts] data.bts.gov/dkbd-kjgw "Population potentially exposed to passenger rail noise, 2018" cols-> origin:undefined y:undefined m:undefined pax:undefined
+  [bts] data.bts.gov/3z7h-xatu "Top 25 Ports by Cruise Ship Passenger Arrivals 2023 Data" cols-> origin:undefined y:undefined m:undefined pax:undefined
+  [bts] data.bts.gov/xe7p-6h9t "PTFF_Average Number of Ferry Passengers and Vehicles" cols-> origin:undefined y:year m:undefined pax:passengers
+  [bts] data.bts.gov/uxyn-8v2z "Cruise Ship Counts and Passengers by Arrival at Ports Top 25 Ports 2019 thru 2023" cols-> origin:undefined y:year m:undefined pax:total_number_of_passengers
+  [bts] data.bts.gov/w8ea-nba4 "AFF - P12a - Air Carrier Fuel Efficiency by Year" cols-> origin:undefined y:year m:undefined pax:undefined
+  [bts] data.bts.gov/bpqk-hyst "Commercial Aviation Departures" cols-> origin:undefined y:undefined m:undefined pax:undefined
+  [bts] data.bts.gov/y5ut-ibwt "Supply Chain and Freight Indicators" cols-> origin:undefined y:year m:undefined pax:undefined
+  [bts] trying TranStats DownLoad_Table.asp (deterministic per-year extracts)
+  [bts]   2026 www.transtats.bts.gov: HTTP 500 (text/html) body: "An error occurred on the server when processing the URL. Please contact the system administrator. If you are the system administrator please click here to find out more about this error."
+  [bts]   2026 transtats.bts.gov: HTTP 500 (text/html) body: "An error occurred on the server when processing the URL. Please contact the system administrator. If you are the system administrator please click here to find out more about this error."
+  [bts]   2025 www.transtats.bts.gov: HTTP 500 (text/html) body: "An error occurred on the server when processing the URL. Please contact the system administrator. If you are the system administrator please click here to find out more about this error."
+  [bts]   2025 transtats.bts.gov: HTTP 500 (text/html) body: "An error occurred on the server when processing the URL. Please contact the system administrator. If you are the system administrator please click here to find out more about this error."
+  [bts] using TranStats PREZIP bulk files (cached extracts — merged month-first-wins)
+  [bts] https://transtats.bts.gov/PREZIP/ T100-ish zip families: T_T100D_MARKET_ALL_CARRIER.zip, T_T100D_MARKET_US_CARRIER_ONLY.zip, T_T100D_SEGMENT_ALL_CARRIER.zip, T_T100D_SEGMENT_US_CARRIER_ONLY.zip, T_T100I_MARKET_ALL_CARRIER.zip, T_T100_MARKET_ALL_CARRIER.zip, T_T100_SEGMENT_ALL_CARRIER.zip, T_T100_SEGMENT_US_CARRIER_ONLY.zip
+  [bts] https://transtats.bts.gov/PREZIP/: 1 T-100 segment zips, newest first (target history back to 2015)
+  [bts]   896816367_T_T100_SEGMENT_ALL_CARRIER.zip: T-100 csv missing YEAR/MONTH/ORIGIN/PASSENGERS — full header: FREIGHT,UNIQUE_CARRIER,UNIQUE_CARRIER_NAME,ORIGIN_AIRPORT_ID,ORIGIN,DEST_AIRPORT_ID,DEST,AIRCRAFT_TYPE,MONTH,
+  [bts] no monthly T-100 source produced data (Socrata + DownLoad_Table + PREZIP all failed) — US airports keep last-good data
