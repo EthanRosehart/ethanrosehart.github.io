@@ -320,16 +320,14 @@ to `main` and trigger that same redeploy: the nightly data refresh
 - **Uploaded data's short-term forecast is in-browser Holt-Winters, not
   Prophet** — same screen, honest model card; see
   [Bring your own data](#bring-your-own-data).
-- **US coverage is wired but awaits its first successful nightly.**
-  `scripts/fetch-bts.mjs` discovers a monthly BTS T-100 segment dataset via
-  the Socrata SODA API — now searching **data.transportation.gov** first
-  (the earlier version only searched data.bts.gov, which is why it never
-  found one) — and targets the ~35 largest US gateways with full catalogue
-  metadata. US airports appear in `data/activity-index.json` once the
-  nightly (or a manual "Refresh data" workflow run) completes a successful
-  pull; a failed discovery exits non-zero and lands in the pipeline-health
-  issue instead of failing silently, and snapshot validation gates the
-  commit either way. See [`data/README.md`](data/README.md).
+- **US coverage: ~35 largest gateways via BTS T-100 (all carriers, segment).**
+  `scripts/fetch-bts.mjs` requests one extract per year (back to 2015) from
+  the TranStats download form — the run log documents the whole exchange —
+  and aggregates passengers / movements / freight by origin airport × month.
+  Socrata discovery still runs first (it wins automatically if DOT ever
+  publishes a monthly table there); a total failure keeps last-good data and
+  exits non-zero into the pipeline-health issue. T-100 publishes on a ~2–3
+  month lag, so US airports trail the European feed slightly.
 - Charts are hand-rolled SVG with no text/table fallback for screen
   readers — fine for a portfolio demo, worth revisiting for a
   production-grade dashboard.

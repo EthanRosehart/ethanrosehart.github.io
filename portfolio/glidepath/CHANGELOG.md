@@ -28,14 +28,16 @@ Notable changes to Glidepath. Dates are UTC.
   forecast-vs-realized tracking over time.
 
 ### Data platform (Phase 2, offline-verifiable subset)
-- US airports wired: `fetch-bts.mjs` rebuilt — multi-domain Socrata discovery
-  (data.transportation.gov first; the old code searched only data.bts.gov and
-  never found the T-100 tables), ~35 major US gateways with full catalogue
-  metadata (the old stub entries lacked cc/name/region and would have crashed
-  the Overview screen), pounds→tonnes freight, last-good fallback, loud
-  non-zero failure. Pipeline reordered (BTS before Eurostat/StatCan) so US
-  names/coords survive the reference trim. First live pull lands via the
-  nightly or a manual "Refresh data" run, gated by snapshot validation.
+- US airports live: `fetch-bts.mjs` pulls monthly T-100 segment data (all
+  carriers) straight from the TranStats download form — one per-year zip back
+  to 2015, WebForms state + session cookies handled in-script, data CSV picked
+  over the bundled field-description file — after live probing (Actions runs
+  48–59) showed Socrata carries only annual summaries, PREZIP only cached user
+  extracts, and the classic DownLoad_Table.asp endpoint is dead. 35 major US
+  gateways with full catalogue metadata, pounds→tonnes freight, last-good
+  fallback, loud non-zero failure. Pipeline reordered (BTS before
+  Eurostat/StatCan) so US names/coords survive the reference trim; first
+  verified end-to-end in run 29071108569 (135 months × 35 airports).
 - `scripts/validate-data.mjs`: structural schema validation for every snapshot
   shape, run in CI and as a nightly pre-commit gate.
 - `scripts/check-snapshots.mjs`: staleness + anomaly checks (shrinking series,
