@@ -187,14 +187,16 @@ export function parseCsvLine(line) {
    truth in one family; D/I pairs interleaved newest-first only if the
    combined family is absent. Numeric prefix descending ≈ newest data. */
 export function pickT100Zips(listingHtml) {
-  const found = [...new Set(String(listingHtml).match(/\d+_T_T100\w*?\.zip/g) || [])];
+  const found = [...new Set(String(listingHtml).match(/(?:\d+_)?T_T100\w*?\.zip/g) || [])];
   const groups = { combined: [], domestic: [], international: [] };
   for (const n of found) {
-    if (/_T_T100_SEGMENT_ALL_CARRIER\.zip$/i.test(n)) groups.combined.push(n);
-    else if (/_T_T100D_SEGMENT_ALL_CARRIER\.zip$/i.test(n)) groups.domestic.push(n);
-    else if (/_T_T100I_SEGMENT_ALL_CARRIER\.zip$/i.test(n)) groups.international.push(n);
+    if (/(?:^|_)T_T100_SEGMENT_ALL_CARRIER\.zip$/i.test(n)) groups.combined.push(n);
+    else if (/(?:^|_)T_T100D_SEGMENT_ALL_CARRIER\.zip$/i.test(n)) groups.domestic.push(n);
+    else if (/(?:^|_)T_T100I_SEGMENT_ALL_CARRIER\.zip$/i.test(n)) groups.international.push(n);
   }
-  const byIdDesc = (a, b) => parseInt(b) - parseInt(a);
+  // numeric request-id prefix descending ≈ newest cached extract first;
+  // an unprefixed (official) name has no id — sort it first
+  const byIdDesc = (a, b) => (Number.isNaN(parseInt(b)) ? -1 : Number.isNaN(parseInt(a)) ? 1 : parseInt(b) - parseInt(a));
   for (const k of Object.keys(groups)) groups[k].sort(byIdDesc);
   if (groups.combined.length) return groups.combined;
   const inter = [];
@@ -297,38 +299,78 @@ function roundAcc(acc) {
    columns we need from T_T100_SEGMENT_ALL_CARRIER, one year per request,
    so scope is consistent (all carriers, domestic + international) and
    years are disjoint by construction. Response is a zip with one CSV.
-   Everything about the exchange is logged so a contract surprise costs
-   one readable run, not a debugging session. */
+
+   Run 29042555380 answered with bare "HTTP 500" twice and we had not
+   logged the response body — TranStats returns descriptive ASP error
+   pages, so this version (a) logs the body of every failure, (b) sends
+   browser-shaped headers (the old glidepath-data-bot UA is a plausible
+   500 trigger on IIS), (c) carries the full set of form fields the real
+   download page posts, and (d) tries both hosts. The first variant that
+   yields a usable CSV is locked in for the remaining years. */
+const TT_UA = {
+  "User-Agent": "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0 Safari/537.36",
+  Accept: "*/*",
+};
+const DT_HOSTS = ["https://www.transtats.bts.gov", "https://transtats.bts.gov"];
+
+function downloadTableBody(y) {
+  const sql = `SELECT YEAR,MONTH,ORIGIN,PASSENGERS,FREIGHT,DEPARTURES_PERFORMED FROM T_T100_SEGMENT_ALL_CARRIER WHERE YEAR=${y}`;
+  return new URLSearchParams({
+    UserTableName: "T_100_Segment_All_Carrier",
+    DBShortName: "Air_Carriers",
+    RawDataTable: "T_T100_SEGMENT_ALL_CARRIER",
+    sqlstr: " " + sql,
+    varlist: "YEAR,MONTH,ORIGIN,PASSENGERS,FREIGHT,DEPARTURES_PERFORMED",
+    grouplist: "", suml: "", sumRegion: "", filter1: "title=", filter2: "title=",
+    geo: "All ", time: "All Months", timename: "Month",
+    GEOGRAPHY: "All", XYEAR: String(y), FREQUENCY: "All",
+  }).toString();
+}
+
+async function tryDownloadTable(host, y) {
+  const r = await fetch(`${host}/DownLoad_Table.asp?Table_ID=293&Has_Group=3&Is_Zipped=0`, {
+    method: "POST",
+    headers: {
+      ...TT_UA,
+      "Content-Type": "application/x-www-form-urlencoded",
+      Referer: `${host}/DL_SelectFields.aspx?Table_ID=293`,
+      Origin: host,
+    },
+    body: downloadTableBody(y),
+  });
+  const ct = r.headers.get("content-type") || "?";
+  if (!r.ok) {
+    let snippet = "";
+    try { snippet = (await r.text()).replace(/<[^>]+>/g, " ").replace(/\s+/g, " ").trim().slice(0, 300); } catch {}
+    throw new Error(`HTTP ${r.status} (${ct}) body: ${JSON.stringify(snippet)}`);
+  }
+  const buf = Buffer.from(await r.arrayBuffer());
+  const isZip = buf.length > 4 && buf[0] === 0x50 && buf[1] === 0x4b;
+  const csv = isZip ? unzipFirstCsv(buf).toString("utf8") : buf.toString("utf8");
+  if (!/^"?(YEAR|DATA_YEAR)"?,/i.test(csv.slice(0, 24))) {
+    throw new Error(`unexpected response (${ct}, ${buf.length}b, zip:${isZip}): ${JSON.stringify(csv.replace(/<[^>]+>/g, " ").replace(/\s+/g, " ").slice(0, 300))}`);
+  }
+  return { csv, bytes: buf.length, isZip };
+}
+
 async function fetchViaDownloadTable() {
   console.log("  [bts] trying TranStats DownLoad_Table.asp (deterministic per-year extracts)");
   const usSet = new Set(US);
   const acc = {};
   const thisYear = new Date().getFullYear();
-  let ok = 0, consecFail = 0;
+  let ok = 0, consecFail = 0, lockedHost = null;
   for (let y = thisYear; y >= T100_START_YEAR && consecFail < 2; y--) {
-    const sql = `SELECT YEAR,MONTH,ORIGIN,PASSENGERS,FREIGHT,DEPARTURES_PERFORMED FROM T_T100_SEGMENT_ALL_CARRIER WHERE YEAR=${y}`;
-    const body = new URLSearchParams({
-      UserTableName: "T_100_Segment_All_Carrier",
-      DBShortName: "Air_Carriers",
-      RawDataTable: "T_T100_SEGMENT_ALL_CARRIER",
-      sqlstr: " " + sql,
-    }).toString();
+    const hosts = lockedHost ? [lockedHost] : DT_HOSTS;
+    let got = null;
+    for (const host of hosts) {
+      try { got = await tryDownloadTable(host, y); lockedHost = host; break; }
+      catch (e) { console.warn(`  [bts]   ${y} ${host.replace("https://", "")}: ${e.message}`); }
+    }
+    if (!got) { consecFail++; continue; }
     try {
-      const r = await fetch("https://www.transtats.bts.gov/DownLoad_Table.asp?Table_ID=293&Has_Group=3&Is_Zipped=0", {
-        method: "POST", headers: { ...UA, "Content-Type": "application/x-www-form-urlencoded" }, body,
-      });
-      const ct = r.headers.get("content-type") || "?";
-      if (!r.ok) { console.warn(`  [bts]   ${y}: HTTP ${r.status} (${ct})`); consecFail++; continue; }
-      const buf = Buffer.from(await r.arrayBuffer());
-      const isZip = buf.length > 4 && buf[0] === 0x50 && buf[1] === 0x4b;
-      const csv = isZip ? unzipFirstCsv(buf).toString("utf8") : buf.toString("utf8");
-      if (!/^"?(YEAR|DATA_YEAR)"?,/i.test(csv.slice(0, 24))) {
-        console.warn(`  [bts]   ${y}: unexpected response (${ct}, ${buf.length}b, zip:${isZip}): ${JSON.stringify(csv.slice(0, 200))}`);
-        consecFail++; continue;
-      }
-      const { years } = aggregateT100Csv(csv, usSet, acc);
+      const { years } = aggregateT100Csv(got.csv, usSet, acc);
       ok++; consecFail = 0;
-      console.log(`  [bts]   ${y}: ${(buf.length / 1e6).toFixed(1)}MB (zip:${isZip}), years ${years.join("/") || "?"}`);
+      console.log(`  [bts]   ${y}: ${(got.bytes / 1e6).toFixed(1)}MB (zip:${got.isZip}), years ${years.join("/") || "?"}`);
     } catch (e) { console.warn(`  [bts]   ${y}: ${e.message}`); consecFail++; }
   }
   if (!ok || !Object.keys(acc).length) return null;
@@ -343,7 +385,13 @@ async function fetchViaTranstats() {
     try {
       const r = await fetch(base, { headers: UA });
       if (!r.ok) { console.warn(`  [bts] ${base} listing HTTP ${r.status}`); continue; }
-      names = pickT100Zips(await r.text());
+      const html = await r.text();
+      // diagnostic: every distinct T100-ish family in the listing (prefix
+      // stripped) — run 29042555380 matched a single zip and we couldn't
+      // tell whether better-named families were sitting right next to it
+      const fams = [...new Set((html.match(/[\w.-]*T100[\w.-]*\.zip/gi) || []).map((n) => n.replace(/^\d+_/, "")))].sort();
+      console.log(`  [bts] ${base} T100-ish zip families: ${fams.join(", ") || "none"}`);
+      names = pickT100Zips(html);
       if (names.length) { host = base; break; }
       console.warn(`  [bts] ${base} listing readable but no T-100 segment zips in it`);
     } catch (e) { console.warn(`  [bts] ${base} listing failed (${e.message})`); }
