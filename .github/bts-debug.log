@@ -1,5 +1,5 @@
-commit: 9ad6490829455205356556e4040a4a24bd92a687
-started: 2026-07-10T05:13:29Z
+commit: 3b77463f4cca9ef008fe70027fc05d0228b3d508
+run: 29070865575 (2026-07-10T05:14:13Z)
   [bts] data.transportation.gov: enumerated 413 datasets, 9 aviation-ish:
   [bts]     yj5y-b2ir "Consumer Airfare Report: Table 6 - Contiguous State City-Pair Markets That Average At Least 10 Passengers Per Day"
   [bts]     tfrh-tu9e "Consumer Airfare Report: Table 1a - All U.S. Airport Pair Markets"
@@ -121,5 +121,3 @@ started: 2026-07-10T05:13:29Z
   [bts] https://transtats.bts.gov/PREZIP/: 1 T-100 segment zips, newest first (target history back to 2015)
   [bts]   896816367_T_T100_SEGMENT_ALL_CARRIER.zip: T-100 csv missing YEAR/MONTH/ORIGIN/PASSENGERS — full header: FREIGHT,UNIQUE_CARRIER,UNIQUE_CARRIER_NAME,ORIGIN_AIRPORT_ID,ORIGIN,DEST_AIRPORT_ID,DEST,AIRCRAFT_TYPE,MONTH,
   [bts] no monthly T-100 source produced data (Socrata + DL_SelectFields + PREZIP all failed) — US airports keep last-good data
-fetch-bts exit: 1
-finished: 2026-07-10T05:13:46Z
