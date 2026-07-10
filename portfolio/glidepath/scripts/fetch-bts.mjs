@@ -207,9 +207,12 @@ export function pickT100Zips(listingHtml) {
   return inter;
 }
 
-/* minimal ZIP reader (central directory + inflateRaw) — enough for
-   TranStats' one-CSV-per-zip files, no dependency needed */
-export function unzipFirstCsv(buf) {
+/* minimal ZIP reader (central directory + inflateRaw) — no dependency
+   needed. TranStats download zips can carry MORE than one CSV (run
+   29066554350: the field-description file SYS_FIELD_NAME,FIELD_DESC sat
+   first and got picked over the data), so entries are enumerated and the
+   caller chooses. */
+export function zipEntries(buf) {
   let eocd = -1;
   for (let i = buf.length - 22; i >= Math.max(0, buf.length - 65558); i--) {
     if (buf.readUInt32LE(i) === 0x06054b50) { eocd = i; break; }
@@ -217,6 +220,7 @@ export function unzipFirstCsv(buf) {
   if (eocd < 0) throw new Error("not a zip (no end-of-central-directory)");
   const count = buf.readUInt16LE(eocd + 10);
   let off = buf.readUInt32LE(eocd + 16);
+  const out = [];
   for (let n = 0; n < count; n++) {
     if (buf.readUInt32LE(off) !== 0x02014b50) throw new Error("corrupt zip central directory");
     const method = buf.readUInt16LE(off + 10);
@@ -226,16 +230,40 @@ export function unzipFirstCsv(buf) {
     const commentLen = buf.readUInt16LE(off + 32);
     const lho = buf.readUInt32LE(off + 42);
     const name = buf.toString("latin1", off + 46, off + 46 + nameLen);
-    if (/\.csv$/i.test(name)) {
-      const dataStart = lho + 30 + buf.readUInt16LE(lho + 26) + buf.readUInt16LE(lho + 28);
-      const data = buf.subarray(dataStart, dataStart + csize);
-      if (method === 0) return data;
-      if (method === 8) return zlib.inflateRawSync(data);
-      throw new Error(`unsupported zip compression method ${method}`);
-    }
+    out.push({ name, method, csize, lho });
     off += 46 + nameLen + extraLen + commentLen;
   }
-  throw new Error("no .csv entry in zip");
+  return out;
+}
+
+export function unzipEntry(buf, e) {
+  const dataStart = e.lho + 30 + buf.readUInt16LE(e.lho + 26) + buf.readUInt16LE(e.lho + 28);
+  const data = buf.subarray(dataStart, dataStart + e.csize);
+  if (e.method === 0) return data;
+  if (e.method === 8) return zlib.inflateRawSync(data);
+  throw new Error(`unsupported zip compression method ${e.method}`);
+}
+
+export function unzipFirstCsv(buf) {
+  const e = zipEntries(buf).find((x) => /\.csv$/i.test(x.name));
+  if (!e) throw new Error("no .csv entry in zip");
+  return unzipEntry(buf, e);
+}
+
+/* the DATA csv out of a TranStats zip: csv entries largest-first, first
+   one whose header row carries the columns we asked for wins; throws with
+   the full entry listing so a surprise names itself in the run log */
+export function unzipDataCsv(buf) {
+  const entries = zipEntries(buf);
+  const csvs = entries.filter((e) => /\.csv$/i.test(e.name)).sort((a, b) => b.csize - a.csize);
+  for (const e of csvs) {
+    const text = unzipEntry(buf, e).toString("utf8");
+    const header = (text.slice(0, 400).split(/\r?\n/)[0] || "").toUpperCase();
+    if (header.includes("ORIGIN") && (header.includes("YEAR") || header.includes("MONTH"))) {
+      return { text, name: e.name };
+    }
+  }
+  throw new Error(`no data csv in zip — entries: ${entries.map((e) => `${e.name}(${e.csize}b)`).join(", ") || "none"}`);
 }
 
 /* aggregate one T-100 CSV into acc: iata -> {pax, atm, cargo} monthly.
@@ -495,10 +523,10 @@ async function fetchViaDlSelectFields() {
         }
         if (!got) { consecFail++; continue; }
         try {
-          const csv = got.isZip ? unzipFirstCsv(got.buf).toString("utf8") : got.buf.toString("utf8");
+          const { text: csv, name } = got.isZip ? unzipDataCsv(got.buf) : { text: got.buf.toString("utf8"), name: "(bare csv)" };
           const { years } = aggregateT100Csv(csv, usSet, acc);
           ok++; consecFail = 0;
-          console.log(`  [bts]   ${y} [${winner.tag}]: ${(got.buf.length / 1e6).toFixed(1)}MB (zip:${got.isZip}), years ${years.join("/") || "?"}`);
+          console.log(`  [bts]   ${y} [${winner.tag}]: ${(got.buf.length / 1e6).toFixed(1)}MB, ${name}, years ${years.join("/") || "?"}`);
         } catch (e) { console.warn(`  [bts]   ${y}: ${e.message}`); consecFail++; }
       }
       if (ok && Object.keys(acc).length) {

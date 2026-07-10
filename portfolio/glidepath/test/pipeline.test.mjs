@@ -385,3 +385,44 @@ test("formIntel: reads controls, postback targets and download-ish js off a WebF
   assert.ok(i.jsLines.some((l) => l.includes("DownLoad_Table.asp")), "js download endpoint surfaced");
   assert.deepEqual(i.selects.cboYear, ["2025"], "select option values captured");
 });
+
+test("unzipDataCsv: skips the field-description csv and returns the data csv", async () => {
+  const { unzipDataCsv, zipEntries } = await import("../scripts/fetch-bts.mjs");
+  const { deflateRawSync, crc32 } = zlib;
+  const mkzip = (files) => {
+    // minimal store/deflate zip builder for the fixture
+    const chunks = [], central = [];
+    let off = 0;
+    for (const [name, content] of files) {
+      const raw = Buffer.from(content);
+      const comp = deflateRawSync(raw);
+      const nameB = Buffer.from(name);
+      const lh = Buffer.alloc(30);
+      lh.writeUInt32LE(0x04034b50, 0); lh.writeUInt16LE(8, 8);
+      lh.writeUInt32LE(comp.length, 18); lh.writeUInt32LE(raw.length, 22);
+      lh.writeUInt16LE(nameB.length, 26);
+      chunks.push(lh, nameB, comp);
+      const ce = Buffer.alloc(46);
+      ce.writeUInt32LE(0x02014b50, 0); ce.writeUInt16LE(8, 10);
+      ce.writeUInt32LE(comp.length, 20); ce.writeUInt32LE(raw.length, 24);
+      ce.writeUInt16LE(nameB.length, 28); ce.writeUInt32LE(off, 42);
+      central.push(ce, nameB);
+      off += 30 + nameB.length + comp.length;
+    }
+    const cd = Buffer.concat(central);
+    const eocd = Buffer.alloc(22);
+    eocd.writeUInt32LE(0x06054b50, 0);
+    eocd.writeUInt16LE(files.length, 8); eocd.writeUInt16LE(files.length, 10);
+    eocd.writeUInt32LE(cd.length, 12); eocd.writeUInt32LE(off, 16);
+    return Buffer.concat([...chunks, cd, eocd]);
+  };
+  const dict = "SYS_FIELD_NAME,FIELD_DESC\nYEAR,The year\n";
+  const data = '"YEAR","MONTH","ORIGIN","PASSENGERS"\n2024,1,"JFK",1000\n';
+  const zip = mkzip([["readme.csv", dict], ["T_T100_SEGMENT.csv", data]]);
+  assert.equal(zipEntries(zip).length, 2);
+  const picked = unzipDataCsv(zip);
+  assert.equal(picked.name, "T_T100_SEGMENT.csv", "data csv chosen over the dictionary");
+  assert.ok(picked.text.startsWith('"YEAR"'));
+  const dictOnly = mkzip([["readme.csv", dict]]);
+  assert.throws(() => unzipDataCsv(dictOnly), /no data csv in zip — entries: readme\.csv/);
+});
