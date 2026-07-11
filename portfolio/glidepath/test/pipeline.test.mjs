@@ -302,27 +302,33 @@ test("unzipFirstCsv: extracts the CSV entry from a real zip container, skipping 
   assert.throws(() => unzipFirstCsv(Buffer.from("not a zip at all, definitely")), /end-of-central-directory/);
 });
 
-test("aggregateT100Csv: sums by origin airport x month, converts freight lbs->tonnes, skips non-targets", () => {
+test("aggregateT100Csv: totals convention — both segment ends count (enplaned+deplaned)", () => {
   const csv = [
     '"YEAR","MONTH","ORIGIN","DEST","PASSENGERS","FREIGHT","DEPARTURES_PERFORMED","ORIGIN_CITY_NAME"',
     '2024,1,"ATL","JFK",50000,2204624,400,"Atlanta, GA"',      // 2,204,624 lb ~ 1000 t
     '2024,1,"ATL","LAX",30000,0,200,"Atlanta, GA"',
-    '2024,1,"XXX","ATL",99999,0,50,"Not a target"',
+    '2024,1,"XXX","ATL",99999,0,50,"arrival at ATL counts for ATL only"',
     '2024,2,"JFK","ATL",10000,0,100,"New York, NY"',
     '1901,1,"ATL","JFK",5,0,1,"junk year dropped"',
     "",
   ].join("\n");
   const { acc, years } = aggregateT100Csv(csv, new Set(["ATL", "JFK"]));
-  assert.equal(acc.ATL.pax["2024-01"], 80000, "two ATL segment rows sum");
-  assert.equal(acc.ATL.atm["2024-01"], 600);
-  assert.equal(Math.round(acc.ATL.cargo["2024-01"]), 1000, "freight lands in tonnes");
+  // ATL 2024-01: departures 50000+30000 enplaned, plus 99999 deplaned off XXX->ATL
+  assert.equal(acc.ATL.pax["2024-01"], 179999, "enplaned + deplaned = total passengers");
+  assert.equal(acc.ATL.atm["2024-01"], 650, "600 departures + 50 arrivals = total movements");
+  assert.equal(Math.round(acc.ATL.cargo["2024-01"]), 1000, "freight loaded+unloaded, in tonnes");
+  // JFK 2024-01: 50000 deplaned off ATL->JFK; 2024-02: 10000 enplaned + 10000 deplaned at ATL
+  assert.equal(acc.JFK.pax["2024-01"], 50000, "arrival side counts at the destination");
   assert.equal(acc.JFK.pax["2024-02"], 10000);
-  assert.ok(!acc.XXX, "non-target origins skipped");
+  assert.equal(acc.ATL.pax["2024-02"], 10000, "JFK->ATL lands on ATL as deplaned");
+  assert.ok(!acc.XXX, "non-target airports never appear");
   assert.deepEqual(years, [2024]);
   // accumulation across files: a second file's rows add into the same acc
-  aggregateT100Csv('"YEAR","MONTH","ORIGIN","PASSENGERS"\n2023,12,"ATL",70000\n', new Set(["ATL"]), acc);
+  aggregateT100Csv('"YEAR","MONTH","ORIGIN","DEST","PASSENGERS"\n2023,12,"ATL","XXX",70000\n', new Set(["ATL"]), acc);
   assert.equal(acc.ATL.pax["2023-12"], 70000);
-  assert.equal(acc.ATL.pax["2024-01"], 80000, "earlier months untouched");
+  assert.equal(acc.ATL.pax["2024-01"], 179999, "earlier months untouched");
+  // DEST is mandatory: origin-only extracts would silently be enplanements
+  assert.throws(() => aggregateT100Csv('"YEAR","MONTH","ORIGIN","PASSENGERS"\n2023,12,"ATL",1\n', new Set(["ATL"])), /missing YEAR\/MONTH\/ORIGIN\/DEST/);
   assert.throws(() => aggregateT100Csv("A,B\n1,2\n", new Set(["ATL"])), /missing YEAR/);
 });
 

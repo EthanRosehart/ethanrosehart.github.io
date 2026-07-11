@@ -323,7 +323,7 @@ to `main` and trigger that same redeploy: the nightly data refresh
 - **US coverage: ~35 largest gateways via BTS T-100 (all carriers, segment).**
   `scripts/fetch-bts.mjs` requests one extract per year (back to 2015) from
   the TranStats download form — the run log documents the whole exchange —
-  and aggregates passengers / movements / freight by origin airport × month.
+  and aggregates both ends of every segment — passengers are enplaned + deplaned (total passengers, the convention airports publish and Eurostat uses), movements are departures + arrivals, freight is loaded + unloaded tonnes.
   Socrata discovery still runs first (it wins automatically if DOT ever
   publishes a monthly table there); a total failure keeps last-good data and
   exits non-zero into the pipeline-health issue. T-100 publishes on a ~2–3
