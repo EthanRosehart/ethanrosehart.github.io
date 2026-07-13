@@ -48,11 +48,37 @@ const IND = {
 
 const API = "https://api.worldbank.org/v2";
 
+/* The World Bank API occasionally serves a one-off 5xx (a 502 here failed
+   the whole nightly run on 2026-07-13); retry with backoff before giving
+   up so a single hiccup doesn't mark the pipeline unhealthy. 4xx responses
+   are real request errors and still fail immediately. */
+const RETRIES = 4;
+const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+
+async function fetchWithRetry(url, label) {
+  for (let attempt = 0; ; attempt++) {
+    let res;
+    try {
+      res = await fetch(url, { headers: { "User-Agent": "glidepath-data-bot" } });
+    } catch (err) {
+      if (attempt >= RETRIES) throw new Error(`${label}: ${err.message}`);
+      res = null;
+    }
+    if (res) {
+      if (res.ok) return res;
+      if (res.status < 500 && res.status !== 429) throw new Error(`${label}: HTTP ${res.status}`);
+      if (attempt >= RETRIES) throw new Error(`${label}: HTTP ${res.status} after ${RETRIES + 1} attempts`);
+    }
+    const wait = 2000 * 2 ** attempt;
+    console.warn(`  ${label}: ${res ? `HTTP ${res.status}` : "network error"} — retrying in ${wait / 1000}s (${attempt + 1}/${RETRIES})`);
+    await sleep(wait);
+  }
+}
+
 async function fetchIndicator(indicator) {
   const codes = Object.keys(COUNTRIES).join(";");
   const url = `${API}/country/${codes}/indicator/${indicator}?format=json&per_page=4000&date=2010:2025`;
-  const res = await fetch(url, { headers: { "User-Agent": "glidepath-data-bot" } });
-  if (!res.ok) throw new Error(`${indicator}: HTTP ${res.status}`);
+  const res = await fetchWithRetry(url, indicator);
   const body = await res.json();
   const rows = Array.isArray(body) ? body[1] : null;
   if (!rows) throw new Error(`${indicator}: unexpected payload`);
