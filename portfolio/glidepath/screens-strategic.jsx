@@ -48,7 +48,9 @@ function LongTerm({ airport, history, scenario, go }){
         <KPI accent label={lt.endYear+" passengers"} value={GP_fmt.k1(end.pax)} delta={GP_fmt.pct(lt.cagr)+" CAGR"} deltaDir="up" sub={"from "+GP_fmt.k1(start.pax)+" in "+lt.baseYear}/>
         <KPI label="Demand growth" value={GP_fmt.pct(lt.gDemand)} sub="annual, blended drivers" sparkColor="var(--cyan)"/>
         {lt.hasAtm
-          ? <KPI label={lt.endYear+" movements"} value={GP_fmt.k(end.atm)} sub="held proportional to PAX" sparkColor="var(--lime)"/>
+          ? (lt.hasCap && end.atmC != null && end.atmC < end.atm
+              ? <KPI label={lt.endYear+" movements"} value={GP_fmt.k(end.atmC)} sub={"at capacity · demand "+GP_fmt.k(end.atm)} sparkColor="var(--amber)"/>
+              : <KPI label={lt.endYear+" movements"} value={GP_fmt.k(end.atm)} sub="held proportional to PAX" sparkColor="var(--lime)"/>)
           : lt.hasCargo
           ? <KPI label={lt.endYear+" cargo"} value={GP_fmt.k(end.cargo)+"t"} sub="freight trajectory" sparkColor="var(--lime)"/>
           : <KPI label="Horizon" value={(lt.endYear-lt.baseYear)+" yrs"} sub={"to "+lt.endYear}/>}
@@ -107,9 +109,17 @@ function LongTerm({ airport, history, scenario, go }){
         </div>
       </div>
 
+      {(()=>{
+        // when a cap actually bites, the table reports SERVED traffic (what the
+        // airport can physically handle) — unconstrained demand stays on the
+        // chart above as the pink line
+        const capped = lt.hasCap && lt.months.some(r =>
+          (r.paxC != null && r.paxC !== r.pax) || (r.atmC != null && r.atmC !== r.atm) || (r.cargoC != null && r.cargoC !== r.cargo));
+        const cell = (r, k) => GP_fmt.int(capped ? (r[k+"C"] ?? r[k]) : r[k]);
+        return (
       <div className="panel panel-pad">
         <SectionHead kicker={"Monthly table · "+macro.label+" macro baseline"} title="Month-by-month forecast"
-          right={<span className="air-meta">{lt.months.length} months · {macro.label} baseline</span>}/>
+          right={<span className="air-meta">{lt.months.length} months · {macro.label} baseline{capped?" · capacity-constrained":""}</span>}/>
         <div style={{maxHeight:360,overflowY:"auto"}}>
           <table className="tbl">
             <thead><tr><th>Month</th><th>Passengers</th>{lt.hasAtm&&<th>Movements</th>}{lt.hasCargo&&<th>Cargo (t)</th>}</tr></thead>
@@ -117,16 +127,18 @@ function LongTerm({ airport, history, scenario, go }){
               {lt.months.map((r,i)=>(
                 <tr key={i} style={r.m===0?{borderTop:"1px solid var(--line-2)"}:{}}>
                   <td style={{color:r.m===0?"var(--text)":"var(--dim)",fontWeight:r.m===0?700:400}}>{r.label}</td>
-                  <td style={{color:"var(--pink-2)",fontWeight:700}}>{GP_fmt.int(r.pax)}</td>
-                  {lt.hasAtm&&<td>{GP_fmt.int(r.atm)}</td>}
-                  {lt.hasCargo&&<td>{GP_fmt.int(r.cargo)}</td>}
+                  <td style={{color:"var(--pink-2)",fontWeight:700}}>{cell(r,"pax")}</td>
+                  {lt.hasAtm&&<td>{cell(r,"atm")}</td>}
+                  {lt.hasCargo&&<td>{cell(r,"cargo")}</td>}
                 </tr>
               ))}
             </tbody>
           </table>
         </div>
-        <div className="air-meta" style={{marginTop:12}}>Passengers compound at the blended demand growth on the observed {lt.baseYear} seasonal shape{lt.hasAtm?"; movements are held proportional to passengers at the latest observed ratio":""}.</div>
+        <div className="air-meta" style={{marginTop:12}}>Passengers compound at the blended demand growth on the observed {lt.baseYear} seasonal shape{lt.hasAtm?"; movements are held proportional to passengers at the latest observed ratio":""}.{capped?<> A binding capacity cap is applied — this table shows <b style={{color:"var(--amber)"}}>served traffic</b>; the chart's unconstrained line is demand.</>:null}</div>
       </div>
+        );
+      })()}
 
       {/* design-day / peak-hour: the granularity terminal & runway planning
           actually happens at. Derived from the real seasonal shape with
@@ -250,6 +262,9 @@ function Scenario({ airport, history, scenario, setScenario }){
     ...(d.lt && d.lt.hasCargo ? [{ k:"cargo", label:"Cargo" }]     : [])];
   const [metric, setMetric] = React.useState("pax");
   const m = metricDefs.some(x=>x.k===metric) ? metric : "pax";
+  // monthly shows the seasonal shape; annual sums each year so totals are
+  // readable at a glance while shaping the forecast
+  const [view, setView] = React.useState("monthly");
 
   // per-segment demand levers (only when the gateway publishes the split)
   const segLevers = (d.lt && d.lt.hasSeg) ? d.lt.segKeys.map((k,i)=>({
@@ -286,10 +301,27 @@ function Scenario({ airport, history, scenario, setScenario }){
   if (!d.lt || !d.baseLt) return <div className="content fade-in"><div className="panel panel-pad"><div className="air-meta">Not enough complete years of data to build scenarios yet.</div></div></div>;
   const end = d.lt.rows[d.lt.rows.length-1], baseEnd = d.baseLt.rows[d.baseLt.rows.length-1];
   const fmtM = (v)=> m==="cargo" ? GP_fmt.t(v) : (m==="pax" ? GP_fmt.k1(v) : GP_fmt.k(v));
-  const endM = end[m] ?? 0, baseEndM = baseEnd[m] ?? 0, diffM = endM - baseEndM;
+  // when a capacity cap bites the metric on screen, the headline numbers are
+  // the SERVED values — a slot cap that the KPIs ignored used to read
+  // "+0 vs base" no matter what the cap did to the trajectory
+  const ck = { pax:"paxC", atm:"atmC", cargo:"cargoC" }[m];
+  const endDemand = end[m] ?? 0;
+  const endM = (d.lt.hasCap && end[ck] != null) ? end[ck] : endDemand;
+  const capBites = endM !== endDemand;
+  const baseEndM = baseEnd[m] ?? 0, diffM = endM - baseEndM;
   const yrs = d.lt.endYear - d.lt.baseYear;
   const cagrM = (d.lt.rows[0][m] && endM) ? (Math.pow(endM/d.lt.rows[0][m], 1/yrs)-1)*100 : 0;
   const mLabel = (metricDefs.find(x=>x.k===m)||{}).label || "Passengers";
+  // chart data for the current view — annual plots the yearly roll-ups
+  // (base-year anchor included) instead of the 300-month seasonal ribbon
+  const chart = (()=>{
+    const src = view==="annual" ? d.lt.rows : d.lt.months;
+    const baseSrc = view==="annual" ? d.baseLt.rows : d.baseLt.months;
+    const labels = view==="annual" ? src.map(r=>String(r.y)) : d.labels;
+    const capVals = (d.lt.hasCap && src.some(r => r[ck] != null && r[ck] !== r[m]))
+      ? src.map(r => r[ck] ?? r[m]) : null;
+    return { labels, scen: src.map(r=>r[m]), base: baseSrc.map(r=>r[m]), capVals };
+  })();
   const activePreset = (()=>{
     const NON_DEMAND = new Set(["events","horizon","paxCap","atmCap","capSteps","capGauge","capGaugeMax","bellyShare","bellyBeta"]);
     const eq=(o)=>Object.keys(o).every(k=> NON_DEMAND.has(k) ? true : Math.abs((scenario[k]??0)-(o[k]??0))<0.001);
@@ -436,8 +468,9 @@ function Scenario({ airport, history, scenario, setScenario }){
         <div style={{display:"flex",flexDirection:"column",gap:16}}>
           <div className="grid g-3">
             <KPI accent label={d.lt.endYear+" "+mLabel.toLowerCase()+" · scenario"} value={fmtM(endM)}
-              delta={(diffM>=0?"+":"")+fmtM(Math.abs(diffM))+" vs base"} deltaDir={diffM>=0?"up":"down"} sub={mLabel.toLowerCase()}/>
-            <KPI label={mLabel+" CAGR"} value={GP_fmt.pct(cagrM)} sub={d.lt.baseYear+"→"+d.lt.endYear} sparkColor="var(--cyan)"/>
+              delta={(diffM>=0?"+":"")+fmtM(Math.abs(diffM))+" vs base"} deltaDir={diffM>=0?"up":"down"}
+              sub={capBites ? "capacity-capped · demand "+fmtM(endDemand) : mLabel.toLowerCase()}/>
+            <KPI label={mLabel+" CAGR"} value={GP_fmt.pct(cagrM)} sub={d.lt.baseYear+"→"+d.lt.endYear+(capBites?" · served":"")} sparkColor="var(--cyan)"/>
             <KPI label="vs baseline" value={GP_fmt.pct(baseEndM?(endM/baseEndM-1)*100:0)} deltaDir={diffM>=0?"up":"down"} sub={d.lt.endYear+" "+mLabel.toLowerCase()} />
           </div>
 
@@ -445,23 +478,22 @@ function Scenario({ airport, history, scenario, setScenario }){
             <SectionHead kicker="Live impact" title="Scenario vs baseline"
               right={<div style={{display:"flex",gap:12,alignItems:"center",flexWrap:"wrap"}}>
                 {metricDefs.length>1 && <div className="seg">{metricDefs.map(x=><button key={x.k} className={m===x.k?"on":""} onClick={()=>setMetric(x.k)}>{x.label}</button>)}</div>}
+                <div className="seg seg-sub">
+                  {[["monthly","Monthly"],["annual","Annual"]].map(([v,lb])=>
+                    <button key={v} className={view===v?"on":""} onClick={()=>setView(v)}>{lb}</button>)}
+                </div>
                 <div className="chart-legend">
                   <span className="legend-item"><span className="legend-line" style={{borderColor:"var(--pink)"}}></span>Scenario</span>
                   <span className="legend-item"><span className="legend-line" style={{borderColor:"var(--faint)",borderStyle:"dashed"}}></span>Baseline</span>
+                  {chart.capVals && <span className="legend-item"><span className="legend-line" style={{borderColor:"var(--amber)"}}></span>Constrained</span>}
                 </div>
               </div>}/>
-            <LineChart labels={d.labels} height={270}
-              yFmt={m==="cargo"?(v=>GP_fmt.k(v)):undefined}
+            <LineChart labels={chart.labels} height={270}
               valueFmt={m==="cargo"?(v=>GP_fmt.int(v)+" t"):undefined}
               series={[
-                { name:"Baseline", color:"var(--faint)", values:d.baseLt.months.map(r=>r[m]), dash:"5 4", width:1.8 },
-                { name:"Scenario", color:"var(--pink)", values:d.lt.months.map(r=>r[m]), fill:true, glow:true, width:2.8 },
-                ...(()=>{ // constrained overlay for whichever metric is shown, when a cap actually bites it
-                  if (!d.lt.hasCap) return [];
-                  const ck = { pax:"paxC", atm:"atmC", cargo:"cargoC" }[m];
-                  if (!d.lt.months.some(r => r[ck] != null && r[ck] !== r[m])) return [];
-                  return [{ name:"Constrained", color:"var(--amber)", values:d.lt.months.map(r=>r[ck] ?? r[m]), width:2.2 }];
-                })(),
+                { name:"Baseline", color:"var(--faint)", values:chart.base, dash:"5 4", width:1.8 },
+                { name:"Scenario", color:"var(--pink)", values:chart.scen, fill:!chart.capVals, glow:true, width:2.8 },
+                ...(chart.capVals ? [{ name:"Constrained", color:"var(--amber)", values:chart.capVals, fill:true, width:2.2 }] : []),
               ]}/>
           </div>
 
@@ -536,6 +568,9 @@ function EventSim({ airport, history, scenario, setScenario }){
     ...(d.lt && d.lt.hasCargo ? [{ k:"cargo", label:"Cargo" }]     : [])];
   const [metric, setMetric] = React.useState("pax");
   const m = metricDefs.some(x=>x.k===metric) ? metric : "pax";
+  // monthly shows the shock month-by-month; annual sums each year so the
+  // lasting damage (or recovery) reads directly in yearly totals
+  const [view, setView] = React.useState("monthly");
 
   const events = scenario.events || [];
   const setEvents = (evs)=> setScenario({ ...scenario, events: evs });
@@ -549,7 +584,14 @@ function EventSim({ airport, history, scenario, setScenario }){
   const end = d.lt.rows[d.lt.rows.length-1], baseEnd = d.baseLt.rows[d.baseLt.rows.length-1];
   const fmtM = (v)=> m==="cargo" ? GP_fmt.t(v) : (m==="pax" ? GP_fmt.k1(v) : GP_fmt.k(v));
   const trough = d.lt.months.reduce((a,r)=> (r[m]??Infinity)<(a[m]??Infinity)?r:a, d.lt.months[0]);
-  const endDelta = (end[m]??0) - (baseEnd[m]??0);
+  // KPIs report SERVED values when a capacity cap bites this metric — both
+  // sides carry the same caps (baseLt is this scenario minus its events), so
+  // the "vs no-shock" delta stays like-for-like
+  const ck = { pax:"paxC", atm:"atmC", cargo:"cargoC" }[m];
+  const served = (row)=> (d.lt.hasCap && row[ck] != null) ? row[ck] : (row[m] ?? 0);
+  const endServed = served(end);
+  const capBites = endServed !== (end[m] ?? 0);
+  const endDelta = endServed - served(baseEnd);
   const targetOpts = [{ k:"all", label:"All traffic" }, ...(d.lt.hasSeg ? d.lt.segKeys.map((k,i)=>({ k, label:d.lt.segLabels[i] })) : [])];
   const yearOpts = []; for (let yy=by+1; yy<=d.lt.endYear; yy++) yearOpts.push(yy);
   const eventSpans = events.map(ev=>{
@@ -558,12 +600,29 @@ function EventSim({ airport, history, scenario, setScenario }){
     const span = (len + (ev.permanent ? 6 : Math.round(+ev.recovery||0))) || 1;
     return { from:si, to:Math.min(d.lt.months.length-1, si+span), color:"var(--bad)", label:ev.label };
   }).filter(Boolean);
+  // chart data for the current view — annual plots yearly roll-ups, with the
+  // event shading windows mapped from month indices to year indices
+  const chart = (()=>{
+    if (view !== "annual"){
+      const capVals = (d.lt.hasCap && d.lt.months.some(r => r[ck] != null && r[ck] !== r[m]))
+        ? d.lt.months.map(r => r[ck] ?? r[m]) : null;
+      return { labels: d.labels, shock: d.lt.months.map(r=>r[m]), base: d.baseLt.months.map(r=>r[m]), capVals, spans: eventSpans };
+    }
+    const labels = d.lt.rows.map(r=>String(r.y));
+    const capVals = (d.lt.hasCap && d.lt.rows.some(r => r[ck] != null && r[ck] !== r[m]))
+      ? d.lt.rows.map(r => r[ck] ?? r[m]) : null;
+    const spans = eventSpans.map(sp=>({ ...sp,
+      from: d.lt.months[sp.from].y - d.lt.baseYear,
+      to:   d.lt.months[sp.to].y - d.lt.baseYear }));
+    return { labels, shock: d.lt.rows.map(r=>r[m]), base: d.baseLt.rows.map(r=>r[m]), capVals, spans };
+  })();
 
   return (
     <div className="content fade-in">
       <div className="grid g-3" style={{marginBottom:16}}>
-        <KPI accent label={d.lt.endYear+" "+(metricDefs.find(x=>x.k===m)||{}).label.toLowerCase()+" · with events"} value={fmtM(end[m]??0)}
-          delta={(endDelta>=0?"+":"")+fmtM(Math.abs(endDelta))+" vs no-shock"} deltaDir={endDelta>=0?"up":"down"} sub="end of horizon"/>
+        <KPI accent label={d.lt.endYear+" "+(metricDefs.find(x=>x.k===m)||{}).label.toLowerCase()+" · with events"} value={fmtM(endServed)}
+          delta={(endDelta>=0?"+":"")+fmtM(Math.abs(endDelta))+" vs no-shock"} deltaDir={endDelta>=0?"up":"down"}
+          sub={capBites ? "capacity-capped · demand "+fmtM(end[m]??0) : "end of horizon"}/>
         <KPI label="Deepest month" value={fmtM(trough[m]??0)} sub={trough.label} sparkColor="var(--bad)"/>
         <KPI label="Events stacked" value={String(events.length)} sub="active shocks"/>
       </div>
@@ -572,17 +631,22 @@ function EventSim({ airport, history, scenario, setScenario }){
         <SectionHead kicker="Event impact" title="Forecast with shocks"
           right={<div style={{display:"flex",gap:12,alignItems:"center",flexWrap:"wrap"}}>
             {metricDefs.length>1 && <div className="seg">{metricDefs.map(x=><button key={x.k} className={m===x.k?"on":""} onClick={()=>setMetric(x.k)}>{x.label}</button>)}</div>}
+            <div className="seg seg-sub">
+              {[["monthly","Monthly"],["annual","Annual"]].map(([v,lb])=>
+                <button key={v} className={view===v?"on":""} onClick={()=>setView(v)}>{lb}</button>)}
+            </div>
             <div className="chart-legend">
               <span className="legend-item"><span className="legend-line" style={{borderColor:"var(--pink)"}}></span>With events</span>
               <span className="legend-item"><span className="legend-line" style={{borderColor:"var(--faint)",borderStyle:"dashed"}}></span>No shocks</span>
+              {chart.capVals && <span className="legend-item"><span className="legend-line" style={{borderColor:"var(--amber)"}}></span>Constrained</span>}
             </div>
           </div>}/>
-        <LineChart labels={d.labels} height={300} spans={eventSpans}
-          yFmt={m==="cargo"?(v=>GP_fmt.k(v)):undefined}
+        <LineChart labels={chart.labels} height={300} spans={chart.spans}
           valueFmt={m==="cargo"?(v=>GP_fmt.int(v)+" t"):undefined}
           series={[
-            { name:"No shocks", color:"var(--faint)", values:d.baseLt.months.map(r=>r[m]), dash:"5 4", width:1.8 },
-            { name:"With events", color:"var(--pink)", values:d.lt.months.map(r=>r[m]), fill:true, glow:true, width:2.8 },
+            { name:"No shocks", color:"var(--faint)", values:chart.base, dash:"5 4", width:1.8 },
+            { name:"With events", color:"var(--pink)", values:chart.shock, fill:!chart.capVals, glow:true, width:2.8 },
+            ...(chart.capVals ? [{ name:"Constrained", color:"var(--amber)", values:chart.capVals, fill:true, width:2.2 }] : []),
           ]}/>
       </div>
 
@@ -781,19 +845,30 @@ function ExportView({ airport, history, scenario }){
       [(end.y-base.y)+"-yr PAX CAGR (%)", d.lt.cagr],
       ["Annual demand growth (%)", d.lt.gDemand],
       ...(hasAtm?[[end.y+" movements", end.atm]]:[]),
+      ...(d.lt.hasCap?[
+        [end.y+" passengers (served, capacity-constrained)", end.paxC ?? end.pax],
+        ...(hasAtm?[[end.y+" movements (served, capacity-constrained)", end.atmC ?? end.atm]]:[]),
+        [end.y+" unserved demand (spill)", end.spill ?? 0],
+      ]:[]),
       ...(d.st&&d.st.mape!=null?[["Next-12mo confidence ±MAPE (%)", d.st.mape]]:[]),
     ];
     XLSX.utils.book_append_sheet(wb, XLSX.utils.aoa_to_sheet(summary), "Summary");
 
     const segHeadCols = d.lt.hasSeg ? d.lt.segLabels.map(l=>l+" pax") : [];
-    const ltHead = ["Year","Passengers", ...(hasAtm?["Movements"]:[]), ...(hasCargo?["Cargo (t)"]:[]), ...segHeadCols];
+    // same coupled-constraint columns the CSV extract ships whenever a cap is set
+    const capHeadCols = d.lt.hasCap
+      ? ["Passengers (constrained)","Spill", ...(hasAtm?["Movements (constrained)"]:[]), ...(hasCargo?["Cargo t (constrained)"]:[])]
+      : [];
+    const ltHead = ["Year","Passengers", ...(hasAtm?["Movements"]:[]), ...(hasCargo?["Cargo (t)"]:[]), ...segHeadCols, ...capHeadCols];
     const ltRow = (r,key) => [r[key], r.pax, ...(hasAtm?[r.atm]:[]), ...(hasCargo?[r.cargo]:[]),
-      ...(d.lt.hasSeg ? d.lt.segKeys.map(k=> (r.seg&&r.seg[k]) ?? "") : [])];
+      ...(d.lt.hasSeg ? d.lt.segKeys.map(k=> (r.seg&&r.seg[k]) ?? "") : []),
+      ...(d.lt.hasCap ? [r.paxC ?? "", (r.spill != null ? r.spill : (r.paxC != null ? r.pax - r.paxC : "")),
+        ...(hasAtm?[r.atmC ?? ""]:[]), ...(hasCargo?[r.cargoC ?? ""]:[])] : [])];
     const ltAoa = [ltHead];
     d.lt.rows.forEach(r=> ltAoa.push(ltRow(r,"y")));
     XLSX.utils.book_append_sheet(wb, XLSX.utils.aoa_to_sheet(ltAoa), "Long-term annual");
 
-    const ltmHead = ["Month","Passengers", ...(hasAtm?["Movements"]:[]), ...(hasCargo?["Cargo (t)"]:[]), ...segHeadCols];
+    const ltmHead = ["Month","Passengers", ...(hasAtm?["Movements"]:[]), ...(hasCargo?["Cargo (t)"]:[]), ...segHeadCols, ...capHeadCols];
     const ltmAoa = [ltmHead];
     d.lt.months.forEach(r=> ltmAoa.push(ltRow(r,"date")));
     XLSX.utils.book_append_sheet(wb, XLSX.utils.aoa_to_sheet(ltmAoa), "Long-term monthly");
@@ -843,15 +918,21 @@ function ExportView({ airport, history, scenario }){
     s.addText("Generated "+stamp+"  ·  Sources: "+provenanceShort,
       { x:0.6, y:6.7, w:12, fontSize:11, color:DIM });
 
-    // 2 — headline KPIs
+    // 2 — headline KPIs. Under a binding capacity cap the headline numbers
+    // are SERVED traffic — a slide claiming demand the airport physically
+    // can't handle is the kind of figure that gets a forecast thrown out.
     s = pptx.addSlide(); s.background = { color: DARK };
     s.addText("Forecast headlines", { x:0.6, y:0.4, fontSize:24, bold:true, color:INK });
+    const cappedPax = d.lt.hasCap && end.paxC != null && end.paxC < end.pax;
+    const cappedAtm = d.lt.hasCap && hasAtm && end.atmC != null && end.atmC < end.atm;
     const kpis = [
-      [end.y+" passengers", GP_fmt.k1(end.pax)],
-      [(end.y-base.y)+"-yr CAGR", GP_fmt.pct(d.lt.cagr)],
-      ...(hasAtm?[[end.y+" movements", GP_fmt.k(end.atm)]]:[]),
+      [end.y+" passengers"+(cappedPax?" (at capacity)":""), GP_fmt.k1(cappedPax?end.paxC:end.pax)],
+      [(end.y-base.y)+"-yr demand CAGR", GP_fmt.pct(d.lt.cagr)],
+      ...(hasAtm?[[end.y+" movements"+(cappedAtm?" (at capacity)":""), GP_fmt.k(cappedAtm?end.atmC:end.atm)]]:[]),
       ["Annual demand growth", GP_fmt.pct(d.lt.gDemand)],
-      ["Base year ("+base.y+") PAX", GP_fmt.k1(base.pax)],
+      ...(cappedPax
+        ? [["Unserved demand (spill) "+end.y, GP_fmt.k1(end.spill||0)]]
+        : [["Base year ("+base.y+") PAX", GP_fmt.k1(base.pax)]]),
       ...(d.st&&d.st.mape!=null?[["Next-12mo confidence", "±"+d.st.mape+"%"]]:[]),
     ];
     kpis.forEach((k,i)=>{
@@ -865,13 +946,19 @@ function ExportView({ airport, history, scenario }){
     // 3 — long-term trajectory table
     s = pptx.addSlide(); s.background = { color: DARK };
     s.addText((end.y-base.y)+"-year trajectory to "+end.y, { x:0.6, y:0.4, fontSize:24, bold:true, color:INK });
-    const headCells = ["Year","Passengers", ...(hasAtm?["Movements"]:[]), ...(hasCargo?["Cargo (t)"]:[])];
+    const headCells = ["Year","Passengers", ...(hasAtm?["Movements"]:[]), ...(hasCargo?["Cargo (t)"]:[]),
+      ...(d.lt.hasCap?["PAX (served)","Spill", ...(hasAtm?["Mov (served)"]:[])]:[])];
     const head = headCells.map(t=>({ text:t, options:{ bold:true, color:DARK, fill:{color:PINK}, fontSize:11 } }));
     const body = d.lt.rows.map(r=>[
       { text:String(r.y), options:{ color:INK } },
       { text:GP_fmt.int(r.pax), options:{ color:INK } },
       ...(hasAtm?[{ text:GP_fmt.int(r.atm), options:{ color:INK } }]:[]),
       ...(hasCargo?[{ text:GP_fmt.int(r.cargo), options:{ color:INK } }]:[]),
+      ...(d.lt.hasCap?[
+        { text:r.paxC!=null?GP_fmt.int(r.paxC):"—", options:{ color:INK } },
+        { text:GP_fmt.int(r.spill!=null?r.spill:(r.paxC!=null?r.pax-r.paxC:0)), options:{ color:INK } },
+        ...(hasAtm?[{ text:r.atmC!=null?GP_fmt.int(r.atmC):"—", options:{ color:INK } }]:[]),
+      ]:[]),
     ]);
     s.addTable([head,...body], { x:0.6, y:1.3, w:12.1, fontSize:10, border:{type:"solid",color:"333744",pt:0.5}, fill:{color:PANEL}, align:"right", valign:"middle" });
 
@@ -924,8 +1011,11 @@ function ExportView({ airport, history, scenario }){
      file) — goes through GP_escapeHtml before interpolation. */
   const genDOC = ()=>{
     const esc = GP_escapeHtml;
+    const capCells = (r)=> d.lt.hasCap
+      ? `<td>${r.paxC!=null?GP_fmt.int(r.paxC):"—"}</td><td>${GP_fmt.int(r.spill!=null?r.spill:(r.paxC!=null?r.pax-r.paxC:0))}</td>${hasAtm?`<td>${r.atmC!=null?GP_fmt.int(r.atmC):"—"}</td>`:""}`
+      : "";
     const rows = d.lt.rows.map(r=>
-      `<tr><td>${r.y}</td><td>${GP_fmt.int(r.pax)}</td>${hasAtm?`<td>${GP_fmt.int(r.atm)}</td>`:""}${hasCargo?`<td>${GP_fmt.int(r.cargo)}</td>`:""}</tr>`
+      `<tr><td>${r.y}</td><td>${GP_fmt.int(r.pax)}</td>${hasAtm?`<td>${GP_fmt.int(r.atm)}</td>`:""}${hasCargo?`<td>${GP_fmt.int(r.cargo)}</td>`:""}${capCells(r)}</tr>`
     ).join("");
     const asRows = assumptions.map(a=>`<tr><td>${esc(a.name)}</td><td>${(a.value>0?"+":"")+a.value} ${esc(a.unit)}</td></tr>`).join("");
     const segRows = d.lt.hasSeg ? d.lt.rows.map(r=>
@@ -952,18 +1042,22 @@ function ExportView({ airport, history, scenario }){
 <p>This brief sets out the long-term passenger demand outlook for <b>${esc(airport.name)}</b> (${esc(airport.iata)}).
 Under the current scenario, annual passengers grow from <b>${GP_fmt.int(base.pax)}</b> in ${base.y} to
 <b>${GP_fmt.int(end.pax)}</b> by ${end.y} — a compound annual growth rate of <b>${GP_fmt.pct(d.lt.cagr)}</b>,
-driven by blended income, population and tourism dynamics totalling <b>${GP_fmt.pct(d.lt.gDemand)}</b> annual demand growth.${d.st&&d.st.mape!=null?` The short-term ${stModelName} model carries a backtested confidence band of <b>&plusmn;${d.st.mape}%</b> over the next twelve months${d.st.coverage!=null?` (80% interval covered ${d.st.coverage}% of held-out months)`:""}.`:""}${d.lt.paxCap?` Demand is assessed against an annual capacity of <b>${GP_fmt.int(d.lt.paxCap)}</b> passengers; unserved demand (spill) reaches <b>${GP_fmt.int(end.spill||0)}</b> by ${end.y}.`:""}</p>
+driven by blended income, population and tourism dynamics totalling <b>${GP_fmt.pct(d.lt.gDemand)}</b> annual demand growth.${d.st&&d.st.mape!=null?` The short-term ${stModelName} model carries a backtested confidence band of <b>&plusmn;${d.st.mape}%</b> over the next twelve months${d.st.coverage!=null?` (80% interval covered ${d.st.coverage}% of held-out months)`:""}.`:""}${d.lt.hasCap?` Demand is assessed against ${[
+  d.lt.paxCap?`an annual terminal capacity of <b>${GP_fmt.int(d.lt.paxCap)}</b> passengers`:null,
+  d.lt.atmCap?`a slot capacity of <b>${GP_fmt.int(d.lt.atmCap)}</b> movements`:null,
+].filter(Boolean).join(" and ") || "phased capacity limits"}; unserved demand (spill) reaches <b>${GP_fmt.int(end.spill||0)}</b> by ${end.y}.`:""}</p>
 
 <table class='kpis'>
   <tr><td>Base year (${base.y}) passengers</td><td>${GP_fmt.int(base.pax)}</td></tr>
   <tr><td>${end.y} passengers</td><td>${GP_fmt.int(end.pax)}</td></tr>
   <tr><td>${end.y-base.y}-yr PAX CAGR</td><td>${GP_fmt.pct(d.lt.cagr)}</td></tr>
   ${hasAtm?`<tr><td>${end.y} movements</td><td>${GP_fmt.int(end.atm)}</td></tr>`:""}
+  ${d.lt.hasCap?`<tr><td>${end.y} passengers (served, capacity-constrained)</td><td>${GP_fmt.int(end.paxC ?? end.pax)}</td></tr>${hasAtm?`<tr><td>${end.y} movements (served, capacity-constrained)</td><td>${GP_fmt.int(end.atmC ?? end.atm)}</td></tr>`:""}<tr><td>${end.y} unserved demand (spill)</td><td>${GP_fmt.int(end.spill||0)}</td></tr>`:""}
   <tr><td>Annual demand growth</td><td>${GP_fmt.pct(d.lt.gDemand)}</td></tr>
 </table>
 
 <h2>Long-term trajectory</h2>
-<table><tr><th>Year</th><th>Passengers</th>${hasAtm?"<th>Movements</th>":""}${hasCargo?"<th>Cargo (t)</th>":""}</tr>${rows}</table>
+<table><tr><th>Year</th><th>Passengers</th>${hasAtm?"<th>Movements</th>":""}${hasCargo?"<th>Cargo (t)</th>":""}${d.lt.hasCap?`<th>PAX (served)</th><th>Spill</th>${hasAtm?"<th>Movements (served)</th>":""}`:""}</tr>${rows}</table>
 
 <h2>Scenario assumptions</h2>
 <table><tr><th>Driver</th><th>Value</th></tr>${asRows}</table>
@@ -1081,6 +1175,8 @@ ${events.length?`<h2>Shock events</h2>
               [(end.y-base.y)+"-yr CAGR",GP_fmt.pct(d.lt.cagr)],
               ...(d.st&&d.st.mape!=null?[["Next-12mo confidence","±"+d.st.mape+"%"]]:[]),
               ...(hasAtm?[[end.y+" movements",GP_fmt.int(end.atm)]]:[]),
+              ...(d.lt.hasCap&&end.paxC!=null&&end.paxC<end.pax?[[end.y+" PAX (served)",GP_fmt.int(end.paxC)]]:[]),
+              ...(d.lt.hasCap&&hasAtm&&end.atmC!=null&&end.atmC<end.atm?[[end.y+" movements (served)",GP_fmt.int(end.atmC)]]:[]),
               ["Demand growth",GP_fmt.pct(d.lt.gDemand)],
               ...(d.lt.hasSeg?[["Segments",d.lt.segLabels.join(", ")]]:[]),
               ...(events.length?[["Active events",String(events.length)]]:[]),

@@ -756,6 +756,70 @@ test("GP_registerCustomAirport: a single sector isn't a split — ignored, not r
   assert.equal(win.GP_getSegments("C-SEG2"), null, "re-upload without sectors must clear the stale split");
 });
 
+/* ---- shock events: movements coupling + recovery glide ---- */
+
+test("events: a segment-targeted shock grounds movements with the passengers it removes", () => {
+  const win = loadDataModule();
+  const pax = monthlySeries(2024, 1, 24, 1000);
+  const domestic = monthlySeries(2024, 1, 24, 600);
+  const international = monthlySeries(2024, 1, 24, 400);
+  const atm = monthlySeries(2024, 1, 24, 100);
+  const cargo = monthlySeries(2024, 1, 24, 50);
+  const iata = setupAirport(win, { series: { pax, atm, cargo }, meta: { hasPaxSeg: true } });
+  win.GP_setAirportSeries(iata, { series: { pax, atm, cargo }, paxSeg: { domestic, international } });
+  const history = win.GP_buildHistory(iata);
+  const base = { ...win.GP_defaultScenario(iata), horizon: 10 };
+  const ev = { start: "2027-01", peak: -50, length: 12, recovery: 0, permanent: true, target: "international" };
+
+  const lt0 = win.GP_longTerm(iata, history, base);
+  const lt1 = win.GP_longTerm(iata, history, { ...base, events: [ev] });
+  const m0 = lt0.months.find(r => r.date === "2027-06");
+  const m1 = lt1.months.find(r => r.date === "2027-06");
+
+  const paxFactor = m1.pax / m0.pax; // intl is 40% of traffic, halved -> ~0.8
+  assert.ok(Math.abs(paxFactor - 0.8) < 0.01, `international -50% should cut ~20% of total pax, got factor ${paxFactor}`);
+  const atmFactor = m1.atm / m0.atm;
+  assert.ok(Math.abs(atmFactor - paxFactor) < 0.02,
+    `movements must fall with the passengers the shock removed (atm ${atmFactor.toFixed(3)} vs pax ${paxFactor.toFixed(3)}) — movements ∝ pax`);
+  assert.equal(m1.cargo, m0.cargo, "a sector passenger shock is not a freight shock — cargo untouched");
+});
+
+test("events: an all-traffic shock still scales movements and cargo by the shock factor (regression)", () => {
+  const win = loadDataModule();
+  const iata = setupAirport(win, { series: {
+    pax: monthlySeries(2024, 1, 24, 100000),
+    atm: monthlySeries(2024, 1, 24, 1000),
+    cargo: monthlySeries(2024, 1, 24, 500),
+  } });
+  const history = win.GP_buildHistory(iata);
+  const base = { ...win.GP_defaultScenario(iata), horizon: 10 };
+  const ev = { start: "2027-01", peak: -60, length: 12, recovery: 0, permanent: true, target: "all" };
+  const lt0 = win.GP_longTerm(iata, history, base);
+  const lt1 = win.GP_longTerm(iata, history, { ...base, events: [ev] });
+  const m0 = lt0.months.find(r => r.date === "2027-06");
+  const m1 = lt1.months.find(r => r.date === "2027-06");
+  for (const k of ["pax", "atm", "cargo"]) {
+    const f = m1[k] / m0[k];
+    assert.ok(Math.abs(f - 0.4) < 0.01, `${k} should carry the full -60% shock, got factor ${f}`);
+  }
+});
+
+test("events: the recovery glide has `recovery` genuinely-recovering months — recovery:1 is not a no-op", () => {
+  const win = loadDataModule();
+  const iata = setupAirport(win, { series: { pax: monthlySeries(2024, 1, 24, 100000) } });
+  const history = win.GP_buildHistory(iata);
+  const base = { ...win.GP_defaultScenario(iata), horizon: 10 };
+  const ev = { start: "2027-01", peak: -50, length: 1, recovery: 2, permanent: false, target: "all" };
+  const lt0 = win.GP_longTerm(iata, history, base);
+  const lt1 = win.GP_longTerm(iata, history, { ...base, events: [ev] });
+  const f = (date) => lt1.months.find(r => r.date === date).pax / lt0.months.find(r => r.date === date).pax;
+  assert.ok(Math.abs(f("2027-01") - 0.5) < 0.001, "peak month carries the full -50%");
+  // linear glide over 2 months: 1/3 recovered, then 2/3, back at baseline after
+  assert.ok(Math.abs(f("2027-02") - (1 - 0.5 * 2 / 3)) < 0.001, `first recovery month should still be shocked, got ${f("2027-02")}`);
+  assert.ok(Math.abs(f("2027-03") - (1 - 0.5 * 1 / 3)) < 0.001, `second recovery month partially recovered, got ${f("2027-03")}`);
+  assert.ok(Math.abs(f("2027-04") - 1) < 0.001, "back at baseline the month after the recovery window");
+});
+
 test("GP_removeCustomAirport: clears the sector split too", () => {
   const win = loadDataModule();
   win.GP_setActivityIndex({ airports: {} });

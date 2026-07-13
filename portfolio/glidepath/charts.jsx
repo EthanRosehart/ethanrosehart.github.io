@@ -81,8 +81,8 @@ function LineChart({ labels, series, band, markerIndex, height=260, yFmt, yFmtRi
     idx = Math.max(0, Math.min(n-1, idx));
     setHover(idx);
   }
-  const yf  = yFmt || (v=>GP_fmt.k(v));
-  const yfR = yFmtRight || (v=>GP_fmt.k(v));
+  const yf  = yFmt || (v=>GP_fmt.axis(v));
+  const yfR = yFmtRight || (v=>GP_fmt.axis(v));
   const vf  = valueFmt || (v=>GP_fmt.int(v));
   const rcol = (series.find(s=>s.axis==="right")||{}).color || "var(--faint)";
 

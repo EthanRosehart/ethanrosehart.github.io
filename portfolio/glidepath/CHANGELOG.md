@@ -2,6 +2,40 @@
 
 Notable changes to Glidepath. Dates are UTC.
 
+## Unreleased — model corrections & annual views (2026-07)
+
+### Fixed
+- Segment-targeted shock events now ground movements: flights scale with the
+  TOTAL passenger factor the stacked events produce, so a single-sector
+  collapse (e.g. a permanent transborder dip) pulls movements down in
+  proportion — previously only all-traffic events touched movements, leaving
+  them flat while passengers fell, contradicting the model's own
+  movements ∝ pax coupling. Cargo still moves only with all-traffic events
+  (a sector passenger shock isn't a freight shock).
+- Event recovery glide off-by-one: the linear glide back to baseline now has
+  `recovery` genuinely-recovering months, reaching baseline the month AFTER
+  the window — previously the glide landed exactly on baseline in its last
+  month, making `recovery: 1` indistinguishable from `recovery: 0`.
+- Binding capacity caps now show up in the numbers, not just the amber chart
+  line: the Baseline-assumptions KPIs (end value, CAGR, vs-baseline) report
+  SERVED traffic with demand disclosed alongside (they used to read
+  unconstrained demand, so a slot cap showed "+0 vs base"); the Long-term
+  movements KPI and month-by-month table do the same; the Event-simulator
+  headline KPI likewise. XLSX gains the constrained/spill columns the CSV
+  already had, plus constrained summary rows; the PPTX headline KPIs and
+  trajectory table and the DOCX brief report served values and spill under
+  a binding cap.
+
+### Added
+- Annual/Monthly toggle on the Baseline-assumptions "Live impact" chart and
+  the Event-simulator "Forecast with shocks" chart — annual mode plots the
+  yearly roll-ups (base-year anchor included, constrained overlay too;
+  event shading windows map to years) so annual totals read directly while
+  shaping a forecast.
+- Constrained (capacity) legend entry on both charts whenever a cap actually
+  bites the metric on screen, and a compact axis format (`GP_fmt.axis`) so
+  hundred-million annual ticks no longer clip the chart gutter.
+
 ## Unreleased — roadmap phases 0–3 (2026-07)
 
 ### Security / foundations (Phase 0)
