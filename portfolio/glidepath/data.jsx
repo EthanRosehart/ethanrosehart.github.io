@@ -584,7 +584,11 @@ function longTermForecast(iata, history, scenario){
      `recovery` months (full recovery) or — if `permanent` — the shifted level
      persists and the rest of the forecast re-baselines off it. An event can hit
      all traffic (`target:"all"`) or a single passenger segment, which reshapes
-     the mix. Overlapping events compound. */
+     the mix. Overlapping events compound. Movements always ride the TOTAL
+     passenger factor the stacked events produce — a single-segment collapse
+     grounds flights just like an all-traffic one (movements ∝ pax); cargo
+     moves only with all-traffic events (a sector passenger shock isn't a
+     freight shock). */
   const events = Array.isArray(s.events) ? s.events.filter(e => e && e.start) : [];
   function eventFactor(ev, y, m){
     const p = String(ev.start).split("-"); const sy = +p[0], sm = +(p[1]||1);
@@ -594,8 +598,12 @@ function longTermForecast(iata, history, scenario){
     const len = Math.max(0, Math.round(+(ev.length != null ? ev.length : ev.hold) || 0));
     if (d < len) return 1 + peak;
     if (ev.permanent) return 1 + peak;
+    // linear glide with rec genuinely-recovering months, back at baseline the
+    // month AFTER the window ends. (Dividing by rec instead would land the
+    // glide exactly on baseline in its last month, making recovery:1
+    // indistinguishable from recovery:0.)
     const rec = Math.max(0, Math.round(+ev.recovery || 0));
-    if (rec > 0 && d < len + rec) return 1 + peak * (1 - (d - len + 1) / rec);
+    if (rec > 0 && d < len + rec) return 1 + peak * (1 - (d - len + 1) / (rec + 1));
     return 1;
   }
 
@@ -619,6 +627,7 @@ function longTermForecast(iata, history, scenario){
     if (hasCargo) rec.cargo = Math.round((baseCargo[mm] != null ? baseCargo[mm] : cargoMonthAvg) * Math.pow(1+gCargo, yf));
     if (events.length){
       let touched = false;
+      const paxBefore = rec.pax;   // pre-shock total, drives the movements coupling below
       for (const ev of events){
         const f = eventFactor(ev, yy, mm); if (f === 1) continue;
         touched = true;
@@ -626,14 +635,16 @@ function longTermForecast(iata, history, scenario){
         if (rec.seg && tgt !== "all" && rec.seg[tgt] != null){ rec.seg[tgt] *= f; }   // reshape one segment
         else {                                                                         // all traffic
           if (rec.seg) for (const k in rec.seg) rec.seg[k] *= f; else rec.pax *= f;
-          if (rec.atm   != null) rec.atm   *= f;
           if (rec.cargo != null) rec.cargo *= f;
         }
       }
       if (touched){
         if (rec.seg){ for (const k in rec.seg) rec.seg[k] = Math.round(rec.seg[k]); rec.pax = Object.values(rec.seg).reduce((t,v)=>t+v,0); }
         else rec.pax = Math.round(rec.pax);
-        if (rec.atm   != null) rec.atm   = Math.round(rec.atm);
+        // movements ∝ pax: however the stacked events reshaped the total —
+        // all-traffic hit, one segment collapsing, or both — flights fall
+        // (or rise) in proportion to the passengers actually left
+        if (rec.atm != null && paxBefore > 0) rec.atm = Math.round(rec.atm * (rec.pax / paxBefore));
         if (rec.cargo != null) rec.cargo = Math.round(rec.cargo);
       }
     }
@@ -946,6 +957,13 @@ const fmt = {
   int:  n => Math.round(n).toLocaleString("en-US"),
   k:    n => n>=1e6 ? (n/1e6).toFixed(2)+"M" : n>=1e3 ? (n/1e3).toFixed(0)+"K" : Math.round(n).toString(),
   k1:   n => n>=1e6 ? (n/1e6).toFixed(1)+"M" : n>=1e3 ? Math.round(n/1e3)+"K" : Math.round(n).toString(),
+  // axis tick labels — at most ~5 characters so they fit the charts' left
+  // gutter even for annual totals in the hundreds of millions
+  axis: n => {
+    if (n >= 1e6){ const s = n/1e6; return (s >= 100 ? Math.round(s) : Math.round(s*10)/10)+"M"; }
+    if (n >= 1e3){ const s = n/1e3; return (s >= 100 ? Math.round(s) : Math.round(s*10)/10)+"K"; }
+    return String(Math.round(n));
+  },
   pct:  (n,d=1) => (n>=0?"+":"")+n.toFixed(d)+"%",
   pct0: (n,d=1) => n.toFixed(d)+"%",
   t:    n => n>=1e3 ? (n/1e3).toFixed(1)+"k t" : Math.round(n)+" t",
