@@ -1,5 +1,5 @@
 {
-  "generatedAt": "2026-07-13T06:32:44.435Z",
+  "generatedAt": "2026-07-14T05:44:20.473Z",
   "source": "IMF World Economic Outlook (DataMapper API, www.imf.org/external/datamapper) — real GDP/capita growth forecast",
   "indicator": "NGDP_RPCH (real GDP growth, %) ÷ LP (population) — real per-capita growth derived per year; WEO's DataMapper has no direct real-per-capita series",
   "note": "Genuine forward-looking forecast (WEO, refreshed each April/October), not an extrapolation of history. Feeds the long-term model's GDP lever default (gdpcapProj) and, per year, Prophet's GDP/capita regressor beyond the last observed year, in build-forecast.py. A country missing here falls back to the trailing World Bank growth-rate extrapolation instead — never a hard failure.",
