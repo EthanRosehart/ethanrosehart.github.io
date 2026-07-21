@@ -1,5 +1,5 @@
 {
-  "generatedAt": "2026-07-20T06:37:02.759Z",
+  "generatedAt": "2026-07-21T06:15:23.863Z",
   "note": "Provenance manifest for every snapshot under data/. Rebuilt at the end of each nightly refresh (scripts/build-manifest.mjs).",
   "upstreams": {
     "openflights": {
@@ -35,7 +35,7 @@
   },
   "snapshots": {
     "activity-index.json": {
-      "generatedAt": "2026-07-20T06:28:20.710Z",
+      "generatedAt": "2026-07-21T06:06:27.196Z",
       "airports": 113,
       "airportsBySource": {
         "bts": 35,
@@ -47,22 +47,22 @@
       "files": 113
     },
     "airports.json": {
-      "generatedAt": "2026-07-20T06:25:02.581Z",
+      "generatedAt": "2026-07-21T06:04:40.842Z",
       "airports": 113,
       "upstream": "openflights"
     },
     "macro.json": {
-      "generatedAt": "2026-07-20T06:28:22.390Z",
+      "generatedAt": "2026-07-21T06:06:50.306Z",
       "countries": 31,
       "upstream": "worldbank"
     },
     "imf-weo.json": {
-      "generatedAt": "2026-07-20T06:28:23.652Z",
+      "generatedAt": "2026-07-21T06:06:51.415Z",
       "countries": 31,
       "upstream": "imf"
     },
     "forecast-meta.json": {
-      "generatedAt": "2026-07-20T06:37:02.326782+00:00",
+      "generatedAt": "2026-07-21T06:15:23.439959+00:00",
       "model": "Meta Prophet (additive trend + multiplicative yearly + country holidays + COVID 2020-21 events + GDP/capita regressor where available)"
     },
     "forecasts/": {
