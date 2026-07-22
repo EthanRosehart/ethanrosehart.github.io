@@ -17,7 +17,7 @@ import { perCapitaRates } from "../scripts/fetch-imf.mjs";
 import { mapCols, decodeRows, orderCandidates, US } from "../scripts/fetch-bts.mjs";
 import { lastFullYearTotal, metricsIn } from "../scripts/_util.mjs";
 import { checkSeriesDoc, checkActivityIndex, checkForecastDoc } from "../scripts/validate-data.mjs";
-import { staleSnapshots, droppedAirports, seriesAnomalies, ageDays } from "../scripts/check-snapshots.mjs";
+import { staleSnapshots, sourceStaleness, droppedAirports, seriesAnomalies, ageDays } from "../scripts/check-snapshots.mjs";
 
 /* ---- fetch-activity: Eurostat JSON-stat ----------------------- */
 
@@ -204,6 +204,34 @@ test("staleSnapshots: flags old and missing snapshots, passes fresh ones", () =>
   }, now);
   assert.deepEqual(out.map((s) => s.file).sort(), ["missing.json", "old.json"]);
   assert.equal(ageDays("not a date"), Infinity);
+});
+
+test("sourceStaleness: flags a per-source feed aged past the window, ignores unstamped sources", () => {
+  const now = Date.now();
+  const iso = (daysAgo) => new Date(now - daysAgo * 86400000).toISOString();
+  // BTS is all-or-nothing, so its airports share a stamp; a 15-day-old stamp
+  // means BTS hasn't delivered in 15 days -> stale. Eurostat has no stamp
+  // (its freshness is the index generatedAt) -> skipped. StatCan is fresh.
+  const out = sourceStaleness({
+    airports: {
+      ATL: { source: "bts", refreshedAt: iso(15) },
+      DFW: { source: "bts", refreshedAt: iso(15) },
+      MAD: { source: "eurostat" },
+      YYZ: { source: "statcan", refreshedAt: iso(2) },
+    },
+  }, now);
+  assert.deepEqual(out, [{ source: "bts", days: 15 }]);
+
+  // the freshest stamp per source wins: one live airport clears the feed
+  assert.deepEqual(
+    sourceStaleness({ airports: {
+      ATL: { source: "bts", refreshedAt: iso(1) },
+      DFW: { source: "bts", refreshedAt: iso(15) },
+    } }, now),
+    []);
+
+  // no stamps anywhere (e.g. right after deploy, before the first live run) -> no signal
+  assert.deepEqual(sourceStaleness({ airports: { MAD: { source: "eurostat" } } }, now), []);
 });
 
 test("droppedAirports + seriesAnomalies: catches vanished gateways, shrunk history, level shifts", () => {

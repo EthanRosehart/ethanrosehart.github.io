@@ -48,6 +48,28 @@ export function staleSnapshots(metas, now = Date.now(), maxDays = MAX_AGE_DAYS) 
   return out;
 }
 
+/** Per-source freshness for feeds that stamp `refreshedAt` on their
+ *  activity-index entries (currently BTS). The index-level generatedAt check
+ *  above can't see a stuck BTS: fetch-activity.mjs rewrites activity-index's
+ *  own generatedAt every night regardless of whether BTS delivered, so BTS's
+ *  series files would go stale silently. Uses the FRESHEST stamp per source —
+ *  an all-or-nothing feed stamps all its airports together on a live refresh,
+ *  so the newest stamp is the last time the feed actually delivered. Sources
+ *  with no stamped entry are skipped (no signal yet). -> [{source, days}] */
+export function sourceStaleness(index, now = Date.now(), maxDays = MAX_AGE_DAYS) {
+  const freshest = {};
+  for (const a of Object.values(index?.airports || {})) {
+    if (!a || typeof a.source !== "string" || a.refreshedAt == null) continue;
+    const d = ageDays(a.refreshedAt, now);
+    if (freshest[a.source] == null || d < freshest[a.source]) freshest[a.source] = d;
+  }
+  const out = [];
+  for (const [source, days] of Object.entries(freshest)) {
+    if (days > maxDays) out.push({ source, days: days === Infinity ? Infinity : Math.floor(days) });
+  }
+  return out;
+}
+
 /** Airports present in prev but gone from next. */
 export function droppedAirports(prevIndex, nextIndex) {
   const next = new Set(Object.keys(nextIndex?.airports || {}));
@@ -93,6 +115,7 @@ async function main() {
     "forecast-meta.json": await loadJSON(resolve(DATA, "forecast-meta.json")),
   };
   const stale = staleSnapshots(metas);
+  const staleSources = sourceStaleness(metas["activity-index.json"]);
   const warns = [];
 
   if (baseline) {
@@ -113,9 +136,10 @@ async function main() {
     console.log(`ANOMALIES (${warns.length}) — data still ships, but a human should look:`);
     for (const w of warns) console.log("  ~ " + w);
   }
-  if (stale.length) {
+  if (stale.length || staleSources.length) {
     console.log(`STALE SNAPSHOTS (older than ${MAX_AGE_DAYS} days) — a fetcher is failing silently:`);
     for (const s of stale) console.log(`  ! ${s.file}: ${s.days === Infinity ? "missing/unreadable" : s.days + " days old"}`);
+    for (const s of staleSources) console.log(`  ! source "${s.source}": last live refresh ${s.days === Infinity ? "unknown" : s.days + " days ago"}`);
     process.exit(1);
   }
   if (!warns.length) console.log("check-snapshots: all snapshots fresh, no anomalies.");

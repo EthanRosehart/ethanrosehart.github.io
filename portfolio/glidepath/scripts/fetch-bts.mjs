@@ -702,6 +702,11 @@ export async function main() {
       months: pk.length, latest: pk[pk.length - 1],
       metrics: metricsIn(series), hasPaxSeg: false,
       annualPax: lastFullYearTotal(series.pax),
+      // stamped only on a LIVE refresh (kept-last-good entries retain their
+      // previous stamp, carried forward untouched by fetch-activity.mjs) — this
+      // is the per-source freshness signal check-snapshots.mjs watches, since
+      // BTS's series files aren't covered by the index-level generatedAt check.
+      refreshedAt: new Date().toISOString(),
     };
     await writeFile(resolve(SERIES_DIR, `${code}.json`), JSON.stringify({ series }) + "\n", "utf8");
     // annual total in the log on purpose: total passengers (arr+dep) vs

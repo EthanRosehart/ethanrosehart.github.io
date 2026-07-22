@@ -16,11 +16,17 @@ name: Refresh data
 #   manifest.json         — provenance manifest (scripts/build-manifest.mjs)
 #
 # Every fetch step is best-effort (a feed outage keeps the last good
-# snapshot), but failures are NOT silent: the health step at the end
-# collects per-step outcomes plus staleness/anomaly findings
-# (scripts/check-snapshots.mjs) and opens/updates a pipeline-health issue,
-# failing the run. Snapshots are schema-validated
-# (scripts/validate-data.mjs) as a hard gate before anything is committed.
+# snapshot). The health step at the end sorts findings into two tiers so a
+# single transient upstream blip doesn't page anyone for data that's still
+# correct:
+#   • notes  — a best-effort feed missed tonight but kept last-good AND is
+#              watched for staleness (check-snapshots.mjs). Logged, not paged.
+#   • alerts — a total activity outage, a snapshot that failed validation
+#              (commit blocked), or a feed that has now gone STALE (aged past
+#              the freshness window, per-source BTS included). These fail the
+#              run and open/update the pipeline-health issue.
+# Snapshots are schema-validated (scripts/validate-data.mjs) as a hard gate
+# before anything is committed.
 
 on:
   schedule:
@@ -143,42 +149,62 @@ jobs:
             git push
           fi
 
-      # make failures LOUD: collect per-step outcomes + staleness/anomaly
-      # findings, upsert a pipeline-health issue (main only), fail the run.
+      # Sort findings into notes (last-good kept + watched for staleness —
+      # logged, never paged) and alerts (site-affecting or no staleness safety
+      # net — page + upsert the pipeline-health issue, main only, fail the run).
       - name: Pipeline health report
         if: always()
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
-          problems=""
-          add() { problems="${problems}- $1"$'\n'; }
-          [ "${{ steps.openflights.outcome }}" = "failure" ] && add "fetch-openflights failed"
-          [ "${{ steps.activity.outcome }}" = "failure" ]    && add "fetch-activity (Eurostat/StatCan) failed"
-          [ "${{ steps.bts.outcome }}" = "failure" ]         && add "fetch-bts failed"
-          [ "${{ steps.macro.outcome }}" = "failure" ]       && add "fetch-data (World Bank) failed"
-          [ "${{ steps.imf.outcome }}" = "failure" ]         && add "fetch-imf (IMF WEO) failed"
-          [ "${{ steps.forecast.outcome }}" = "failure" ]    && add "build-forecast (Prophet) failed"
-          [ "${{ steps.validate.outcome }}" = "failure" ]    && add "snapshot VALIDATION failed — commit was blocked, site keeps last-good data"
+          notes=""; alerts=""
+          note()  { notes="${notes}- $1"$'\n'; }
+          alert() { alerts="${alerts}- $1"$'\n'; }
 
+          # Best-effort feeds that keep last-good AND whose freshness
+          # check-snapshots watches (openflights→airports.json, macro→macro.json,
+          # imf→imf-weo.json, forecast→forecast-meta.json all via generatedAt;
+          # bts via its per-source refreshedAt stamp). A single miss is expected
+          # upstream weather, not an incident — it only becomes an alert once the
+          # feed ages past the freshness window (the "stale snapshots" check).
+          [ "${{ steps.openflights.outcome }}" = "failure" ] && note "fetch-openflights missed — airports.json keeps last-good (watched for staleness)"
+          [ "${{ steps.bts.outcome }}" = "failure" ]         && note "fetch-bts missed — US airports keep last-good (watched for staleness)"
+          [ "${{ steps.macro.outcome }}" = "failure" ]       && note "fetch-data (World Bank) missed — macro.json keeps last-good (watched for staleness)"
+          [ "${{ steps.imf.outcome }}" = "failure" ]         && note "fetch-imf (IMF WEO) missed — last-good kept (forecast falls back to trailing-rate)"
+          [ "${{ steps.forecast.outcome }}" = "failure" ]    && note "build-forecast (Prophet) missed — forecasts keep last-good (watched for staleness)"
+
+          # activity's own exit-1 means a TOTAL Eurostat/StatCan outage or a
+          # crash — the index's generatedAt is rewritten regardless, so this has
+          # no staleness safety net and must page immediately. Validation failure
+          # means a malformed snapshot blocked the commit — worth knowing now.
+          [ "${{ steps.activity.outcome }}" = "failure" ]    && alert "fetch-activity (Eurostat/StatCan) failed — primary catalogue source down or crashed"
+          [ "${{ steps.validate.outcome }}" = "failure" ]    && alert "snapshot VALIDATION failed — commit was blocked, site keeps last-good data"
+
+          # staleness (a feed broken long enough to age past the window, incl.
+          # per-source BTS) + anomaly diff. exit != 0 == a stale snapshot.
           set +e
           report=$(node portfolio/glidepath/scripts/check-snapshots.mjs --baseline /tmp/gp-baseline 2>&1)
           rc=$?
           set -e
           echo "$report"
-          [ $rc -ne 0 ] && add "stale snapshots — a fetcher has been failing for days"
+          [ $rc -ne 0 ] && alert "stale snapshots — a feed has been failing long enough to age past the freshness window"
 
-          if [ -z "$problems" ]; then
-            echo "Pipeline healthy — all steps succeeded, snapshots fresh."
+          [ -n "$notes" ] && { echo "NOTES (last-good kept, not paging):"; printf '%s' "$notes"; }
+
+          if [ -z "$alerts" ]; then
+            echo "Pipeline healthy — no alerts. Any missed feeds above kept last-good and are still fresh."
             exit 0
           fi
 
-          echo "PROBLEMS:"
-          printf '%s' "$problems"
+          echo "ALERTS:"
+          printf '%s' "$alerts"
 
           if [ "$GITHUB_REF_NAME" = "main" ]; then
             title="Glidepath nightly pipeline needs attention"
-            body=$(printf 'Run: %s/%s/actions/runs/%s\n\n**Problems**\n%s\n<details><summary>check-snapshots output</summary>\n\n```\n%s\n```\n</details>\n\n_Best-effort steps keep last-good data, so the site stays correct — but a feed that stays broken will go stale. Auto-filed by refresh-data.yml; closes by hand once resolved._' \
-              "$GITHUB_SERVER_URL" "$GITHUB_REPOSITORY" "$GITHUB_RUN_ID" "$problems" "$report")
+            notesBlock=""
+            [ -n "$notes" ] && notesBlock=$(printf '**Also missed tonight (last-good kept, not paging)**\n%s\n' "$notes")
+            body=$(printf 'Run: %s/%s/actions/runs/%s\n\n**Alerts**\n%s\n%s\n<details><summary>check-snapshots output</summary>\n\n```\n%s\n```\n</details>\n\n_Best-effort feeds keep last-good data, so the site stays correct — a feed that stays broken until it ages past the freshness window escalates here. Auto-filed by refresh-data.yml; closes by hand once resolved._' \
+              "$GITHUB_SERVER_URL" "$GITHUB_REPOSITORY" "$GITHUB_RUN_ID" "$alerts" "$notesBlock" "$report")
             num=$(gh issue list --state open --search "Glidepath nightly pipeline in:title" --json number --jq '.[0].number' 2>/dev/null || true)
             if [ -n "$num" ] && [ "$num" != "null" ]; then
               gh issue comment "$num" --body "$body"
