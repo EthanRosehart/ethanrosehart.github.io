@@ -21,10 +21,12 @@ name: Refresh data
 # correct:
 #   • notes  — a best-effort feed missed tonight but kept last-good AND is
 #              watched for staleness (check-snapshots.mjs). Logged, not paged.
-#   • alerts — a total activity outage, a snapshot that failed validation
+#              Includes Eurostat/StatCan answering with nothing usable, since
+#              every airport carries a per-source refreshedAt stamp.
+#   • alerts — fetch-activity CRASHING, a snapshot that failed validation
 #              (commit blocked), a feed that has now gone STALE (aged past
-#              the freshness window, per-source BTS included), or a run that
-#              DROPPED gateways off the catalogue. These fail the run and
+#              the freshness window, per-source), or a run that DROPPED
+#              gateways off the catalogue. These fail the run and
 #              open/update the pipeline-health issue.
 # Snapshots are schema-validated (scripts/validate-data.mjs) as a hard gate
 # before anything is committed.
@@ -73,10 +75,20 @@ jobs:
         run: node portfolio/glidepath/scripts/fetch-bts.mjs
         continue-on-error: true
 
+      # exit code is load-bearing here and `outcome` only says pass/fail, so
+      # capture it: 2 = a feed answered with nothing usable but every airport
+      # was kept on committed history (a note), anything else nonzero = the
+      # script actually crashed (an alert). See the tiering below.
       - name: Fetch monthly activity — Europe + Canada (Eurostat + StatCan)
         id: activity
-        run: node portfolio/glidepath/scripts/fetch-activity.mjs
         continue-on-error: true   # a feed outage keeps the last good snapshot
+        run: |
+          set +e
+          node portfolio/glidepath/scripts/fetch-activity.mjs
+          rc=$?
+          set -e
+          echo "rc=$rc" >> "$GITHUB_OUTPUT"
+          exit $rc
 
       - name: Fetch macro snapshot from World Bank
         id: macro
@@ -174,11 +186,17 @@ jobs:
           [ "${{ steps.imf.outcome }}" = "failure" ]         && note "fetch-imf (IMF WEO) missed — last-good kept (forecast falls back to trailing-rate)"
           [ "${{ steps.forecast.outcome }}" = "failure" ]    && note "build-forecast (Prophet) missed — forecasts keep last-good (watched for staleness)"
 
-          # activity's own exit-1 means a TOTAL Eurostat/StatCan outage or a
-          # crash — the index's generatedAt is rewritten regardless, so this has
-          # no staleness safety net and must page immediately. Validation failure
-          # means a malformed snapshot blocked the commit — worth knowing now.
-          [ "${{ steps.activity.outcome }}" = "failure" ]    && alert "fetch-activity (Eurostat/StatCan) failed — primary catalogue source down or crashed"
+          # activity exit 2 = a feed answered with nothing usable tonight and
+          # every airport was kept on its committed history. The site stays
+          # correct and the per-airport refreshedAt stamps give it a staleness
+          # net (check-snapshots' sourceStaleness), so this is a note — it
+          # escalates on its own once the feed has been dark past the window.
+          [ "${{ steps.activity.outputs.rc }}" = "2" ]       && note "fetch-activity: a feed returned no usable fresh data — all airports kept on committed history (watched for staleness)"
+
+          # any OTHER nonzero exit means the script crashed before it could
+          # write a coherent snapshot — no safety net, page immediately.
+          # Validation failure means a malformed snapshot blocked the commit.
+          [ "${{ steps.activity.outcome }}" = "failure" ] && [ "${{ steps.activity.outputs.rc }}" != "2" ] && alert "fetch-activity (Eurostat/StatCan) crashed — primary catalogue source down or the script failed"
           [ "${{ steps.validate.outcome }}" = "failure" ]    && alert "snapshot VALIDATION failed — commit was blocked, site keeps last-good data"
 
           # staleness (a feed broken long enough to age past the window, incl.

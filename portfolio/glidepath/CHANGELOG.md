@@ -2,6 +2,35 @@
 
 Notable changes to Glidepath. Dates are UTC.
 
+## Unreleased — tell a degraded feed apart from a crash (2026-07)
+
+### Fixed
+- **The nightly filed an issue reading "down or crashed" for a run that
+  completed cleanly and lost nothing.** After sticky membership landed,
+  `fetch-activity` exits non-zero in two very different situations — it
+  crashed, or a feed answered with nothing usable and every airport was kept
+  on its committed history — and the workflow could only see "non-zero". The
+  2026-07-26 06:13 run was the second kind: Eurostat returned 3–6 months per
+  airport, 165 series were held on last-good, zero airports were dropped,
+  zero histories shrank, and the snapshot committed and validated. It still
+  paged as a crash. The degraded case now exits **2** and is tiered as a
+  note; a genuine crash keeps exit 1 and the (now accurate) alert.
+- Eurostat and StatCan entries carry a `refreshedAt` stamp, the same contract
+  `fetch-bts.mjs` has had — set only when an airport actually takes new data,
+  otherwise the previous stamp rides along. This is what earns the demotion
+  to a note: `check-snapshots`' `sourceStaleness()` now watches those feeds,
+  so a degraded feed escalates to a real alert once it has been dark past the
+  10-day window instead of paging every single night. An entry that has never
+  been stamped starts its clock at that run rather than staying unstamped
+  forever (which would have made the note a silent failure — the exact class
+  this guard exists to close); it is documented as watch-start, not an
+  observed refresh.
+- Uncapping the catalogue made "not eligible yet" the common case: the
+  2026-07-26 run logged 207 lines reading `DROPPED from the catalogue` for
+  small regional airports that were never *in* the catalogue. Only an airport
+  we already carry now logs as dropped; the rest are counted in one summary
+  line, so a real loss stays visible in the noise.
+
 ## Unreleased — uncapped European catalogue & sticky membership (2026-07)
 
 ### Changed

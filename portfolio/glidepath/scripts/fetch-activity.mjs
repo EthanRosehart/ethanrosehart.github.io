@@ -288,8 +288,30 @@ async function main() {
   console.log(`Loaded ${Object.keys(ref).length} reference airports.`);
 
   const airports = {};
-  let live = 0;
+  let live = 0, notEligible = 0;
   const liveBy = { eurostat: 0, statcan: 0 };   // fresh series per source — the outage signal
+  const runStamp = new Date().toISOString();
+  let seeded = 0;
+  /* refreshedAt for an airport: now if it actually took new data this run,
+     otherwise whatever it was last stamped with.
+
+     The third case matters. An airport that has never been stamped — every
+     Eurostat/StatCan entry the first time this runs — would stay unstamped
+     forever if the feed happened to be dark that night, and
+     sourceStaleness() skips unstamped sources as "no signal yet". Downgrading
+     the degraded-feed exit to a note while leaving that hole would recreate
+     exactly the silent-failure class this whole guard exists to close. So an
+     unstamped airport starts its clock at this run instead. That overstates
+     freshness by however long the feed was already dark, which is why it errs
+     toward alerting LATER rather than never — and it self-corrects the first
+     time the feed actually delivers. */
+  const stampFor = (iata, fresh) => {
+    if (fresh) return runStamp;
+    const prevStamp = prev?.airports?.[iata]?.refreshedAt;
+    if (prevStamp) return prevStamp;
+    seeded++;
+    return runStamp;
+  };
 
   /* ---------- Europe: enumerate + carry forward, then batch-fetch ---------- */
   let enumerated = {};
@@ -367,19 +389,26 @@ async function main() {
     if (!g) { console.warn(`  ${iata}: unknown Eurostat geo "${geo}" — skipped`); continue; }
     const [iso2, iso3, cname] = g;
     const series = {};
+    let anyFresh = false;
     for (const metric of ["pax", "atm", "cargo"]) {
       // a thin reply must never overwrite a long committed history — see
       // chooseSeries() in _util.mjs for the night that made this necessary
       const pick = chooseSeries(euData[metric]?.[icao]?.monthly, await prevSeries(iata, metric));
-      if (pick.kind === "fresh") { series[metric] = pick.series; live++; liveBy.eurostat++; }
+      if (pick.kind === "fresh") { series[metric] = pick.series; live++; liveBy.eurostat++; anyFresh = true; }
       else if (pick.kind === "kept") {
         series[metric] = pick.series;
         if (pick.reason) console.warn(`  ${iata}/${metric} eurostat: ${pick.reason} — kept previous`);
       }
     }
     if (!series.pax || Object.keys(series.pax).length < MIN_MONTHS) {
-      // loud: this drops the gateway off the site AND prunes its series file
-      console.warn(`  ${iata} eurostat: only ${Object.keys(series.pax || {}).length}mo of passengers (need ${MIN_MONTHS}) — DROPPED from the catalogue`);
+      const had = !!prev?.airports?.[iata];
+      const msg = `only ${Object.keys(series.pax || {}).length}mo of passengers (need ${MIN_MONTHS})`;
+      // losing an airport we ALREADY carry is the loud case — it drops off the
+      // site and its series file is pruned. An airport we never carried simply
+      // isn't eligible yet; uncapping the catalogue made those the common case
+      // (207 of them on 2026-07-26), so they must not read like data loss.
+      if (had) console.warn(`  ${iata} eurostat: ${msg} — DROPPED from the catalogue`);
+      else notEligible++;
       continue;
     }
     let paxSeg = {};
@@ -399,14 +428,21 @@ async function main() {
       name: r.name || iata, city: r.city || cname, icao, lat: r.lat ?? null, lon: r.lon ?? null,
       months: paxKeys.length, latest: paxKeys.sort().pop(), series, monthly: series.pax,
       ...(Object.keys(paxSeg).length >= 2 ? { paxSeg } : {}),
+      // per-source freshness stamp, same contract as fetch-bts.mjs: set only
+      // when this airport actually took new data, otherwise the previous
+      // stamp rides along. check-snapshots' sourceStaleness() watches these,
+      // which is what turns "Eurostat is answering but with nothing usable"
+      // into a time-based escalation instead of a nightly page.
+      ...(stampFor(iata, anyFresh) ? { refreshedAt: stampFor(iata, anyFresh) } : {}),
     };
   }
-  console.log(`  eurostat: wrote ${Object.keys(airports).length} airports`);
+  console.log(`  eurostat: wrote ${Object.keys(airports).length} airports${notEligible ? `, ${notEligible} reporting airports not eligible yet (<${MIN_MONTHS}mo, never carried)` : ""}`);
 
   /* ---------- Canada: StatCan screened airports ---------- */
   let caN = 0;
   for (const [iata, re] of STATCAN) {
     const series = {};
+    let caFresh = false;
     for (const metric of ["pax", "atm"]) {
       // movements fall through current → retired cube; pax has a single cube
       const pids = metric === "atm" ? STATCAN_ATM_PIDS : [STATCAN_PID[metric]];
@@ -420,7 +456,7 @@ async function main() {
       }
       // same guard as Eurostat: a short reply keeps the committed history
       const pick = chooseSeries(got, await prevSeries(iata, metric));
-      if (pick.kind === "fresh") { series[metric] = pick.series; live++; liveBy.statcan++; }
+      if (pick.kind === "fresh") { series[metric] = pick.series; live++; liveBy.statcan++; caFresh = true; }
       else if (pick.kind === "kept") {
         series[metric] = pick.series;
         // when the cubes never produced anything, lastErr is the real story;
@@ -453,6 +489,7 @@ async function main() {
       name: r.name || iata, city: r.city || "Canada", icao: r.icao || null, lat: r.lat ?? null, lon: r.lon ?? null,
       months: paxKeys.length, latest: paxKeys.sort().pop(), series, monthly: series.pax,
       ...(Object.keys(paxSeg).length >= 2 ? { paxSeg } : {}),
+      ...(stampFor(iata, caFresh) ? { refreshedAt: stampFor(iata, caFresh) } : {}),
     };
     caN++;
     console.log(`  ${iata} statcan: pax ${paxKeys.length}mo atm ${Object.keys(series.atm || {}).length}mo seg ${Object.keys(paxSeg).join("/")||"none"}`);
@@ -534,8 +571,17 @@ async function main() {
     await writeFile(REF, JSON.stringify(refDoc) + "\n", "utf8");
   }
 
+  if (seeded) console.log(`  freshness clock started for ${seeded} airport-entries with no prior refreshedAt stamp (watch begins now, not backdated)`);
   console.log(`Wrote ${OUT} — ${Object.keys(indexAirports).length} airports (${Object.keys(airports).length} eurostat/statcan + ${Object.keys(btsCarry).length} carried BTS + ${Object.keys(sourceCarry).length} outage-carried), ${live} live metric-series.`);
-  if (outage) process.exitCode = 1;   // data preserved, but the health step must hear about it
+  /* Exit 2, not 1. Both mean "the health step should hear about this", but
+     they are different incidents and the workflow tiers them differently:
+     2 = a feed answered with nothing usable and every airport was kept on
+     committed history (the site is correct; escalation comes from the
+     refreshedAt staleness net above), while a nonzero exit from the catch
+     below means the script genuinely crashed. Reporting both as 1 is what
+     made 2026-07-26 file an issue reading "down or crashed" for a run that
+     completed cleanly and lost nothing. */
+  if (outage) process.exitCode = 2;
 }
 
 if (process.argv[1] === fileURLToPath(import.meta.url)) {
