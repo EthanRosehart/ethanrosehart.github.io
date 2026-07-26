@@ -95,14 +95,38 @@ guards sit in front of that pruning:
    log says why.
 3. **Mass-drop alert** (`massDropAlert()` in `scripts/check-snapshots.mjs`) —
    losing more than 2 airports, or more than 5% of the catalogue, in a single
-   run exits non-zero and pages. Below that it stays a warning, because
-   gateways do legitimately rotate in and out of the volume-ranked European
-   cap night to night. That night printed 116 anomaly warnings and still
-   reported "Pipeline healthy"; it now fails the run.
+   run exits non-zero and pages. That night printed 116 anomaly warnings and
+   still reported "Pipeline healthy"; it now fails the run.
+4. **Sticky membership** — the root cause of all of the above. Catalogue
+   membership used to be re-derived from one live Eurostat call every night
+   while the data itself lived on disk, so a feed that answered thinly (or
+   not at all) evicted airports whose committed history was perfectly
+   intact, and the prune step then deleted their series files. An airport
+   already in the catalogue with a usable, not-yet-ancient history now stays
+   a candidate whether or not tonight's enumerate mentions it, and rides on
+   last-good until the feed returns. It only retires once nothing new has
+   been published for `STICKY_MAX_AGE_MONTHS` (18) — genuinely discontinued
+   rather than briefly down.
+
+Because membership is sticky, "the index still lists Eurostat airports" is
+no longer evidence that Eurostat answered — so the outage alert keys on
+whether a source produced any **fresh** series tonight, not on whether its
+entries exist. And because a properly-dead host would otherwise cost ~50
+backed-off retries a night (~24 minutes of sleeping), `fetchWithRetry` trips
+a per-host breaker after two exhausted calls and fails fast until that host
+answers again.
+
+One coupling worth knowing: a **new** airport can only enter the catalogue
+if `data/airports.json` carries its ICAO→IATA mapping, and `fetch-activity`
+trims that file to the current catalogue at the end of each run.
+`fetch-openflights` restores the full reference at the start of every night,
+so this is fine in the normal case — but on a night where OpenFlights fails,
+no new gateway can be added (existing ones are safe, via the stickiness
+above).
 
 | Market | Source | Notes |
 |--------|--------|-------|
-| Europe | Eurostat `avia_paoa` (PAS_CRD pax, CAF_PAS flights) + `avia_gooa` (FRM_LD_NLD cargo, tonnes) | A single all-airports pull is rejected with HTTP 413 (async). The script enumerates reporting airports with a small `lastTimePeriod` call, ranks by recent volume, and batch-fetches full series for the busiest ~70 in `rep_airp` chunks, splitting any chunk that still trips the 413 guard. Passenger composition is also pulled by transport coverage (`tra_cov` NAT/INTL) into `paxSeg`. |
+| Europe | Eurostat `avia_paoa` (PAS_CRD pax, CAF_PAS flights) + `avia_gooa` (FRM_LD_NLD cargo, tonnes) | A single all-airports pull is rejected with HTTP 413 (async). The script enumerates reporting airports with a small `lastTimePeriod` call, then batch-fetches full series for **every** one of them in `rep_airp` chunks, splitting any chunk that still trips the 413 guard. **No cap and no volume ranking** — an earlier version kept only the "busiest 70" by summing whatever months the enumerate call returned, which stops being a size measure the moment the feed degrades (2026-07-26: Eurostat returned 3–5 months for some countries and none for others, so mid-size airports outranked Paris CDG at zero and CDG fell out of the catalogue). The cap only ever existed to bound the nightly Prophet build; that budget is cheap. Passenger composition is also pulled by transport coverage (`tra_cov` NAT/INTL) into `paxSeg`. |
 | Canada | StatCan WDS — 23-10-0312 (screened pax) + 23-10-0296 (aircraft movements, with 23-10-0008 as fallback) | The eight CATSA Class-1 airports, resolved by airport name against the cube metadata. StatCan stopped updating the older movements cube 23-10-0008 after 2022-09, so the current cube 23-10-0296 ("NAV CANADA services and other selected airports") is tried first. Screened pax are also split by sector (domestic / transborder / international) into `paxSeg`. |
 | US | DOT BTS **T-100 segment, all carriers** — TranStats download form, per-year extracts (`scripts/fetch-bts.mjs`) | Live probing (Actions runs 48–59) established that DOT's Socrata catalogs carry only *annual* T-100 summaries and the PREZIP area holds unpredictable cached user extracts; the reliable monthly source is the table's own download form (`DL_SelectFields.aspx`). The fetcher requests one zip per year back to 2015: it GETs the form, harvests the WebForms hidden state and session cookies, posts the per-column checkboxes (YEAR, MONTH, ORIGIN, PASSENGERS, FREIGHT, DEPARTURES_PERFORMED) with `cboGeography=All`/`cboYear`/`cboPeriod=All`, unzips the reply with a dependency-free reader (picking the data CSV over the bundled field-description file) and aggregates BOTH ends of every segment so the measures match the catalogue's conventions: passengers = enplaned + deplaned (total passengers, the figure airports publish — origin-only sums would be enplanements, roughly half), movements = departures + arrivals, freight = tonnes loaded + unloaded (lbs→tonnes), matching Eurostat's PAS_CRD / CAF_PAS / FRM_LD_NLD definitions, by airport × month for the ~35 largest US gateways. Socrata is still tried first (it wins automatically if DOT ever publishes a monthly table there) and PREZIP remains a merge-safe fallback. Best-effort with last-good fallback; total failure exits non-zero into the pipeline-health issue. Note T-100 publishes with a ~2–3 month lag, so US `latest` months trail the European feed. |
 

@@ -2,6 +2,39 @@
 
 Notable changes to Glidepath. Dates are UTC.
 
+## Unreleased — uncapped European catalogue & sticky membership (2026-07)
+
+### Changed
+- **The European catalogue is no longer capped at 70 airports.** Every
+  airport Eurostat reports now ships, with no volume ranking in front of it.
+  The cap arrived as a side effect of an unrelated build-tooling commit
+  (`1d2d4f4`, 2026-07-01) and was never a deliberate product decision; it
+  existed only to bound the nightly Prophet build, which is cheap. The
+  ranking it fed was also actively harmful once the feed degraded: it summed
+  whatever months came back, so on 2026-07-26 a mid-size airport returning 5
+  months outranked Paris CDG returning zero.
+
+### Fixed
+- **Catalogue membership is now sticky, which is the root cause behind the
+  2026-07-25 loss.** Membership was re-derived from one live Eurostat call
+  every night while the data lived on disk — so a thin or empty reply evicted
+  airports whose committed history was intact, and the prune step deleted
+  their series files. An airport already in the catalogue now stays a
+  candidate whether or not tonight's enumerate mentions it, riding on
+  last-good until the feed returns, and retires only after 18 months with
+  nothing new published.
+- The outage alert no longer depends on the catalogue emptying. With sticky
+  membership, "the index still lists Eurostat airports" stopped being
+  evidence that Eurostat answered, so the alert now keys on whether a source
+  produced any **fresh** series tonight. Without this, going sticky would
+  have bought data safety at the price of never hearing about an outage.
+- Added a per-host circuit breaker to `fetchWithRetry`. The retries
+  introduced above are right for a blip and ruinous for a properly-dead
+  feed: fetch-activity makes ~50 StatCan calls a night, and a full backoff
+  ladder on each would have added ~24 minutes of sleeping to a run that
+  should fail fast. Verified against a stubbed total outage: 60s, not 24
+  minutes, with every airport's history intact.
+
 ## Unreleased — catalogue-loss guard & review fixes (2026-07)
 
 ### Fixed
