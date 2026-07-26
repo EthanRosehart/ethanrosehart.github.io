@@ -109,9 +109,18 @@ guards sit in front of that pruning:
    rather than briefly down.
 
 Because membership is sticky, "the index still lists Eurostat airports" is
-no longer evidence that Eurostat answered — so the outage alert keys on
+no longer evidence that Eurostat answered — so the outage signal keys on
 whether a source produced any **fresh** series tonight, not on whether its
-entries exist. And because a properly-dead host would otherwise cost ~50
+entries exist. That signal is `fetch-activity` **exit code 2**, deliberately
+distinct from a crash: it means the run completed, wrote a coherent
+snapshot, and kept every airport on committed history, so the workflow
+files it as a *note* rather than paging. Every airport also carries a
+`refreshedAt` stamp (set only on a live refresh, otherwise carried forward),
+which is what makes that demotion safe — `sourceStaleness()` escalates it to
+a real alert once the feed has been dark past the freshness window. An entry
+with no prior stamp starts its clock at that run; that is a watch-start, not
+a claim about when the feed last delivered, and it errs toward alerting late
+rather than never. And because a properly-dead host would otherwise cost ~50
 backed-off retries a night (~24 minutes of sleeping), `fetchWithRetry` trips
 a per-host breaker after two exhausted calls and fails fast until that host
 answers again.
