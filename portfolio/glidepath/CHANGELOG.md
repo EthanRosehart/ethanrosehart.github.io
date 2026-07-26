@@ -42,6 +42,15 @@ Notable changes to Glidepath. Dates are UTC.
   screen.
 - Chart tooltip labelled the forecast band "90%" where it is, and is
   everywhere else described as, the 80% interval.
+- **A gap in the observed months could cost an airport its entire short-term
+  forecast.** `rolling_backtest()` held out a count of observed *rows* while
+  Prophet forecasts contiguous *months*, so on a series with holes the tail
+  of the held-out window fell past what was predicted and raised `KeyError`.
+  `main()` catches per metric, so the airport simply shipped with no
+  short-term view and nothing said why. The horizon is now sized by the
+  window's calendar span, with a reindex guard so an unpredicted month drops
+  out of the fold instead of throwing. (LIN carries three such gaps today and
+  survived only because they fall outside the backtest region.)
 
 ### Changed
 - BTS PREZIP fallback reads the *data* CSV out of a zip (it was taking the
