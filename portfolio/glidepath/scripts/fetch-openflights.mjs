@@ -74,4 +74,9 @@ async function main() {
   console.log(`Wrote ${OUT} — ${out.count} airports (full reference).`);
 }
 
-main().catch((err) => { console.error("OpenFlights snapshot failed:", err.message); process.exit(1); });
+/* run only when invoked directly — same guard the other fetchers carry.
+   Without it, importing this module for a test fetches OpenFlights and
+   overwrites data/airports.json with the untrimmed 6000-airport reference. */
+if (process.argv[1] === fileURLToPath(import.meta.url)) {
+  main().catch((err) => { console.error("OpenFlights snapshot failed:", err.message); process.exit(1); });
+}

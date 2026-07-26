@@ -34,6 +34,78 @@ export function metricsIn(series) {
   return ["pax", "atm", "cargo"].filter((m) => series?.[m] && Object.keys(series[m]).length);
 }
 
+/* ---- transient-failure retry ---------------------------------
+   Every upstream here occasionally serves a one-off 5xx or drops the
+   connection mid-handshake (a World Bank 502 failed the whole nightly on
+   2026-07-13; a Eurostat "fetch failed" wiped the European enumerate on
+   2026-07-23). Those are weather, not incidents, so they get retried with
+   backoff before anything downstream treats them as a feed outage.
+
+   Returns the Response whatever its status — callers own the non-ok case,
+   since some statuses are load-bearing signals rather than errors (Eurostat
+   answers 413 to mean "ask for a smaller window"). Only a network error
+   that never once produced a response throws. */
+const TRANSIENT_RETRIES = 4;
+const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+
+/** Should this response be retried? 429 (rate limit) and 5xx (server-side)
+ *  are transient; every other status is the server's real answer. */
+export function isTransientStatus(status) {
+  return status === 429 || status >= 500;
+}
+
+export async function fetchWithRetry(url, label, init = {}, retries = TRANSIENT_RETRIES) {
+  for (let attempt = 0; ; attempt++) {
+    let res = null, netErr = null;
+    try { res = await fetch(url, init); }
+    catch (err) { netErr = err; }
+    if (res && !isTransientStatus(res.status)) return res;   // the server's real answer
+    if (attempt >= retries) {
+      if (res) return res;                                    // caller reports the status
+      throw new Error(`${label}: ${netErr ? netErr.message : "network error"} after ${retries + 1} attempts`);
+    }
+    const wait = 2000 * 2 ** attempt;
+    console.warn(`  ${label}: ${res ? `HTTP ${res.status}` : `network error (${netErr && netErr.message})`} — retrying in ${wait / 1000}s (${attempt + 1}/${retries})`);
+    await sleep(wait);
+  }
+}
+
+/* ---- last-good vs fresh series -------------------------------
+   A fetcher's "keep last good on failure" contract only fires when a feed
+   returns NOTHING. The dangerous case is the one in between: on 2026-07-25
+   Eurostat answered for all 70 European airports but handed back a short
+   window for 29 of them, so a 12-month reply overwrote a 132-month history
+   and then failed the catalogue's 24-month floor — dropping Paris CDG,
+   Zurich, Dublin, Brussels and 25 more off the live site, with their series
+   files pruned, on a run that reported success.
+
+   So a fresh series has to earn the replacement: it must clear `minFresh`
+   months AND not be a material shrink against what's already on disk.
+   Upstream restatements do legitimately trim a month or two, hence a
+   tolerance rather than a strict >=.
+
+   The deliberate trade-off: a genuine, permanent upstream truncation past
+   the tolerance is now pinned to last-good indefinitely, warning once per
+   run rather than shrinking the committed history. That's the safe
+   direction — a stale month is recoverable, a pruned gateway is not — but
+   it means the "kept previous" lines in the run log are worth reading if
+   one repeats night after night. */
+export function chooseSeries(fresh, prev, { minFresh = 12, shrinkTolerance = 0.8 } = {}) {
+  const freshN = fresh ? Object.keys(fresh).length : 0;
+  const prevN = prev ? Object.keys(prev).length : 0;
+  if (freshN >= minFresh && (!prevN || freshN >= prevN * shrinkTolerance)) {
+    return { series: fresh, kind: "fresh", reason: null };
+  }
+  if (prevN) {
+    const reason = freshN < minFresh
+      ? `fresh reply had only ${freshN}mo (need ${minFresh})`
+      : `fresh reply shrank ${prevN}mo -> ${freshN}mo`;
+    return { series: prev, kind: "kept", reason };
+  }
+  if (freshN >= minFresh) return { series: fresh, kind: "fresh", reason: null };
+  return { series: null, kind: "none", reason: freshN ? `only ${freshN}mo and nothing on disk` : "no data" };
+}
+
 /** Delete any "<iata><suffix>" file in dir whose <iata> isn't in
  *  keepIatas, so removed/renamed airports don't leave orphaned files
  *  behind forever. Best-effort: a missing dir is not an error. */

@@ -185,11 +185,18 @@ export function parseCsvLine(line) {
   return out;
 }
 
-/* T-100 segment zips from the PREZIP directory listing, in fetch order:
-   the combined table (domestic + international, all carriers) is the whole
-   truth in one family; D/I pairs interleaved newest-first only if the
-   combined family is absent. Numeric prefix descending ≈ newest data. */
-export function pickT100Zips(listingHtml) {
+/* T-100 segment zips from the PREZIP directory listing, grouped into
+   fetch-order TIERS: the combined table (domestic + international, all
+   carriers) is the whole truth in one family, and D/I pairs interleaved
+   newest-first are the fallback. Numeric prefix descending ≈ newest data.
+
+   Tiers, not one flat list, because the two families must never be mixed:
+   PREZIP holds cached USER extracts, so a combined zip can turn out to be
+   an arbitrary field subset (run 29984150208: a T_T100_SEGMENT_ALL_CARRIER
+   zip whose csv carried no YEAR and no PASSENGERS column). Falling through
+   to the D/I family in that case is right; merging a domestic-only file
+   into months the combined file already covered would silently halve them. */
+export function t100ZipTiers(listingHtml) {
   const found = [...new Set(String(listingHtml).match(/(?:\d+_)?T_T100\w*?\.zip/g) || [])];
   const groups = { combined: [], domestic: [], international: [] };
   for (const n of found) {
@@ -201,13 +208,18 @@ export function pickT100Zips(listingHtml) {
   // an unprefixed (official) name has no id — sort it first
   const byIdDesc = (a, b) => (Number.isNaN(parseInt(b)) ? -1 : Number.isNaN(parseInt(a)) ? 1 : parseInt(b) - parseInt(a));
   for (const k of Object.keys(groups)) groups[k].sort(byIdDesc);
-  if (groups.combined.length) return groups.combined;
   const inter = [];
   for (let i = 0; i < Math.max(groups.domestic.length, groups.international.length); i++) {
     if (groups.domestic[i]) inter.push(groups.domestic[i]);
     if (groups.international[i]) inter.push(groups.international[i]);
   }
-  return inter;
+  return [groups.combined, inter].filter((t) => t.length);
+}
+
+/* the zips to try first — the highest-priority tier. Kept as its own export
+   because the tier order IS the contract worth testing. */
+export function pickT100Zips(listingHtml) {
+  return t100ZipTiers(listingHtml)[0] || [];
 }
 
 /* minimal ZIP reader (central directory + inflateRaw) — no dependency
@@ -245,12 +257,6 @@ export function unzipEntry(buf, e) {
   if (e.method === 0) return data;
   if (e.method === 8) return zlib.inflateRawSync(data);
   throw new Error(`unsupported zip compression method ${e.method}`);
-}
-
-export function unzipFirstCsv(buf) {
-  const e = zipEntries(buf).find((x) => /\.csv$/i.test(x.name));
-  if (!e) throw new Error("no .csv entry in zip");
-  return unzipEntry(buf, e);
 }
 
 /* the DATA csv out of a TranStats zip: csv entries largest-first, first
@@ -559,7 +565,7 @@ async function fetchViaDlSelectFields() {
 
 async function fetchViaTranstats() {
   console.log("  [bts] using TranStats PREZIP bulk files (cached extracts — merged month-first-wins)");
-  let host = null, names = [];
+  let host = null, tiers = [];
   for (const base of ["https://transtats.bts.gov/PREZIP/", "https://www.transtats.bts.gov/PREZIP/"]) {
     try {
       const r = await fetch(base, { headers: UA });
@@ -570,39 +576,49 @@ async function fetchViaTranstats() {
       // tell whether better-named families were sitting right next to it
       const fams = [...new Set((html.match(/[\w.-]*T100[\w.-]*\.zip/gi) || []).map((n) => n.replace(/^\d+_/, "")))].sort();
       console.log(`  [bts] ${base} T100-ish zip families: ${fams.join(", ") || "none"}`);
-      names = pickT100Zips(html);
-      if (names.length) { host = base; break; }
+      tiers = t100ZipTiers(html);
+      if (tiers.length) { host = base; break; }
       console.warn(`  [bts] ${base} listing readable but no T-100 segment zips in it`);
     } catch (e) { console.warn(`  [bts] ${base} listing failed (${e.message})`); }
   }
   if (!host) return null;
-  console.log(`  [bts] ${host}: ${names.length} T-100 segment zips, newest first (target history back to ${T100_START_YEAR})`);
 
   const usSet = new Set(US);
-  const merged = {};
-  let minYear = Infinity, parsed = 0;
-  for (const name of names.slice(0, MAX_ZIPS)) {
-    try {
-      const r = await fetch(host + name, { headers: UA });
-      if (!r.ok) { console.warn(`  [bts]   ${name}: HTTP ${r.status}`); continue; }
-      const buf = Buffer.from(await r.arrayBuffer());
-      if (buf.length > MAX_ZIP_BYTES) { console.warn(`  [bts]   ${name}: ${(buf.length/1e6).toFixed(0)}MB — larger than expected for a per-period file, skipping`); continue; }
-      const csv = unzipFirstCsv(buf).toString("utf8");
-      // aggregate each file in isolation, then merge month-first-wins —
-      // cached user extracts can overlap in coverage
-      const { acc, years } = aggregateT100Csv(csv, usSet, {});
-      mergeSeriesFirstWins(merged, acc);
-      parsed++;
-      if (years.length) minYear = Math.min(minYear, years[0]);
-      console.log(`  [bts]   ${name}: ${(buf.length/1e6).toFixed(1)}MB zip, years ${years[0] ?? "?"}–${years[years.length-1] ?? "?"}`);
-      if (minYear <= T100_START_YEAR) break;   // enough history — stop downloading
-    } catch (e) {
-      console.warn(`  [bts]   ${name}: ${e.message}`);
+  // one tier at a time — a tier that yields nothing usable (a cached extract
+  // missing the columns we need) falls through to the next family rather
+  // than failing the whole US feed, but tiers are never merged together
+  for (const names of tiers) {
+    console.log(`  [bts] ${host}: ${names.length} T-100 segment zips in this tier, newest first (target history back to ${T100_START_YEAR})`);
+    const merged = {};
+    let minYear = Infinity, parsed = 0;
+    for (const name of names.slice(0, MAX_ZIPS)) {
+      try {
+        const r = await fetch(host + name, { headers: UA });
+        if (!r.ok) { console.warn(`  [bts]   ${name}: HTTP ${r.status}`); continue; }
+        const buf = Buffer.from(await r.arrayBuffer());
+        if (buf.length > MAX_ZIP_BYTES) { console.warn(`  [bts]   ${name}: ${(buf.length/1e6).toFixed(0)}MB — larger than expected for a per-period file, skipping`); continue; }
+        // unzipDataCsv, not "first csv": these zips can bundle a
+        // field-description sheet alongside the data (run 29066554350)
+        const csv = unzipDataCsv(buf).text;
+        // aggregate each file in isolation, then merge month-first-wins —
+        // cached user extracts can overlap in coverage
+        const { acc, years } = aggregateT100Csv(csv, usSet, {});
+        mergeSeriesFirstWins(merged, acc);
+        parsed++;
+        if (years.length) minYear = Math.min(minYear, years[0]);
+        console.log(`  [bts]   ${name}: ${(buf.length/1e6).toFixed(1)}MB zip, years ${years[0] ?? "?"}–${years[years.length-1] ?? "?"}`);
+        if (minYear <= T100_START_YEAR) break;   // enough history — stop downloading
+      } catch (e) {
+        console.warn(`  [bts]   ${name}: ${e.message}`);
+      }
     }
+    if (parsed && Object.keys(merged).length) {
+      console.log(`  [bts] PREZIP aggregation done — ${Object.keys(merged).length} airports, ${parsed} files, history back to ${minYear === Infinity ? "?" : minYear}`);
+      return roundAcc(merged);
+    }
+    console.warn("  [bts]   no usable data in this zip family — trying the next one");
   }
-  if (!parsed || !Object.keys(merged).length) return null;
-  console.log(`  [bts] PREZIP aggregation done — ${Object.keys(merged).length} airports, ${parsed} files, history back to ${minYear === Infinity ? "?" : minYear}`);
-  return roundAcc(merged);
+  return null;
 }
 
 async function seriesFor(ds, code) {

@@ -146,7 +146,11 @@ function LongTerm({ airport, history, scenario, go }){
       {(()=>{
         const seas = GP_observedSeasonality(history, "pax");
         const ddBase = GP_designDay(start.pax, seas);
-        const endPax = lt.paxCap ? (end.paxC ?? end.pax) : end.pax;
+        // hasCap, not paxCap: a slot-only cap or a phased capacity step
+        // constrains passengers just as much (the coupled model in data.jsx
+        // propagates it), and reading them off the unconstrained demand here
+        // sized the terminal for traffic the airport can't actually serve
+        const endPax = lt.hasCap ? (end.paxC ?? end.pax) : end.pax;
         const ddEnd = GP_designDay(endPax, seas);
         if (!ddBase || !ddEnd) return null;
         const rows = [
@@ -160,7 +164,7 @@ function LongTerm({ airport, history, scenario, go }){
             <SectionHead kicker="Design day · peak hour" title="What the terminal has to handle"
               right={<span className="air-meta">passengers, from the observed seasonal shape</span>}/>
             <table className="tbl">
-              <thead><tr><th style={{textAlign:"left"}}>Measure</th><th>{lt.baseYear} (observed)</th><th>{lt.endYear} (scenario{lt.paxCap?", constrained":""})</th></tr></thead>
+              <thead><tr><th style={{textAlign:"left"}}>Measure</th><th>{lt.baseYear} (observed)</th><th>{lt.endYear} (scenario{lt.hasCap?", constrained":""})</th></tr></thead>
               <tbody>
                 {rows.map((r,i)=>(
                   <tr key={i}>

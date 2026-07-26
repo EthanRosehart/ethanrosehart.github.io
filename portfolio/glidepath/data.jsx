@@ -874,16 +874,29 @@ function b64urlDecode(s){
   for (let i=0;i<bin.length;i++) bytes[i] = bin.charCodeAt(i);
   return new TextDecoder().decode(bytes);
 }
-const SHARE_NUM_KEYS = ["gdp","elasticity","pop","tourism","fuel","lcc","cargo","gauge",
-  "seg_domestic","seg_transborder","seg_international","horizon",
-  "paxCap","atmCap","capGauge","capGaugeMax","bellyShare","bellyBeta"];
+/* every shareable numeric lever with the [min,max] it's clamped to. A
+   finite-number check alone isn't enough: `horizon` sizes the monthly
+   projection loop (horizon × 12 records, each charted and tabled), so a
+   link carrying horizon:1e9 would hang the tab of whoever opened it. The
+   bounds match the widest the UI itself can produce. */
+const SHARE_NUM_KEYS = {
+  gdp:[-20,20], elasticity:[0,5], pop:[-10,10], tourism:[-20,20], fuel:[-50,200],
+  lcc:[-20,20], cargo:[-20,20], gauge:[-20,20],
+  seg_domestic:[-20,20], seg_transborder:[-20,20], seg_international:[-20,20],
+  horizon:[1,50],
+  paxCap:[0,1e10], atmCap:[0,1e9],
+  capGauge:[0,20], capGaugeMax:[0,200], bellyShare:[0,100], bellyBeta:[0,100],
+};
 function sanitizeSharedScenario(sc){
   if (!sc || typeof sc !== "object" || Array.isArray(sc)) return null;
   const out = {};
-  for (const k of SHARE_NUM_KEYS){
+  for (const k in SHARE_NUM_KEYS){
     const v = sc[k];
-    if (typeof v === "number" && Number.isFinite(v)) out[k] = v;
+    if (typeof v !== "number" || !Number.isFinite(v)) continue;
+    const [lo, hi] = SHARE_NUM_KEYS[k];
+    out[k] = Math.min(hi, Math.max(lo, v));
   }
+  if (out.horizon != null) out.horizon = Math.round(out.horizon);
   if (Array.isArray(sc.capSteps)){
     out.capSteps = sc.capSteps.slice(0, 10).map(st => {
       if (!st || typeof st !== "object") return null;

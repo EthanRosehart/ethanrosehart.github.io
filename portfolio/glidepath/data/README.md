@@ -33,14 +33,17 @@ The pipeline runs in this order (see `.github/workflows/refresh-data.yml`):
 because it needs the still-untrimmed OpenFlights reference for US airport
 names/coords; `fetch-activity` then carries the BTS entries forward and
 trims the reference to the union of both catalogues.) Each step is best-effort and keeps the last
-good snapshot on failure — but failures are **not silent**: after the
+good snapshot on failure, retrying transient network/5xx blips first
+(`fetchWithRetry` in `scripts/_util.mjs`) so a one-off hiccup isn't
+mistaken for an outage — but failures are **not silent**: after the
 fetchers, `scripts/validate-data.mjs` schema-checks every snapshot as a
 hard gate before anything is committed, `scripts/check-snapshots.mjs`
-reports staleness (a snapshot >10 days old means a fetcher has been
-quietly failing) and anomalies (dropped airports, shrunken series,
-wholesale level shifts vs yesterday's baseline), and the workflow's final
-step opens or updates a *pipeline-health issue* and fails the run when
-anything is wrong. The app itself shows a staleness banner when the
+fails the run on staleness (a snapshot >10 days old means a fetcher has
+been quietly failing) or a mass catalogue loss (gateways vanishing
+wholesale in one night) and warns on the softer anomalies (a couple of
+airports rotating out, shrunken series, wholesale level shifts vs
+yesterday's baseline), and the workflow's final step opens or updates a
+*pipeline-health issue* and fails the run when anything is wrong. The app itself shows a staleness banner when the
 committed snapshot is older than 10 days. Two more artifacts are written
 each night: **`data/manifest.json`** (`scripts/build-manifest.mjs`) — the
 provenance manifest: upstream source, license/terms, generatedAt and row
@@ -73,11 +76,29 @@ selected.
 runs before it and separately maintains its own entries in the same index +
 `series/` directory, so the two scripts never clobber each other's airports.
 Both prune `series/<IATA>.json` files for airports that drop out of their
-respective sets — with a **total-outage guard**: if a whole source produces
-nothing on a run but the previous index carried its airports, the previous
-entries are carried forward untouched (their series files stay, including
-their last-good `paxSeg` splits) and the run exits non-zero for the
-pipeline-health issue, so one bad night can never wipe a market.
+respective sets, which makes a bad night genuinely destructive — so three
+guards sit in front of that pruning:
+
+1. **Total-outage guard** — if a whole source produces nothing on a run but
+   the previous index carried its airports, the previous entries are carried
+   forward untouched (their series files stay, including their last-good
+   `paxSeg` splits) and the run exits non-zero for the pipeline-health issue,
+   so one bad night can never wipe a market.
+2. **Partial-reply guard** (`chooseSeries()` in `scripts/_util.mjs`) — the
+   dangerous case is the one in between, where a feed answers but *short*.
+   On 2026-07-25 Eurostat returned all 70 European airports with a truncated
+   window for 29 of them; 12-month replies overwrote 132-month histories,
+   then failed the 24-month catalogue floor, and Paris CDG, Zurich, Dublin,
+   Brussels, Athens, Istanbul and 23 more dropped off the live site. A fresh
+   series now has to clear the month floor *and* not be a material shrink
+   (>20%) against what's already on disk, or last-good is kept and the run
+   log says why.
+3. **Mass-drop alert** (`massDropAlert()` in `scripts/check-snapshots.mjs`) —
+   losing more than 2 airports, or more than 5% of the catalogue, in a single
+   run exits non-zero and pages. Below that it stays a warning, because
+   gateways do legitimately rotate in and out of the volume-ranked European
+   cap night to night. That night printed 116 anomaly warnings and still
+   reported "Pipeline healthy"; it now fails the run.
 
 | Market | Source | Notes |
 |--------|--------|-------|
@@ -204,8 +225,8 @@ GDP/capita row whenever `gdpRegressor` is set. A country with no
 ## Run it locally
 ```bash
 node scripts/fetch-openflights.mjs # airports.json (OpenFlights full reference)
+node scripts/fetch-bts.mjs         # activity-index.json + series/<IATA>.json (US BTS T-100, ~35 gateways)
 node scripts/fetch-activity.mjs    # activity-index.json + series/<IATA>.json (Eurostat + StatCan) + trims airports.json
-node scripts/fetch-bts.mjs         # activity-index.json + series/<IATA>.json (US BTS — currently a no-op)
 node scripts/fetch-data.mjs        # macro.json (World Bank, no key)
 node scripts/fetch-imf.mjs         # imf-weo.json (IMF WEO forward GDP/capita forecast, no key)
 pip install -r scripts/requirements.txt

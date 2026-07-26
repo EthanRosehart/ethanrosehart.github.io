@@ -2,6 +2,58 @@
 
 Notable changes to Glidepath. Dates are UTC.
 
+## Unreleased — catalogue-loss guard & review fixes (2026-07)
+
+### Fixed
+- **A partial Eurostat reply could wipe gateways off the site.** The nightly's
+  "keep last good" contract only fired when a feed returned *nothing*; a reply
+  that came back short was accepted as the new truth. On 2026-07-25 Eurostat
+  answered for all 70 European airports but with a truncated window for 29 of
+  them, so 12-month replies overwrote 132-month histories, failed the
+  catalogue's 24-month floor, and dropped Paris CDG, Zurich, Geneva, Dublin,
+  Brussels, Lisbon, Porto, Athens, Istanbul, Oslo, Stockholm and 18 more —
+  series and forecast files pruned — on a run that reported success.
+  `chooseSeries()` (`scripts/_util.mjs`) now makes a fresh series earn the
+  replacement: it must clear the month floor *and* not be a material shrink
+  against what's on disk, or last-good is kept and the reason logged. Applies
+  to both the Eurostat and StatCan paths.
+- **A wholesale catalogue loss no longer reports "Pipeline healthy".** Dropped
+  airports were an anomaly *warning* (exit 0), so that night printed 116
+  anomalies and still passed. `massDropAlert()` in `check-snapshots.mjs`
+  escalates to an exit-1 alert past 2 airports / 5% of the catalogue in one
+  run; a gateway or two rotating out of the volume-ranked cap stays a warning.
+- Transient upstream failures on Eurostat and StatCan are retried with backoff
+  (shared `fetchWithRetry`, previously only in the World Bank fetcher) — a
+  one-off `fetch failed` on the European enumerate call took out the whole
+  catalogue pull and paged on 2026-07-23. Eurostat's 413 is passed through
+  untouched, since there it means "ask for a smaller window", not "failed".
+- Share links (`#s=…`) never cleared from the address bar: `history.replaceState`
+  was shadowed by a local `history` variable, so the call silently threw and
+  every subsequent reload re-applied the shared scenario over the visitor's
+  own edits.
+- Share-link levers are now range-clamped, not just type-checked — a link
+  carrying `horizon: 1e9` sized the projection loop at 12 billion months.
+- Short-term monthly table's YoY column compared forecast months 7–12 against
+  24 months back instead of 12 (a calendar-month `find` over an 18-month tail
+  matched the older duplicate).
+- Design-day / peak-hour panel read unconstrained demand whenever the scenario
+  used a slot-only cap or a phased capacity step, sizing the terminal for
+  traffic the airport can't serve. Now keys off `hasCap` like the rest of the
+  screen.
+- Chart tooltip labelled the forecast band "90%" where it is, and is
+  everywhere else described as, the 80% interval.
+
+### Changed
+- BTS PREZIP fallback reads the *data* CSV out of a zip (it was taking the
+  first CSV entry, which can be a field-description sheet) and treats the
+  combined and domestic/international zip families as ordered tiers, so a
+  broken cached extract in one family falls through to the other instead of
+  failing the US feed. Families are never merged — that would undercount
+  months only a domestic-only file covered.
+- `fetch-data.mjs` and `fetch-openflights.mjs` only run on direct invocation,
+  matching every other fetcher; importing the latter used to overwrite
+  `data/airports.json` with the untrimmed 6000-airport reference.
+
 ## Unreleased — model corrections & annual views (2026-07)
 
 ### Fixed

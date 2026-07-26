@@ -124,7 +124,12 @@ function App(){
           setScenario({ ...GP_defaultScenario(sharedAirport.iata), ...(shared.scenario || {}) });
           setConnected(true);
           setScreen("overview");
-          try { history.replaceState(null, "", location.pathname + location.search); } catch(e){}
+          // window.history explicitly: `history` is shadowed in this scope by
+          // the monthly-records memo above, so the unqualified call silently
+          // threw into the catch and left #s=… in the address bar — where the
+          // next reload re-applied the shared scenario over the visitor's own
+          // edits, forever.
+          try { window.history.replaceState(null, "", location.pathname + location.search); } catch(e){}
         } else if (saved.iata && !airport) {
           const a = AIRPORTS.find(x => x.iata === saved.iata);
           if (a) setAirport(a);

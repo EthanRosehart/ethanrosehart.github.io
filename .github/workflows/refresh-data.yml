@@ -22,9 +22,10 @@ name: Refresh data
 #   • notes  — a best-effort feed missed tonight but kept last-good AND is
 #              watched for staleness (check-snapshots.mjs). Logged, not paged.
 #   • alerts — a total activity outage, a snapshot that failed validation
-#              (commit blocked), or a feed that has now gone STALE (aged past
-#              the freshness window, per-source BTS included). These fail the
-#              run and open/update the pipeline-health issue.
+#              (commit blocked), a feed that has now gone STALE (aged past
+#              the freshness window, per-source BTS included), or a run that
+#              DROPPED gateways off the catalogue. These fail the run and
+#              open/update the pipeline-health issue.
 # Snapshots are schema-validated (scripts/validate-data.mjs) as a hard gate
 # before anything is committed.
 
@@ -181,13 +182,14 @@ jobs:
           [ "${{ steps.validate.outcome }}" = "failure" ]    && alert "snapshot VALIDATION failed — commit was blocked, site keeps last-good data"
 
           # staleness (a feed broken long enough to age past the window, incl.
-          # per-source BTS) + anomaly diff. exit != 0 == a stale snapshot.
+          # per-source BTS) + mass catalogue loss + anomaly diff. exit != 0 ==
+          # a stale snapshot or a night that dropped gateways off the site.
           set +e
           report=$(node portfolio/glidepath/scripts/check-snapshots.mjs --baseline /tmp/gp-baseline 2>&1)
           rc=$?
           set -e
           echo "$report"
-          [ $rc -ne 0 ] && alert "stale snapshots — a feed has been failing long enough to age past the freshness window"
+          [ $rc -ne 0 ] && alert "check-snapshots failed — a snapshot aged past the freshness window, or gateways dropped out of the catalogue (see its output below)"
 
           [ -n "$notes" ] && { echo "NOTES (last-good kept, not paging):"; printf '%s' "$notes"; }
 
