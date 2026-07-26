@@ -204,7 +204,7 @@ def fit_predict(df, hol_df, horizon, gdp_levels=None, gdp_growth=None, gdp_futur
         daily_seasonality=False,
         seasonality_mode="multiplicative",
         holidays=hol_df if len(hol_df) else None,
-        holidays_prior_scale=5.0,
+        holidays_prior_scale=HOLIDAY_PRIOR,   # same constant the per-row prior uses
         changepoint_prior_scale=0.05,
         interval_width=INTERVAL,
     )
@@ -315,8 +315,10 @@ def seasonal12(df):
     return idx
 
 
-def top_holidays(m, fc, names, k=5):
-    """Rank holidays by mean absolute contribution over the horizon."""
+def top_holidays(fc, names, k=5):
+    """Rank holidays by mean absolute contribution over the horizon.
+    Reads the per-holiday component columns off the prediction frame; the
+    fitted model itself isn't needed."""
     cols = [c for c in names if c in fc.columns]
     if not cols:
         return []
@@ -327,7 +329,7 @@ def top_holidays(m, fc, names, k=5):
     return [c for c, _ in scored[:k]]
 
 
-def forecast_metric(iata, iso2, monthly, horizon, gdp_levels=None, gdp_growth=None, gdp_future_rates=None):
+def forecast_metric(iso2, monthly, horizon, gdp_levels=None, gdp_growth=None, gdp_future_rates=None):
     df = series_frame(monthly)
     if df is None or len(df) < MIN_MONTHS:
         return None
@@ -341,7 +343,7 @@ def forecast_metric(iata, iso2, monthly, horizon, gdp_levels=None, gdp_growth=No
     frames = [f for f in (hol_df, cov_df) if len(f)]
     fit_holidays = pd.concat(frames, ignore_index=True) if frames else hol_df
 
-    m, fc = fit_predict(df, fit_holidays, horizon, gdp_levels=gdp_levels, gdp_growth=gdp_growth, gdp_future_rates=gdp_future_rates)
+    _, fc = fit_predict(df, fit_holidays, horizon, gdp_levels=gdp_levels, gdp_growth=gdp_growth, gdp_future_rates=gdp_future_rates)
     bt = rolling_backtest(df, fit_holidays, gdp_levels=gdp_levels, gdp_growth=gdp_growth, gdp_future_rates=gdp_future_rates)
 
     fut = fc.tail(horizon)
@@ -366,7 +368,7 @@ def forecast_metric(iata, iso2, monthly, horizon, gdp_levels=None, gdp_growth=No
         "months_history": int(len(df)),
         "latest": f"{df['ds'].max().year}-{df['ds'].max().month:02d}",
         "seasonal12": seasonal12(df),
-        "holidays": top_holidays(m, fc, names),
+        "holidays": top_holidays(fc, names),
         "holidays_total": len(names),
         "gdpRegressor": bool(gdp_levels),
         "gdpForecast": bool(gdp_future_rates),
@@ -472,7 +474,7 @@ def main():
             if not monthly:
                 continue
             try:
-                res = forecast_metric(iata, iso2, monthly, HORIZON, gdp_levels, gdp_growth, gdp_future_rates)
+                res = forecast_metric(iso2, monthly, HORIZON, gdp_levels, gdp_growth, gdp_future_rates)
             except Exception as e:
                 print(f"  {iata}/{metric}: FAILED ({e})", file=sys.stderr)
                 res = None

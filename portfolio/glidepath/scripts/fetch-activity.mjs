@@ -42,7 +42,7 @@
 import { writeFile, readFile, mkdir } from "node:fs/promises";
 import { dirname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
-import { lastFullYearTotal, metricsIn, pruneDir } from "./_util.mjs";
+import { lastFullYearTotal, metricsIn, pruneDir, fetchWithRetry, chooseSeries } from "./_util.mjs";
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const DATA = resolve(__dirname, "..", "data");
@@ -123,7 +123,9 @@ export function esDecode(js, dataset) {
 }
 
 async function esGet(dataset, q, reps) {
-  const res = await fetch(esUrl(dataset, q, reps), { headers: UA });
+  // retries network blips + 5xx; 413 comes back untouched because it's a
+  // signal (ask for a smaller window), not a failure — see esEnumerate/esBatch
+  const res = await fetchWithRetry(esUrl(dataset, q, reps), `eurostat ${dataset}`, { headers: UA });
   if (!res.ok) {
     let body = ""; try { body = (await res.text()).slice(0, 160); } catch {}
     const e = new Error(`${dataset} HTTP ${res.status} ${body}`); e.code = res.status; throw e;
@@ -196,7 +198,7 @@ const STATCAN_SEG = {
 const _meta = {};
 async function statcanMeta(pid) {
   if (_meta[pid]) return _meta[pid];
-  const res = await fetch("https://www150.statcan.gc.ca/t1/wds/rest/getCubeMetadata", {
+  const res = await fetchWithRetry("https://www150.statcan.gc.ca/t1/wds/rest/getCubeMetadata", `statcan meta ${pid}`, {
     method: "POST", headers: { "Content-Type": "application/json", ...UA },
     body: JSON.stringify([{ productId: pid }]),
   });
@@ -233,7 +235,7 @@ async function statcanCoord(pid, re, metric, charOverride) {
   return parts.join(".");
 }
 async function statcanSeries(pid, coord) {
-  const res = await fetch("https://www150.statcan.gc.ca/t1/wds/rest/getDataFromCubePidCoordAndLatestNPeriods", {
+  const res = await fetchWithRetry("https://www150.statcan.gc.ca/t1/wds/rest/getDataFromCubePidCoordAndLatestNPeriods", `statcan data ${pid}`, {
     method: "POST", headers: { "Content-Type": "application/json", ...UA },
     body: JSON.stringify([{ productId: pid, coordinate: coord, latestN: 144 }]),
   });
@@ -329,11 +331,20 @@ async function main() {
     const [iso2, iso3, cname] = g;
     const series = {};
     for (const metric of ["pax", "atm", "cargo"]) {
-      const m = euData[metric]?.[icao]?.monthly;
-      if (m && Object.keys(m).length >= 12) { series[metric] = m; live++; }
-      else { const kept = await prevSeries(iata, metric); if (kept) series[metric] = kept; }
+      // a thin reply must never overwrite a long committed history — see
+      // chooseSeries() in _util.mjs for the night that made this necessary
+      const pick = chooseSeries(euData[metric]?.[icao]?.monthly, await prevSeries(iata, metric));
+      if (pick.kind === "fresh") { series[metric] = pick.series; live++; }
+      else if (pick.kind === "kept") {
+        series[metric] = pick.series;
+        if (pick.reason) console.warn(`  ${iata}/${metric} eurostat: ${pick.reason} — kept previous`);
+      }
     }
-    if (!series.pax || Object.keys(series.pax).length < MIN_MONTHS) continue;
+    if (!series.pax || Object.keys(series.pax).length < MIN_MONTHS) {
+      // loud: this drops the gateway off the site AND prunes its series file
+      console.warn(`  ${iata} eurostat: only ${Object.keys(series.pax || {}).length}mo of passengers (need ${MIN_MONTHS}) — DROPPED from the catalogue`);
+      continue;
+    }
     let paxSeg = {};
     for (const sk of ["domestic", "international"]) {
       const ms = euSeg[sk]?.[icao]?.monthly;
@@ -370,11 +381,16 @@ async function main() {
           lastErr = new Error(`only ${Object.keys(m).length}mo`);
         } catch (e) { lastErr = e; }
       }
-      if (got) { series[metric] = got; live++; }
-      else {
-        const kept = await prevSeries(iata, metric);
-        if (kept) series[metric] = kept;
-        console.warn(`  ${iata}/${metric} statcan failed (${lastErr ? lastErr.message : "no data"})${kept ? " — kept previous" : ""}`);
+      // same guard as Eurostat: a short reply keeps the committed history
+      const pick = chooseSeries(got, await prevSeries(iata, metric));
+      if (pick.kind === "fresh") { series[metric] = pick.series; live++; }
+      else if (pick.kind === "kept") {
+        series[metric] = pick.series;
+        // when the cubes never produced anything, lastErr is the real story;
+        // otherwise the reply came back but was too thin/short to trust
+        console.warn(`  ${iata}/${metric} statcan: ${got ? pick.reason : (lastErr ? lastErr.message : "no data")} — kept previous`);
+      } else {
+        console.warn(`  ${iata}/${metric} statcan failed (${lastErr ? lastErr.message : "no data"}) — nothing on disk either`);
       }
     }
     if (!series.pax || Object.keys(series.pax).length < MIN_MONTHS) { console.warn(`  ${iata} statcan: insufficient pax — skipped`); continue; }

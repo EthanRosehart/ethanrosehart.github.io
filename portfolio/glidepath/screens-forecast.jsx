@@ -376,7 +376,12 @@ function ShortTerm({ airport, history }){
               <thead><tr><th>Month</th><th>Forecast</th><th>Low</th><th>High</th><th>YoY</th></tr></thead>
               <tbody>
                 {next12.map((r,i)=>{
-                  const lyv = d.tail.find(t=>t.m===r.m)?.[metric] || ly/12;
+                  // the ACTUAL year-ago month, by date — `find` on calendar
+                  // month alone matched the older of the two occurrences in an
+                  // 18-month tail, so forecast months 7–12 were being compared
+                  // against 24 months back instead of 12
+                  const lyKey = `${r.y-1}-${String(r.m+1).padStart(2,"0")}`;
+                  const lyv = d.tail.find(t=>t.date===lyKey)?.[metric] || ly/12;
                   const yoy = (r.v/lyv-1)*100;
                   return <tr key={i}>
                     <td>{r.label}</td>

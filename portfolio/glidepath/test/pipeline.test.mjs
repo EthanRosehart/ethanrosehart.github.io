@@ -15,9 +15,9 @@ import assert from "node:assert/strict";
 import { esDecode, normMonth } from "../scripts/fetch-activity.mjs";
 import { perCapitaRates } from "../scripts/fetch-imf.mjs";
 import { mapCols, decodeRows, orderCandidates, US } from "../scripts/fetch-bts.mjs";
-import { lastFullYearTotal, metricsIn } from "../scripts/_util.mjs";
+import { lastFullYearTotal, metricsIn, chooseSeries, isTransientStatus } from "../scripts/_util.mjs";
 import { checkSeriesDoc, checkActivityIndex, checkForecastDoc } from "../scripts/validate-data.mjs";
-import { staleSnapshots, sourceStaleness, droppedAirports, seriesAnomalies, ageDays } from "../scripts/check-snapshots.mjs";
+import { staleSnapshots, sourceStaleness, droppedAirports, seriesAnomalies, ageDays, massDropAlert } from "../scripts/check-snapshots.mjs";
 
 /* ---- fetch-activity: Eurostat JSON-stat ----------------------- */
 
@@ -258,10 +258,59 @@ test("droppedAirports + seriesAnomalies: catches vanished gateways, shrunk histo
   assert.ok(seriesAnomalies("TST", prev, shifted).some((w) => w.includes("restatement")));
 });
 
+test("massDropAlert: a couple of gateways rotating out is churn, a wholesale loss pages", () => {
+  const prev = { airports: Object.fromEntries(Array.from({ length: 100 }, (_, i) => [`A${i}`, {}])) };
+  assert.equal(massDropAlert([], prev), null, "nothing dropped -> no alert");
+  assert.equal(massDropAlert(["A1", "A2"], prev), null, "2 of 100 is ordinary cap churn");
+  // the 2026-07-25 shape: 29 European gateways gone in one run
+  const many = Array.from({ length: 29 }, (_, i) => `B${i}`);
+  const msg = massDropAlert(many, prev);
+  assert.ok(msg && msg.includes("29 airports dropped"), "wholesale loss must alert");
+  assert.ok(msg.includes("29% of 100"));
+  // small catalogues: 3 gone is over the absolute bound even at a low %
+  assert.ok(massDropAlert(["X", "Y", "Z"], prev));
+});
+
+test("chooseSeries: a thin fresh reply never overwrites a long committed history", () => {
+  const months = (n, from = 0) => Object.fromEntries(
+    Array.from({ length: n }, (_, i) => [`20${String(15 + Math.floor((i + from) / 12)).padStart(2, "0")}-${String(((i + from) % 12) + 1).padStart(2, "0")}`, 100]));
+  const long = months(132);
+
+  // the 2026-07-25 regression: 12 fresh months vs 132 on disk -> keep disk
+  const thin = chooseSeries(months(12), long);
+  assert.equal(thin.kind, "kept");
+  assert.ok(thin.reason.includes("132mo -> 12mo"));
+  assert.equal(Object.keys(thin.series).length, 132);
+
+  // a normal refresh (same length or one more month) still wins
+  assert.equal(chooseSeries(months(133), long).kind, "fresh");
+  assert.equal(chooseSeries(months(132), long).kind, "fresh");
+
+  // an upstream restatement trimming a couple of months is tolerated
+  assert.equal(chooseSeries(months(130), long).kind, "fresh");
+
+  // nothing fresh at all -> keep disk; nothing anywhere -> nothing
+  assert.equal(chooseSeries(null, long).kind, "kept");
+  assert.equal(chooseSeries(null, null).kind, "none");
+  assert.equal(chooseSeries(months(6), null).kind, "none", "below minFresh with no history is not shippable");
+  assert.equal(chooseSeries(months(24), null).kind, "fresh", "a first-ever series just needs minFresh");
+});
+
+test("isTransientStatus: only 429 + 5xx get retried; 413 is a signal, not a failure", () => {
+  assert.equal(isTransientStatus(500), true);
+  assert.equal(isTransientStatus(503), true);
+  assert.equal(isTransientStatus(429), true);
+  // Eurostat answers 413 to mean "ask for a smaller window" — retrying it
+  // unchanged would just burn the backoff and still 413
+  assert.equal(isTransientStatus(413), false);
+  assert.equal(isTransientStatus(404), false);
+  assert.equal(isTransientStatus(200), false);
+});
+
 /* ---- fetch-bts TranStats path: listing pick, zip reading, CSV aggregation ---- */
 
 import zlib from "node:zlib";
-import { parseCsvLine, pickT100Zips, unzipFirstCsv, aggregateT100Csv } from "../scripts/fetch-bts.mjs";
+import { parseCsvLine, pickT100Zips, t100ZipTiers, unzipDataCsv, aggregateT100Csv } from "../scripts/fetch-bts.mjs";
 
 test("parseCsvLine: quoted fields with embedded commas survive", () => {
   assert.deepEqual(parseCsvLine('2024,1,"ATL","Atlanta, GA",50000'), ["2024", "1", "ATL", "Atlanta, GA", "50000"]);
@@ -296,7 +345,7 @@ test("pickT100Zips: prefers the combined all-carrier segment family, newest pref
   assert.deepEqual(pickT100Zips("<html>nothing here</html>"), []);
 });
 
-/** build a minimal real zip (deflated entries) so unzipFirstCsv is tested
+/** build a minimal real zip (deflated entries) so the zip reader is tested
  *  against the actual container format, not a mock */
 function buildZip(entries) {
   const parts = [], central = [];
@@ -323,11 +372,27 @@ function buildZip(entries) {
   return Buffer.concat([...parts, cdBuf, eocd]);
 }
 
-test("unzipFirstCsv: extracts the CSV entry from a real zip container, skipping non-CSV entries", () => {
+test("unzipDataCsv: extracts the CSV entry from a real zip container, skipping non-CSV entries", () => {
   const csv = "YEAR,MONTH,ORIGIN\n2024,1,ATL\n";
   const zip = buildZip([["readme.html", "<p>hi</p>"], ["T_T100_SEGMENT_ALL_CARRIER.csv", csv]]);
-  assert.equal(unzipFirstCsv(zip).toString("utf8"), csv);
-  assert.throws(() => unzipFirstCsv(Buffer.from("not a zip at all, definitely")), /end-of-central-directory/);
+  assert.equal(unzipDataCsv(zip).text, csv);
+  assert.throws(() => unzipDataCsv(Buffer.from("not a zip at all, definitely")), /end-of-central-directory/);
+});
+
+test("t100ZipTiers: combined family first, D/I family kept as a separate fallback tier", () => {
+  // both families present — they must stay in SEPARATE tiers so a broken
+  // combined extract falls through instead of being merged with domestic-only
+  const tiers = t100ZipTiers(`
+    <a href="900_T_T100_SEGMENT_ALL_CARRIER.zip">a</a>
+    <a href="800_T_T100D_SEGMENT_ALL_CARRIER.zip">b</a>
+    <a href="700_T_T100I_SEGMENT_ALL_CARRIER.zip">c</a>`);
+  assert.deepEqual(tiers, [
+    ["900_T_T100_SEGMENT_ALL_CARRIER.zip"],
+    ["800_T_T100D_SEGMENT_ALL_CARRIER.zip", "700_T_T100I_SEGMENT_ALL_CARRIER.zip"],
+  ]);
+  // pickT100Zips stays the "what do we try first" view
+  assert.deepEqual(pickT100Zips("<a href='T_T100D_SEGMENT_ALL_CARRIER.zip'>d</a>"), ["T_T100D_SEGMENT_ALL_CARRIER.zip"]);
+  assert.deepEqual(t100ZipTiers("<html>nothing here</html>"), []);
 });
 
 test("aggregateT100Csv: totals convention — both segment ends count (enplaned+deplaned)", () => {

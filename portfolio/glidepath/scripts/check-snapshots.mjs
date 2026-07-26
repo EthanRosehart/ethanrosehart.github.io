@@ -9,10 +9,17 @@
  *   1. STALENESS (errors, exit 1): any core snapshot whose generatedAt
  *      is older than MAX_AGE_DAYS — the signature of a fetcher that has
  *      been quietly failing for days.
- *   2. ANOMALIES (warnings, exit 0): suspicious deltas vs a baseline
- *      copy of data/ taken before the fetchers ran — airports dropped,
- *      series that shrank, or a large level shift in months both
- *      snapshots cover (a unit change or upstream restatement).
+ *   2. MASS CATALOGUE LOSS (errors, exit 1): more than MAX_DROPPED
+ *      airports vanishing from the catalogue in a single night. A gateway
+ *      or two rotating out of the volume-ranked cap is ordinary churn; 29
+ *      of them going at once (2026-07-25: Paris CDG, Zurich, Dublin,
+ *      Brussels, Lisbon, Athens, Istanbul and 22 more, series files
+ *      pruned) is an incident that shipped under a green run because
+ *      dropped airports were only ever a warning.
+ *   3. ANOMALIES (warnings, exit 0): the rest of the suspicious deltas vs
+ *      a baseline copy of data/ taken before the fetchers ran — series
+ *      that shrank, or a large level shift in months both snapshots cover
+ *      (a unit change or upstream restatement).
  *
  * Usage:
  *   node scripts/check-snapshots.mjs                     # staleness only
@@ -31,6 +38,11 @@ const DATA = resolve(__dirname, "..", "data");
 export const MAX_AGE_DAYS = 10;
 const SHIFT_PCT = 30;      // level shift in an overlapping month worth flagging
 const MIN_SHIFT_MONTHS = 3; // ...if at least this many months shifted together
+/* Airports may rotate out of the volume-ranked European cap night to night,
+   so a small drop is churn. Past these bounds it's a feed defect, and the
+   site silently loses gateways plus their whole committed history. */
+export const MAX_DROPPED = 2;       // absolute: more than this pages
+export const MAX_DROPPED_PCT = 5;   // ...or more than this % of the catalogue
 
 export function ageDays(iso, now = Date.now()) {
   const t = Date.parse(iso);
@@ -76,6 +88,21 @@ export function droppedAirports(prevIndex, nextIndex) {
   return Object.keys(prevIndex?.airports || {}).filter((i) => !next.has(i));
 }
 
+/** Is tonight's catalogue loss big enough to page? -> message or null.
+ *  Counted against the PREVIOUS catalogue size, since that's what was
+ *  actually lost. Nothing dropped, or a couple of gateways rotating out of
+ *  the volume cap, stays a warning. */
+export function massDropAlert(dropped, prevIndex, max = MAX_DROPPED, maxPct = MAX_DROPPED_PCT) {
+  const n = dropped.length;
+  if (!n) return null;
+  const prevN = Object.keys(prevIndex?.airports || {}).length;
+  const pct = prevN ? (n / prevN) * 100 : 100;
+  if (n <= max && pct <= maxPct) return null;
+  return `${n} airport${n === 1 ? "" : "s"} dropped from the catalogue in one run` +
+    (prevN ? ` (${pct.toFixed(0)}% of ${prevN})` : "") +
+    ` — their series files are pruned too: ${dropped.slice(0, 12).join(", ")}${n > 12 ? `, +${n - 12} more` : ""}`;
+}
+
 /** Anomalies between one airport's previous and current monthly series.
  *  -> array of human-readable warnings. */
 export function seriesAnomalies(iata, prevSeries, nextSeries) {
@@ -117,11 +144,14 @@ async function main() {
   const stale = staleSnapshots(metas);
   const staleSources = sourceStaleness(metas["activity-index.json"]);
   const warns = [];
+  let massDrop = null;
 
   if (baseline) {
     const prevIndex = await loadJSON(resolve(baseline, "activity-index.json"));
     const nextIndex = metas["activity-index.json"];
-    for (const iata of droppedAirports(prevIndex, nextIndex)) warns.push(`${iata}: dropped from the catalogue`);
+    const dropped = droppedAirports(prevIndex, nextIndex);
+    for (const iata of dropped) warns.push(`${iata}: dropped from the catalogue`);
+    massDrop = massDropAlert(dropped, prevIndex);
     let prevFiles = [];
     try { prevFiles = (await readdir(resolve(baseline, "series"))).filter((f) => f.endsWith(".json")); } catch {}
     for (const f of prevFiles) {
@@ -136,12 +166,16 @@ async function main() {
     console.log(`ANOMALIES (${warns.length}) — data still ships, but a human should look:`);
     for (const w of warns) console.log("  ~ " + w);
   }
+  if (massDrop) {
+    console.log("CATALOGUE LOSS — gateways vanished tonight, not just stale:");
+    console.log(`  ! ${massDrop}`);
+  }
   if (stale.length || staleSources.length) {
     console.log(`STALE SNAPSHOTS (older than ${MAX_AGE_DAYS} days) — a fetcher is failing silently:`);
     for (const s of stale) console.log(`  ! ${s.file}: ${s.days === Infinity ? "missing/unreadable" : s.days + " days old"}`);
     for (const s of staleSources) console.log(`  ! source "${s.source}": last live refresh ${s.days === Infinity ? "unknown" : s.days + " days ago"}`);
-    process.exit(1);
   }
+  if (massDrop || stale.length || staleSources.length) process.exit(1);
   if (!warns.length) console.log("check-snapshots: all snapshots fresh, no anomalies.");
 }
 

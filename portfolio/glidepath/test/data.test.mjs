@@ -505,6 +505,28 @@ test("share links: a scenario round-trips, and a hostile payload is stripped to 
   assert.equal(win.GP_decodeShare(win.GP_encodeShare("../../etc", {})), null, "junk iata shapes are rejected");
 });
 
+test("share links: out-of-range levers are clamped, not just type-checked", () => {
+  const win = loadDataModule();
+  // horizon sizes the projection loop (horizon x 12 monthly records) — an
+  // unbounded value out of a link would hang the recipient's tab
+  const huge = win.GP_decodeShare(win.GP_encodeShare("AMS", { horizon: 1e9, gdp: 1e6, elasticity: -50 }));
+  assert.equal(huge.scenario.horizon, 50, "horizon clamps to the UI's widest span");
+  assert.equal(huge.scenario.gdp, 20);
+  assert.equal(huge.scenario.elasticity, 0);
+
+  const neg = win.GP_decodeShare(win.GP_encodeShare("AMS", { horizon: -3, bellyShare: 400, paxCap: -1 }));
+  assert.equal(neg.scenario.horizon, 1);
+  assert.equal(neg.scenario.bellyShare, 100);
+  assert.equal(neg.scenario.paxCap, 0);
+
+  // a fractional horizon would produce a partial final year
+  assert.equal(win.GP_decodeShare(win.GP_encodeShare("AMS", { horizon: 12.7 })).scenario.horizon, 13);
+
+  // in-range values still pass through untouched
+  const ok = win.GP_decodeShare(win.GP_encodeShare("AMS", { horizon: 15, gdp: 2.5, bellyShare: 50 }));
+  assert.deepEqual([ok.scenario.horizon, ok.scenario.gdp, ok.scenario.bellyShare], [15, 2.5, 50]);
+});
+
 test("GP_dataAgeDays: parses ISO timestamps into an age, null on junk", () => {
   const win = loadDataModule();
   const twoDaysAgo = new Date(Date.now() - 2 * 86400000).toISOString();

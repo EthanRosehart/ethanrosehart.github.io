@@ -65,8 +65,11 @@ same catalogue and forecasting machinery.
 - **Long-term (strategic):** an elasticity model —
   `g = GDPpc·ε + pop + 0.5·tourism + lcc − 0.18·fuel` — compounding the real
   observed base year on its own seasonal shape. Movements track passengers
-  less an up-gauging drag; cargo rides a damped share of the same demand
-  trend plus its own growth shift. The GDP/capita lever's default is that
+  less an up-gauging drag (`gMovements = g − gauge`); cargo rides a damped
+  share of the same demand trend plus a small structural freight tailwind
+  and its own growth shift (`gCargo = 0.6·g + 0.5%/yr + cargoShift`, the
+  0.5% standing in for the secular e-commerce/air-freight trend that
+  outpaces passenger demand). The GDP/capita lever's default is that
   same real IMF forecast when published, falling back to the World Bank
   trailing mean otherwise (`gdpcapProj`/`gdpcap` in `data.jsx`'s `MACRO`
   table). See `longTermForecast()` in [`data.jsx`](data.jsx).
@@ -104,13 +107,16 @@ same catalogue and forecasting machinery.
 - Both models only render for a metric when the gateway actually publishes
   it — there's no interpolation or backfill for a series that doesn't exist.
 - **Demand seasonality** (the "share of an average month" chart on Overview)
-  normally reads Prophet's fitted yearly component. For a gateway with no
-  Prophet forecast — every custom/uploaded one, or a real gateway Prophet
-  hasn't fit yet — `GP_observedSeasonality()` in `data.jsx` computes the same
-  1.0-centered index directly from the observed months (each calendar
-  month's average share of an average month, across every complete calendar
-  year present), so the panel always has something real to show instead of
-  hiding.
+  normally reads the `seasonal12` index that ships with the nightly forecast
+  — an empirical multiplicative monthly index computed from the last three
+  clean years of the observed series (`seasonal12()` in
+  [`scripts/build-forecast.py`](scripts/build-forecast.py)), not Prophet's
+  fitted Fourier component. For a gateway with no forecast file at all —
+  every custom/uploaded one, or a real gateway Prophet hasn't fit yet —
+  `GP_observedSeasonality()` in `data.jsx` computes the same 1.0-centered
+  index in the browser (each calendar month's average share of an average
+  month, across every complete calendar year present), so the panel always
+  has something real to show instead of hiding.
 
 ## Bring your own data
 
@@ -339,9 +345,11 @@ to `main` and trigger that same redeploy: the nightly data refresh
   labels, uploaded gateway names) are escaped against CSV formula injection
   and HTML injection (`GP_csvCell` / `GP_escapeHtml` in `data.jsx`).
 
-## Roadmap
+## Roadmap & changelog
 
-[`ROADMAP.md`](ROADMAP.md) lays out the path from this portfolio demo to a
+[`CHANGELOG.md`](CHANGELOG.md) records what actually changed and why —
+including the model corrections and pipeline incidents worth knowing about
+before trusting a number. [`ROADMAP.md`](ROADMAP.md) lays out the path from this portfolio demo to a
 production-grade, adoptable open-source tool — licensing and security
 hardening, forecast backtesting rigor, more national data feeds,
 planner-grade outputs (constrained demand, design-day profiles), and a

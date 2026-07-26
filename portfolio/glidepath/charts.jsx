@@ -156,7 +156,10 @@ function LineChart({ labels, series, band, markerIndex, height=260, yFmt, yFmtRi
           <div style={{fontFamily:"var(--mono)",fontSize:"11px",color:"var(--faint)",marginBottom:"6px"}}>{labels[hover]}</div>
           {band && band.hi[hover]!=null && (
             <div className="tip-row" style={{marginBottom:"4px"}}>
-              <span className="tip-k">90% band</span>
+              {/* every band this chart is ever handed is the 80% interval —
+                  Prophet's INTERVAL=0.80 and the ETS z=1.2816 approximation
+                  — and the legends beside it already say 80% */}
+              <span className="tip-k">80% band</span>
               <span className="tip-v" style={{color:"var(--dim)"}}>{GP_fmt.k(band.lo[hover])}–{GP_fmt.k(band.hi[hover])}</span>
             </div>
           )}
