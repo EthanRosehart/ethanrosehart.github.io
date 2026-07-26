@@ -48,6 +48,20 @@ export function metricsIn(series) {
 const TRANSIENT_RETRIES = 4;
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
+/* Retrying each call independently is right when a feed blips and ruinous
+   when one is properly down: fetch-activity makes ~50 StatCan calls a night,
+   and four backed-off retries each (2+4+8+16s) would add ~24 minutes of pure
+   sleeping to a run that should fail fast and keep last-good. So a host that
+   burns its whole retry budget twice running trips a breaker, and further
+   calls to that host get a single attempt until one succeeds and resets it. */
+const CIRCUIT_TRIP_AFTER = 2;
+const _breaker = new Map();   // host -> consecutive exhausted-retry failures
+
+/** Reset the per-host breakers (tests; also useful for a long-lived process). */
+export function resetCircuitBreakers() { _breaker.clear(); }
+
+function hostOf(url) { try { return new URL(String(url)).host; } catch { return String(url); } }
+
 /** Should this response be retried? 429 (rate limit) and 5xx (server-side)
  *  are transient; every other status is the server's real answer. */
 export function isTransientStatus(status) {
@@ -55,17 +69,25 @@ export function isTransientStatus(status) {
 }
 
 export async function fetchWithRetry(url, label, init = {}, retries = TRANSIENT_RETRIES) {
+  const host = hostOf(url);
+  const failures = _breaker.get(host) || 0;
+  const budget = failures >= CIRCUIT_TRIP_AFTER ? 0 : retries;   // breaker open -> one shot
   for (let attempt = 0; ; attempt++) {
     let res = null, netErr = null;
     try { res = await fetch(url, init); }
     catch (err) { netErr = err; }
-    if (res && !isTransientStatus(res.status)) return res;   // the server's real answer
-    if (attempt >= retries) {
-      if (res) return res;                                    // caller reports the status
-      throw new Error(`${label}: ${netErr ? netErr.message : "network error"} after ${retries + 1} attempts`);
+    if (res && !isTransientStatus(res.status)) {                // the server's real answer
+      if (failures) _breaker.delete(host);                      // host is back
+      return res;
+    }
+    if (attempt >= budget) {
+      _breaker.set(host, failures + 1);
+      if (failures + 1 === CIRCUIT_TRIP_AFTER) console.warn(`  ${label}: ${host} has failed ${CIRCUIT_TRIP_AFTER} times — no more retries this run until it answers`);
+      if (res) return res;                                      // caller reports the status
+      throw new Error(`${label}: ${netErr ? netErr.message : "network error"}${budget ? ` after ${budget + 1} attempts` : ""}`);
     }
     const wait = 2000 * 2 ** attempt;
-    console.warn(`  ${label}: ${res ? `HTTP ${res.status}` : `network error (${netErr && netErr.message})`} — retrying in ${wait / 1000}s (${attempt + 1}/${retries})`);
+    console.warn(`  ${label}: ${res ? `HTTP ${res.status}` : `network error (${netErr && netErr.message})`} — retrying in ${wait / 1000}s (${attempt + 1}/${budget})`);
     await sleep(wait);
   }
 }
@@ -104,6 +126,18 @@ export function chooseSeries(fresh, prev, { minFresh = 12, shrinkTolerance = 0.8
   }
   if (freshN >= minFresh) return { series: fresh, kind: "fresh", reason: null };
   return { series: null, kind: "none", reason: freshN ? `only ${freshN}mo and nothing on disk` : "no data" };
+}
+
+/** How many months behind `now` the newest month in a {"YYYY-MM": n} series
+ *  is. Infinity for an empty or unparsable series. Used to decide when an
+ *  airport we're carrying on committed history has been frozen long enough
+ *  that its feed is genuinely gone rather than briefly down. */
+export function seriesAgeMonths(monthly, now = new Date()) {
+  const keys = Object.keys(monthly || {});
+  if (!keys.length) return Infinity;
+  const m = /^(\d{4})-(\d{2})$/.exec(keys.sort()[keys.length - 1]);
+  if (!m) return Infinity;
+  return (now.getUTCFullYear() - +m[1]) * 12 + (now.getUTCMonth() + 1 - +m[2]);
 }
 
 /** Delete any "<iata><suffix>" file in dir whose <iata> isn't in

@@ -15,7 +15,8 @@ import assert from "node:assert/strict";
 import { esDecode, normMonth } from "../scripts/fetch-activity.mjs";
 import { perCapitaRates } from "../scripts/fetch-imf.mjs";
 import { mapCols, decodeRows, orderCandidates, US } from "../scripts/fetch-bts.mjs";
-import { lastFullYearTotal, metricsIn, chooseSeries, isTransientStatus } from "../scripts/_util.mjs";
+import { lastFullYearTotal, metricsIn, chooseSeries, isTransientStatus, seriesAgeMonths,
+  fetchWithRetry, resetCircuitBreakers } from "../scripts/_util.mjs";
 import { checkSeriesDoc, checkActivityIndex, checkForecastDoc } from "../scripts/validate-data.mjs";
 import { staleSnapshots, sourceStaleness, droppedAirports, seriesAnomalies, ageDays, massDropAlert } from "../scripts/check-snapshots.mjs";
 
@@ -294,6 +295,58 @@ test("chooseSeries: a thin fresh reply never overwrites a long committed history
   assert.equal(chooseSeries(null, null).kind, "none");
   assert.equal(chooseSeries(months(6), null).kind, "none", "below minFresh with no history is not shippable");
   assert.equal(chooseSeries(months(24), null).kind, "fresh", "a first-ever series just needs minFresh");
+});
+
+test("fetchWithRetry: a dead host trips a breaker instead of re-sleeping on every call", async () => {
+  // fetch-activity makes ~50 StatCan calls a night. Retrying each one through
+  // a full backoff ladder would add ~24 minutes to a run that should fail
+  // fast and keep last-good, so the breaker bounds the damage.
+  const realFetch = globalThis.fetch;
+  resetCircuitBreakers();
+  let attempts = 0;
+  globalThis.fetch = async () => { attempts++; throw new TypeError("fetch failed"); };
+  try {
+    for (let i = 0; i < 2; i++) {
+      await assert.rejects(() => fetchWithRetry("https://dead.example/a", "dead", {}, 0));
+    }
+    assert.equal(attempts, 2, "two exhausted calls trip the breaker");
+
+    // a call now ASKING for 5 retries must still make exactly one attempt —
+    // un-broken that would sleep 2+4+8+16+32 = 62s
+    const t0 = Date.now();
+    await assert.rejects(() => fetchWithRetry("https://dead.example/b", "dead", {}, 5));
+    assert.equal(attempts, 3, "breaker open -> single attempt");
+    assert.ok(Date.now() - t0 < 1000, "and no backoff sleeping");
+
+    // the breaker is per-host: an unrelated feed still gets its retries
+    await assert.rejects(() => fetchWithRetry("https://other.example/c", "other", {}, 0));
+    assert.equal(attempts, 4);
+
+    // and it reopens the moment the host answers again
+    globalThis.fetch = async () => { attempts++; return new Response("{}", { status: 200 }); };
+    assert.equal((await fetchWithRetry("https://dead.example/a", "dead", {}, 0)).status, 200);
+    globalThis.fetch = async () => { attempts++; throw new TypeError("fetch failed"); };
+    const t1 = Date.now();
+    await assert.rejects(() => fetchWithRetry("https://dead.example/a", "dead", {}, 1));
+    assert.ok(Date.now() - t1 >= 1500, "breaker reset -> retries are back");
+  } finally {
+    globalThis.fetch = realFetch;
+    resetCircuitBreakers();
+  }
+});
+
+test("seriesAgeMonths: how far behind the newest month is — the sticky release valve", () => {
+  const now = new Date(Date.UTC(2026, 6, 26));   // 2026-07
+  assert.equal(seriesAgeMonths({ "2026-07": 1 }, now), 0);
+  assert.equal(seriesAgeMonths({ "2026-03": 1, "2026-05": 1 }, now), 2, "reads the NEWEST key, not the last inserted");
+  assert.equal(seriesAgeMonths({ "2025-07": 1 }, now), 12, "crosses a year boundary");
+  assert.equal(seriesAgeMonths({ "2024-12": 1 }, now), 19, "past the 18-month sticky limit -> retire");
+  // a feed briefly down is nowhere near the limit: Eurostat publishes on a
+  // ~3-month lag, so a healthy airport already reads several months old
+  assert.ok(seriesAgeMonths({ "2026-04": 1 }, now) < 18);
+  assert.equal(seriesAgeMonths({}, now), Infinity);
+  assert.equal(seriesAgeMonths(null, now), Infinity);
+  assert.equal(seriesAgeMonths({ nonsense: 1 }, now), Infinity);
 });
 
 test("isTransientStatus: only 429 + 5xx get retried; 413 is a signal, not a failure", () => {

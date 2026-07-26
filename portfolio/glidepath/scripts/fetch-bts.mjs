@@ -37,8 +37,12 @@ const UA = { "User-Agent": "glidepath-data-bot" };
 const LB_TO_T = 0.000453592;   // T-100 freight is reported in pounds
 const MIN_MONTHS = 24;         // same floor as the Eurostat/StatCan catalogue
 
-/* the major US gateways to carry (top ~35 by enplanements — bounded so
-   the nightly Prophet build stays affordable, same idea as EU_CAP) */
+/* the major US gateways to carry (top ~35 by enplanements). Unlike the
+   European catalogue — which is uncapped, every airport Eurostat reports —
+   this is an explicit list, because the T-100 route is a per-year bulk
+   download rather than a per-airport query: widening it is a product
+   decision about which US airports to show, not a limit worth lifting
+   silently. */
 export const US = [
   "ATL","DFW","DEN","ORD","LAX","CLT","LAS","PHX","MCO","SEA",
   "MIA","IAH","JFK","EWR","FLL","MSP","SFO","DTW","BOS","PHL",

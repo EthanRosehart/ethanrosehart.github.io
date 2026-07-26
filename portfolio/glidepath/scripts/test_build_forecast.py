@@ -2,12 +2,16 @@
 # =============================================================================
 # test_build_forecast.py — tests for build-forecast.py's pure-logic helpers
 #
-# Covers the functions that don't require an actual Prophet fit (series_frame,
-# seasonal12, covid_events, monthly_holidays, gdp_monthly_series, prune_stale,
-# load_airport_series) — the model-fitting path (fit_predict/backtest_mape/
-# forecast_metric) is
-# exercised by the nightly CI run against real data instead, since fitting
-# Prophet per test would make this suite slow and non-deterministic-ish.
+# Mostly covers the functions that don't require an actual Prophet fit
+# (series_frame, seasonal12, covid_events, monthly_holidays,
+# gdp_monthly_series, prune_stale, load_airport_series), since fitting Prophet
+# per test would make this suite slow and non-deterministic-ish.
+#
+# Three tests DO fit for real, on small synthetic series: one through
+# rolling_backtest and two through forecast_metric — the entry point the
+# nightly actually calls. Those earn their runtime because the refresh
+# workflow runs build-forecast.py continue-on-error, so a break there is
+# silent: forecasts just quietly stop updating.
 #
 # Run:  pytest scripts/test_build_forecast.py
 #       (needs: pip install prophet holidays pandas pytest)
@@ -229,3 +233,72 @@ def test_rolling_backtest_real_fit_on_a_clean_seasonal_series(bf):
     row = bt["backtest"][0]
     assert set(row) == {"date", "v", "lo", "hi", "actual"}
     assert row["lo"] <= row["v"] <= row["hi"]
+
+
+def test_forecast_metric_produces_the_payload_the_browser_reads(bf):
+    # forecast_metric() is what the nightly actually calls per airport per
+    # metric, and the refresh workflow runs it continue-on-error — so a
+    # signature or shape break there is SILENT (forecasts just quietly go
+    # stale). One real end-to-end call, with holidays on, so it fails here
+    # instead. Also the only coverage of top_holidays().
+    monthly = {}
+    for i in range(72):
+        y, m = 2019 + i // 12, i % 12 + 1
+        seasonal = 1.0 + 0.3 * (1 if m in (6, 7, 8) else -0.2 if m in (1, 2) else 0)
+        monthly[f"{y}-{m:02d}"] = round(100000 * (1.004 ** i) * seasonal)
+
+    res = bf.forecast_metric("ES", monthly, 24)
+    assert res is not None
+
+    # the fields data.jsx's forecastFor() destructures
+    for k in ("mape", "mape_folds", "naive_mape", "skill", "coverage", "backtest",
+              "months_history", "latest", "seasonal12", "holidays", "holidays_total",
+              "gdpRegressor", "gdpForecast", "forecast"):
+        assert k in res, f"missing {k} — data.jsx reads it"
+
+    assert res["months_history"] == 72
+    assert res["latest"] == "2024-12"
+    assert len(res["seasonal12"]) == 12
+    assert len(res["forecast"]) == 24
+    # validate-data.mjs gates on exactly these invariants before committing
+    for r in res["forecast"]:
+        assert set(r) == {"date", "y", "m", "v", "lo", "hi"}
+        assert r["lo"] <= r["v"] <= r["hi"]
+        assert r["lo"] >= 0 and r["v"] >= 0
+    assert res["forecast"][0]["date"] == "2025-01"
+    assert res["forecast"][0]["m"] == 0, "month is 0-indexed for MONTHS[] on the client"
+
+    # holidays: Spain has them, top_holidays ranks a subset of the names used
+    assert res["holidays_total"] > 0
+    assert len(res["holidays"]) <= 5
+    assert set(res["holidays"]) <= set(bf.monthly_holidays("ES", range(2019, 2028))[1])
+    # no GDP series was passed, so both disclosure flags must read false
+    assert res["gdpRegressor"] is False and res["gdpForecast"] is False
+
+
+def test_forecast_metric_skips_a_series_below_the_history_floor(bf):
+    short = {f"2024-{m:02d}": 100 for m in range(1, 13)}   # 12 months < MIN_MONTHS
+    assert bf.forecast_metric("ES", short, 24) is None
+
+
+def test_forecast_metric_survives_gaps_inside_the_backtest_window(bf):
+    # Feeds do skip months (LIN carries three such holes today). The backtest
+    # holds out a count of OBSERVED rows while Prophet predicts CONTIGUOUS
+    # months, so a gap in the held-out span used to push the tail of the
+    # window past what was forecast and raise KeyError — which main() swallows
+    # per metric, leaving that airport with no short-term forecast at all.
+    monthly = {}
+    for i in range(72):
+        y, m = 2019 + i // 12, i % 12 + 1
+        if (y, m) in {(2024, 5), (2024, 9), (2024, 11)}:   # holes inside fold 1
+            continue
+        seasonal = 1.0 + 0.3 * (1 if m in (6, 7, 8) else -0.2 if m in (1, 2) else 0)
+        monthly[f"{y}-{m:02d}"] = round(100000 * (1.004 ** i) * seasonal)
+
+    res = bf.forecast_metric("ES", monthly, 24)
+    assert res is not None, "a gappy series must still produce a forecast"
+    assert res["mape"] is not None, "and must still be backtested, not just fit"
+    assert len(res["forecast"]) == 24
+    # every held-out row reported must be one the model actually predicted
+    for r in res["backtest"]:
+        assert r["lo"] <= r["v"] <= r["hi"]

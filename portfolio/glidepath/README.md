@@ -309,9 +309,11 @@ elasticity model, event shocks, or segment reconciliation gets caught
 here rather than by a visitor. The Python suite covers `build-forecast.py`'s
 pure-logic helpers (series framing, seasonal index, the COVID dummy-event
 window, holiday-date snapping, the GDP/capita regressor's interpolation and
-extrapolation math); the actual Prophet fit is comparatively low-risk (it's
-a well-tested library) and is exercised for real against live data by the
-nightly run instead of being re-fit in CI.
+extrapolation math), plus three real (small) Prophet fits through
+`rolling_backtest()` and `forecast_metric()` — the nightly runs
+`build-forecast.py` continue-on-error, so a break in that path is silent
+(forecasts just stop updating), and it's worth the ~2 minutes to catch it in
+CI instead.
 
 ## Deploying
 

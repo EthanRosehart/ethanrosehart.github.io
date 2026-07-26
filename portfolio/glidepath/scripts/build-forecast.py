@@ -265,11 +265,26 @@ def rolling_backtest(df, hol_df, folds=BACKTEST_FOLDS, holdout=BACKTEST_H,
         if cut < 24:
             break
         train, test = df.iloc[:cut], df.iloc[cut:cut + holdout]
+        # `holdout` is a count of OBSERVED rows, but Prophet forecasts
+        # CONTIGUOUS months — so on a series with gaps the held-out rows span
+        # more calendar months than that, and the tail of the window falls
+        # past what was predicted. Size the horizon by the calendar distance
+        # instead, or those months raise a KeyError below and take the whole
+        # metric's forecast down with them (main() catches per metric, so the
+        # airport silently ships with no short-term view at all).
+        last_train, last_test = train["ds"].iloc[-1], test["ds"].iloc[-1]
+        span = (last_test.year - last_train.year) * 12 + (last_test.month - last_train.month)
         try:
-            _, fc = fit_predict(train, hol_df, holdout, gdp_levels, gdp_growth, gdp_future_rates)
+            _, fc = fit_predict(train, hol_df, max(holdout, span), gdp_levels, gdp_growth, gdp_future_rates)
         except Exception:
             continue
-        fx = fc.set_index("ds").loc[test["ds"]]
+        # reindex, not .loc: belt-and-braces so an unpredicted month drops out
+        # of the fold rather than throwing
+        fx = fc.set_index("ds").reindex(test["ds"])
+        scoreable = fx["yhat"].notna().to_numpy()
+        if not scoreable.any():
+            continue
+        fx, test = fx[scoreable], test[scoreable]
         m = mape_of(fx["yhat"], test["y"])
         if m is None:
             continue

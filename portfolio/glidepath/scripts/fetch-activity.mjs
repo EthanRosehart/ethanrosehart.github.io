@@ -33,8 +33,9 @@
  * Best-effort + per-metric: a failure keeps the last good series (read
  * back from the previous data/series/<IATA>.json) and never injects
  * synthetic data. Airports are kept only when they carry enough real
- * monthly passenger history; the busiest are capped to keep the nightly
- * Prophet build bounded.
+ * monthly passenger history — every airport the feeds cover, with no cap
+ * and no volume ranking, and once in the catalogue an airport stays until
+ * its history goes genuinely stale (see STICKY_MAX_AGE_MONTHS).
  *
  * Run locally:  node scripts/fetch-activity.mjs
  * ============================================================ */
@@ -42,7 +43,7 @@
 import { writeFile, readFile, mkdir } from "node:fs/promises";
 import { dirname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
-import { lastFullYearTotal, metricsIn, pruneDir, fetchWithRetry, chooseSeries } from "./_util.mjs";
+import { lastFullYearTotal, metricsIn, pruneDir, fetchWithRetry, chooseSeries, seriesAgeMonths } from "./_util.mjs";
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const DATA = resolve(__dirname, "..", "data");
@@ -52,7 +53,12 @@ const REF = resolve(DATA, "airports.json");
 const UA = { "User-Agent": "glidepath-data-bot" };
 
 const MIN_MONTHS = 24;   // need a couple of clean seasons to be worth showing
-const EU_CAP = 70;       // keep the busiest N European airports (bounds CI)
+/* Once an airport is in the catalogue we keep carrying it on its committed
+   history even on nights the feed doesn't mention it — see the sticky block
+   in main(). This is the release valve: a feed that has published nothing
+   new for this long is genuinely discontinued, not briefly down, and the
+   airport is allowed to drop rather than sit on the site frozen forever. */
+const STICKY_MAX_AGE_MONTHS = 18;
 
 /* Eurostat geo code → { iso2, iso3, name, region }. Eurostat uses EL for
    Greece and UK for the United Kingdom; everything else matches ISO 3166-1
@@ -78,11 +84,10 @@ export function normMonth(s) { return String(s).replace("M", "-").slice(0, 7); }
 
 /* ============================================================
    EUROSTAT — JSON-stat. A single all-airports pull is rejected
-   with HTTP 413 (ASYNCHRONOUS_RESPONSE), so we (1) enumerate the
-   reporting airports + a recent-volume proxy with a small
-   "lastTimePeriod" call, then (2) pull full series for the busiest
-   airports in batches of rep_airp codes, splitting any batch that
-   still trips the 413 size guard.
+   with HTTP 413 (ASYNCHRONOUS_RESPONSE), so we (1) enumerate which
+   airports report at all with a small "lastTimePeriod" call, then
+   (2) pull full series for every one of them in batches of rep_airp
+   codes, splitting any batch that still trips the 413 size guard.
    ============================================================ */
 const ES_BASE = "https://ec.europa.eu/eurostat/api/dissemination/statistics/1.0/data";
 
@@ -273,7 +278,6 @@ async function prevPaxSeg(iata) {
   const seg = doc?.paxSeg;
   return (seg && Object.keys(seg).length >= 2) ? seg : null;
 }
-const recent12 = (m) => Object.keys(m).sort().slice(-12).reduce((t, k) => t + (m[k] || 0), 0);
 
 async function main() {
   const prev = await loadJSON(OUT);
@@ -285,23 +289,56 @@ async function main() {
 
   const airports = {};
   let live = 0;
+  const liveBy = { eurostat: 0, statcan: 0 };   // fresh series per source — the outage signal
 
-  /* ---------- Europe: enumerate, rank, then batch-fetch series ---------- */
+  /* ---------- Europe: enumerate + carry forward, then batch-fetch ---------- */
   let enumerated = {};
   try { enumerated = await esEnumerate(); console.log(`  eurostat: enumerated ${Object.keys(enumerated).length} reporting airports`); }
   catch (e) { console.warn(`  eurostat enumerate FAILED: ${e.message}`); }
 
-  const euCandidates = [];
+  /* Every airport Eurostat reports tonight that we can map to an IATA code.
+     There is deliberately no cap and no volume ranking here any more. The
+     old code kept only the "busiest 70" by summing whatever months the
+     enumerate call happened to return — which is not a size measure at all
+     when the feed is degraded (2026-07-26: Eurostat returned 3-5 months for
+     some countries and none for others, so a mid-size airport with 5 months
+     outranked Paris CDG with zero, and CDG fell out of the catalogue). The
+     cap only ever existed to bound the nightly Prophet build; that budget is
+     cheap and not worth evicting real gateways over. */
+  const keepBy = new Map();   // iata -> { iata, icao, geo }
   for (const [icao, rec] of Object.entries(enumerated)) {
     const iata = icaoToIata[icao];
-    if (!iata || !GEO[rec.geo]) continue;
-    const vol = recent12(rec.monthly);
-    if (vol <= 0) continue;
-    euCandidates.push({ iata, icao, geo: rec.geo, vol });
+    if (!iata || !GEO[rec.geo] || !Object.keys(rec.monthly).length) continue;
+    keepBy.set(iata, { iata, icao, geo: rec.geo });
   }
-  euCandidates.sort((a, b) => b.vol - a.vol);
-  const keep = euCandidates.slice(0, EU_CAP);
-  console.log(`  eurostat: ${euCandidates.length} mappable airports, keeping busiest ${keep.length}`);
+  const reportingN = keepBy.size;
+
+  /* STICKY MEMBERSHIP. Catalogue membership used to be re-derived from this
+     one live call every night while the data itself lived on disk — so a
+     feed that answered thinly, or not at all, silently evicted airports
+     whose committed history was perfectly intact, and pruneDir() then
+     deleted their series files. Anything we already carry with a usable,
+     not-yet-ancient history stays a candidate whether or not tonight's
+     enumerate mentions it; the per-metric chooseSeries() fallback below
+     keeps it on last-good until the feed comes back. */
+  let sticky = 0, retired = 0;
+  for (const [iata, a] of Object.entries(prev?.airports || {})) {
+    if (a?.source !== "eurostat" || keepBy.has(iata)) continue;
+    const [geo, icao] = String(a.rep_airp || "").split("_");
+    if (!geo || !icao || !GEO[geo]) continue;
+    const kept = await prevSeries(iata, "pax");
+    if (!kept || Object.keys(kept).length < MIN_MONTHS) continue;
+    const age = seriesAgeMonths(kept);
+    if (age > STICKY_MAX_AGE_MONTHS) {
+      console.warn(`  ${iata} eurostat: no new data for ${age} months (limit ${STICKY_MAX_AGE_MONTHS}) — retiring from the catalogue`);
+      retired++;
+      continue;
+    }
+    keepBy.set(iata, { iata, icao, geo });
+    sticky++;
+  }
+  const keep = [...keepBy.values()];
+  console.log(`  eurostat: ${reportingN} reporting tonight + ${sticky} carried on committed history${retired ? ` (${retired} retired as stale)` : ""} = ${keep.length} airports, no cap`);
 
   const repCodes = keep.map((k) => `${k.geo}_${k.icao}`);
   const euData = {};   // metric -> { icao -> { geo, monthly } }
@@ -334,7 +371,7 @@ async function main() {
       // a thin reply must never overwrite a long committed history — see
       // chooseSeries() in _util.mjs for the night that made this necessary
       const pick = chooseSeries(euData[metric]?.[icao]?.monthly, await prevSeries(iata, metric));
-      if (pick.kind === "fresh") { series[metric] = pick.series; live++; }
+      if (pick.kind === "fresh") { series[metric] = pick.series; live++; liveBy.eurostat++; }
       else if (pick.kind === "kept") {
         series[metric] = pick.series;
         if (pick.reason) console.warn(`  ${iata}/${metric} eurostat: ${pick.reason} — kept previous`);
@@ -383,7 +420,7 @@ async function main() {
       }
       // same guard as Eurostat: a short reply keeps the committed history
       const pick = chooseSeries(got, await prevSeries(iata, metric));
-      if (pick.kind === "fresh") { series[metric] = pick.series; live++; }
+      if (pick.kind === "fresh") { series[metric] = pick.series; live++; liveBy.statcan++; }
       else if (pick.kind === "kept") {
         series[metric] = pick.series;
         // when the cubes never produced anything, lastErr is the real story;
@@ -432,20 +469,28 @@ async function main() {
     if (v?.source === "bts") btsCarry[k] = v;
   }
 
-  /* TOTAL-outage guard: if a whole source produced nothing tonight but the
-     previous index carried airports from it, writing the index without them
-     would also prune their series files — one bad night becoming data loss.
-     Carry the previous entries forward untouched (their series are still on
-     disk) and exit non-zero so the pipeline-health step reports it. */
+  /* OUTAGE guard, keyed on FRESH data rather than on entries existing.
+     Sticky membership means a dead feed no longer empties the catalogue —
+     which is the whole point, but it also means "the index still has
+     eurostat airports" has stopped being evidence that Eurostat answered.
+     So the alert now fires when a source we carry delivered no live series
+     at all tonight, however healthy the committed snapshot looks. Without
+     this, going sticky would have quietly bought data safety at the cost of
+     never hearing about an outage again.
+
+     The carry-forward below is the last-resort net for a source that
+     produced no ENTRIES either (e.g. the whole block threw): writing the
+     index without them would let pruneDir() delete their series files. */
   let outage = false;
   const sourceCarry = {};
   for (const src of ["eurostat", "statcan"]) {
-    if (Object.values(airports).some((a) => a.source === src)) continue;
+    const carriedNow = Object.values(airports).filter((a) => a.source === src).length;
     const prevOfSrc = Object.entries(prev?.airports || {}).filter(([, v]) => v?.source === src);
-    if (!prevOfSrc.length) continue;
+    if (!carriedNow && !prevOfSrc.length) continue;    // a source we've never carried
+    if (liveBy[src] > 0) continue;                     // it delivered something real
     outage = true;
-    console.error(`  ${src}: produced NOTHING tonight — carrying ${prevOfSrc.length} previous airports forward instead of wiping them`);
-    for (const [k, v] of prevOfSrc) sourceCarry[k] = v;
+    console.error(`  ${src}: produced NO fresh series tonight — ${carriedNow || prevOfSrc.length} airports kept on committed history`);
+    if (!carriedNow) for (const [k, v] of prevOfSrc) sourceCarry[k] = v;
   }
 
   await mkdir(DATA, { recursive: true });
