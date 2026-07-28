@@ -422,6 +422,9 @@ async function main() {
     }
     const r = ref[iata] || {};
     const paxKeys = Object.keys(series.pax);
+    // once, not twice: stampFor() counts the entries whose clock it starts,
+    // so calling it inside a conditional spread AND its value double-counted
+    const euStamp = stampFor(iata, anyFresh);
     airports[iata] = {
       observed: true, source: "eurostat", rep_airp: `${geo}_${icao}`,
       country: iso2, cc: iso3, countryName: cname, region: "Europe",
@@ -433,7 +436,7 @@ async function main() {
       // stamp rides along. check-snapshots' sourceStaleness() watches these,
       // which is what turns "Eurostat is answering but with nothing usable"
       // into a time-based escalation instead of a nightly page.
-      ...(stampFor(iata, anyFresh) ? { refreshedAt: stampFor(iata, anyFresh) } : {}),
+      ...(euStamp ? { refreshedAt: euStamp } : {}),
     };
   }
   console.log(`  eurostat: wrote ${Object.keys(airports).length} airports${notEligible ? `, ${notEligible} reporting airports not eligible yet (<${MIN_MONTHS}mo, never carried)` : ""}`);
@@ -483,13 +486,14 @@ async function main() {
 
     const r = ref[iata] || {};
     const paxKeys = Object.keys(series.pax);
+    const caStamp = stampFor(iata, caFresh);
     airports[iata] = {
       observed: true, source: "statcan", rep_airp: r.icao || iata,
       country: "CA", cc: "CAN", countryName: "Canada", region: "North America",
       name: r.name || iata, city: r.city || "Canada", icao: r.icao || null, lat: r.lat ?? null, lon: r.lon ?? null,
       months: paxKeys.length, latest: paxKeys.sort().pop(), series, monthly: series.pax,
       ...(Object.keys(paxSeg).length >= 2 ? { paxSeg } : {}),
-      ...(stampFor(iata, caFresh) ? { refreshedAt: stampFor(iata, caFresh) } : {}),
+      ...(caStamp ? { refreshedAt: caStamp } : {}),
     };
     caN++;
     console.log(`  ${iata} statcan: pax ${paxKeys.length}mo atm ${Object.keys(series.atm || {}).length}mo seg ${Object.keys(paxSeg).join("/")||"none"}`);
