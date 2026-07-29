@@ -2,29 +2,28 @@
 /* ============================================================
  * probe-eurostat.mjs — diagnostic, not part of the nightly.
  *
- * Answers one question: when fetch-activity asks Eurostat for a long
- * history, why does it get back ~6 months?
+ * ROUND 1 established that Eurostat is fine and we are not:
+ *   - batch of 25, sinceTimePeriod=2015-01 -> HTTP 200, time=138 months
+ *   - enumerate lastTimePeriod=12 -> 871 airports, FR_LFPG PRESENT
+ * yet production decodes 3-6 months and only 252 airports, and never sees
+ * CDG at all. So the loss happens in our decoder, not on the wire.
  *
- * Context (2026-07): the committed catalogue carries 133-135 months per
- * airport, but every nightly pull now returns 3-6, so chooseSeries() holds
- * everything on last-good. A Eurostat data-viewer export proves the table
- * is healthy — Paris CDG has 42 unbroken months ending 2025-12, only 6
- * months behind the newest month in the dataset, i.e. squarely inside the
- * normal 4-6 month reporting lag that 292 other airports also sit in. Yet
- * CDG never even appears in our enumerate call. So the fault is in what we
- * ask for, not in what Eurostat has.
+ * The suspect: avia_paoa is a 7-dimension cube and we only pin `unit` and
+ * `tra_meas`. esDecode() indexes rep_airp and time and implicitly reads
+ * category 0 of every other dimension — so whatever `tra_cov` and
+ * `schedule` happen to sort first is the slice we read. Round 1 showed
+ * `schedule` now carries BOTH "TOTAL" and "TOT", which smells like a
+ * structure migration that moved the data out from under index 0.
  *
- * Each probe prints the shape of the response rather than the data: the
- * width of the shared `time` dimension is the tell, because in JSON-stat
- * that dimension is shared across every airport in the reply. A narrow
- * time dimension means the API truncated the window for the whole request;
- * per-airport nulls inside a wide window would mean something else.
+ * This round runs the REAL esDecode against each variant, so the number
+ * printed is exactly what fetch-activity would see.
  *
  * Run:  node scripts/probe-eurostat.mjs
  * ============================================================ */
 import { readFile } from "node:fs/promises";
 import { dirname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
+import { esDecode } from "./fetch-activity.mjs";
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const DATA = resolve(__dirname, "..", "data");
@@ -38,89 +37,78 @@ function url(dataset, q, reps = []) {
   return u;
 }
 
-/** Response shape: status, dimension widths, the time window actually
- *  returned, and whether a specific airport made it in. */
-async function probe(label, dataset, q, reps = [], lookFor = null) {
-  const u = url(dataset, q, reps);
-  const line = (s) => console.log(`  ${label.padEnd(34)} ${s}`);
-  let res;
-  try { res = await fetch(u, { headers: UA }); }
-  catch (e) { line(`NETWORK FAIL ${e.message}`); return; }
-  if (!res.ok) {
-    let body = ""; try { body = (await res.text()).slice(0, 220).replace(/\s+/g, " "); } catch {}
-    line(`HTTP ${res.status}  ${body}`);
-    return;
-  }
-  let js;
-  try { js = await res.json(); }
-  catch (e) { line(`unparsable JSON: ${e.message}`); return; }
+async function get(dataset, q, reps = []) {
+  const res = await fetch(url(dataset, q, reps), { headers: UA });
+  if (!res.ok) return { err: `HTTP ${res.status} ${(await res.text()).slice(0, 150).replace(/\s+/g, " ")}` };
+  return { js: await res.json() };
+}
 
-  const times = Object.keys(js?.dimension?.time?.category?.index || {}).sort();
-  const reps_ = Object.keys(js?.dimension?.rep_airp?.category?.index || {});
-  const nVals = js?.value ? (Array.isArray(js.value) ? js.value.filter((v) => v != null).length : Object.keys(js.value).length) : 0;
-  let extra = "";
-  if (lookFor) {
-    const hit = reps_.includes(lookFor);
-    extra = `  ${lookFor}:${hit ? "PRESENT" : "ABSENT"}`;
-  }
-  line(`HTTP 200  time=${String(times.length).padStart(3)} [${times[0] || "-"}..${times[times.length - 1] || "-"}]  airports=${String(reps_.length).padStart(4)}  values=${nVals}${extra}`);
-  // anything the API wants to tell us about truncation lives here
-  for (const k of ["warning", "note", "extension", "label"]) {
-    if (js[k] && k !== "label") console.log(`      ${k}: ${JSON.stringify(js[k]).slice(0, 300)}`);
-  }
+/* what the cube looks like, and what OUR decoder gets out of it */
+async function decodeProbe(label, dataset, q, reps, watch = []) {
+  const { js, err } = await get(dataset, q, reps);
+  if (err) { console.log(`  ${label.padEnd(46)} ${err}`); return; }
+  const shape = js.id.map((d, i) => `${d}:${js.size[i]}`).join(" ");
+  let out;
+  try { out = esDecode(js, dataset); }
+  catch (e) { console.log(`  ${label.padEnd(46)} esDecode THREW ${e.message}`); return; }
+  const icaos = Object.keys(out);
+  const months = (ic) => (out[ic] ? Object.keys(out[ic].monthly).length : 0);
+  const watched = watch.map((w) => `${w}:${months(w)}mo`).join(" ");
+  console.log(`  ${label.padEnd(46)} decoded ${String(icaos.length).padStart(4)} airports  ${watched}`);
+  console.log(`      cube  ${shape}`);
 }
 
 async function main() {
   const idx = JSON.parse(await readFile(resolve(DATA, "activity-index.json"), "utf8"));
   const euCodes = Object.values(idx.airports)
-    .filter((a) => a.source === "eurostat" && a.rep_airp)
-    .map((a) => a.rep_airp);
+    .filter((a) => a.source === "eurostat" && a.rep_airp).map((a) => a.rep_airp);
   const PAX = { unit: "PAS", tra_meas: "PAS_CRD" };
+  const SINCE = { sinceTimePeriod: "2015-01" };
 
-  console.log(`\n### 1. ENUMERATE — exactly what fetch-activity sends (no rep_airp filter)`);
-  console.log(`###    if CDG is ABSENT here, that alone explains why it left the catalogue\n`);
-  await probe("lastTimePeriod=12 (production)", "avia_paoa", { ...PAX, lastTimePeriod: "12" }, [], "FR_LFPG");
-  await probe("lastTimePeriod=24", "avia_paoa", { ...PAX, lastTimePeriod: "24" }, [], "FR_LFPG");
-  await probe("lastTimePeriod=36", "avia_paoa", { ...PAX, lastTimePeriod: "36" }, [], "FR_LFPG");
-  await probe("sinceTimePeriod=2015-01", "avia_paoa", { ...PAX, sinceTimePeriod: "2015-01" }, [], "FR_LFPG");
-
-  console.log(`\n### 2. SINGLE AIRPORT — does the time filter work at all?`);
-  console.log(`###    Frankfurt is live (latest 2026-01); we hold 133 months for it\n`);
-  await probe("EDDF sinceTimePeriod=2015-01", "avia_paoa", { ...PAX, sinceTimePeriod: "2015-01" }, ["DE_EDDF"]);
-  await probe("EDDF lastTimePeriod=120", "avia_paoa", { ...PAX, lastTimePeriod: "120" }, ["DE_EDDF"]);
-  await probe("EDDF no time param", "avia_paoa", PAX, ["DE_EDDF"]);
-  await probe("EDDF since+until", "avia_paoa", { ...PAX, sinceTimePeriod: "2015-01", untilTimePeriod: "2026-12" }, ["DE_EDDF"]);
-
-  console.log(`\n### 3. CDG DIRECTLY — the airport we lost. 42 months per the data viewer\n`);
-  await probe("LFPG sinceTimePeriod=2015-01", "avia_paoa", { ...PAX, sinceTimePeriod: "2015-01" }, ["FR_LFPG"]);
-  await probe("LFPG lastTimePeriod=120", "avia_paoa", { ...PAX, lastTimePeriod: "120" }, ["FR_LFPG"]);
-
-  console.log(`\n### 4. BATCH SIZE — does asking for more airports shrink the window?`);
-  console.log(`###    production uses chunks of 25\n`);
-  for (const n of [1, 5, 10, 25]) {
-    await probe(`${String(n).padStart(2)} airports since=2015-01`, "avia_paoa",
-      { ...PAX, sinceTimePeriod: "2015-01" }, euCodes.slice(0, n));
+  console.log(`\n### A. WHICH DIMENSIONS ARE WE LEAVING UNPINNED, AND IN WHAT ORDER?`);
+  console.log(`###    category 0 of each unpinned dim is what esDecode silently reads\n`);
+  const { js } = await get("avia_paoa", { ...PAX, ...SINCE }, ["DE_EDDF"]);
+  if (js) {
+    js.id.forEach((d, i) => {
+      const cat = js.dimension?.[d]?.category?.index || {};
+      const ordered = Object.entries(cat).sort((a, b) => a[1] - b[1]).map(([k]) => k);
+      if (d === "time") { console.log(`  ${d.padEnd(10)} size=${js.size[i]}  (${ordered[0]}..${ordered[ordered.length - 1]})`); return; }
+      console.log(`  ${d.padEnd(10)} size=${js.size[i]}  [0]=${ordered[0]}   all: ${ordered.slice(0, 8).join(",")}`);
+    });
   }
 
-  console.log(`\n### 5. OTHER METRICS — same question for movements and cargo\n`);
-  await probe("EDDF atm since=2015-01", "avia_paoa", { unit: "FLIGHT", tra_meas: "CAF_PAS", sinceTimePeriod: "2015-01" }, ["DE_EDDF"]);
-  await probe("EDDF cargo since=2015-01", "avia_gooa", { unit: "T", tra_meas: "FRM_LD_NLD", sinceTimePeriod: "2015-01" }, ["DE_EDDF"]);
+  console.log(`\n### B. SINGLE AIRPORT, PINNING THE UNPINNED DIMS — real esDecode output`);
+  console.log(`###    we hold 133 months for EDDF; Eurostat's window is 138\n`);
+  await decodeProbe("production (nothing else pinned)", "avia_paoa", { ...PAX, ...SINCE }, ["DE_EDDF"], ["EDDF"]);
+  await decodeProbe("+ tra_cov=TOTAL", "avia_paoa", { ...PAX, ...SINCE, tra_cov: "TOTAL" }, ["DE_EDDF"], ["EDDF"]);
+  await decodeProbe("+ schedule=TOTAL", "avia_paoa", { ...PAX, ...SINCE, schedule: "TOTAL" }, ["DE_EDDF"], ["EDDF"]);
+  await decodeProbe("+ schedule=TOT", "avia_paoa", { ...PAX, ...SINCE, schedule: "TOT" }, ["DE_EDDF"], ["EDDF"]);
+  await decodeProbe("+ tra_cov=TOTAL & schedule=TOTAL", "avia_paoa", { ...PAX, ...SINCE, tra_cov: "TOTAL", schedule: "TOTAL" }, ["DE_EDDF"], ["EDDF"]);
+  await decodeProbe("+ tra_cov=TOTAL & schedule=TOT", "avia_paoa", { ...PAX, ...SINCE, tra_cov: "TOTAL", schedule: "TOT" }, ["DE_EDDF"], ["EDDF"]);
 
-  console.log(`\n### 6. DIMENSION CODES — is PAS_CRD still the right tra_meas?`);
-  console.log(`###    the data-viewer export used "Passengers on board"\n`);
-  try {
-    const u = url("avia_paoa", { lastTimePeriod: "1" }, ["DE_EDDF"]);
-    const js = await (await fetch(u, { headers: UA })).json();
-    for (const dim of ["unit", "tra_meas", "tra_cov", "schedule"]) {
-      const cat = js?.dimension?.[dim]?.category;
-      if (!cat) continue;
-      const codes = Object.keys(cat.index || {});
-      console.log(`  ${dim}: ${codes.map((c) => `${c}=${(cat.label || {})[c] || "?"}`).join(" | ").slice(0, 300)}`);
-    }
-  } catch (e) { console.log(`  dimension probe failed: ${e.message}`); }
+  console.log(`\n### C. SAME, FOR THE AIRPORT WE LOST\n`);
+  for (const [lbl, extra] of [["production", {}], ["tra_cov+schedule=TOTAL", { tra_cov: "TOTAL", schedule: "TOTAL" }], ["tra_cov=TOTAL schedule=TOT", { tra_cov: "TOTAL", schedule: "TOT" }]]) {
+    await decodeProbe(`LFPG ${lbl}`, "avia_paoa", { ...PAX, ...SINCE, ...extra }, ["FR_LFPG"], ["LFPG"]);
+  }
 
-  console.log(`\n### done. Read the time= column: 100+ means the filter works,`);
-  console.log(`### single digits mean the API truncated the window.\n`);
+  console.log(`\n### D. ENUMERATE — how many airports survive esDecode with the dims pinned?`);
+  console.log(`###    production decodes 252 of the 871 the API returns\n`);
+  await decodeProbe("enumerate lastTimePeriod=12 (production)", "avia_paoa", { ...PAX, lastTimePeriod: "12" }, [], ["LFPG", "EDDF"]);
+  await decodeProbe("enumerate + tra_cov+schedule=TOTAL", "avia_paoa", { ...PAX, lastTimePeriod: "12", tra_cov: "TOTAL", schedule: "TOTAL" }, [], ["LFPG", "EDDF"]);
+  await decodeProbe("enumerate + tra_cov=TOTAL schedule=TOT", "avia_paoa", { ...PAX, lastTimePeriod: "12", tra_cov: "TOTAL", schedule: "TOT" }, [], ["LFPG", "EDDF"]);
+
+  console.log(`\n### E. FULL PRODUCTION BATCH with the dims pinned (25 airports)\n`);
+  await decodeProbe("25 airports, production", "avia_paoa", { ...PAX, ...SINCE }, euCodes.slice(0, 25), ["EHAM", "LEMD"]);
+  await decodeProbe("25 airports, pinned TOTAL/TOTAL", "avia_paoa", { ...PAX, ...SINCE, tra_cov: "TOTAL", schedule: "TOTAL" }, euCodes.slice(0, 25), ["EHAM", "LEMD"]);
+  await decodeProbe("25 airports, pinned TOTAL/TOT", "avia_paoa", { ...PAX, ...SINCE, tra_cov: "TOTAL", schedule: "TOT" }, euCodes.slice(0, 25), ["EHAM", "LEMD"]);
+
+  console.log(`\n### F. THE OTHER TWO METRICS, pinned the same way\n`);
+  await decodeProbe("atm production", "avia_paoa", { unit: "FLIGHT", tra_meas: "CAF_PAS", ...SINCE }, ["DE_EDDF"], ["EDDF"]);
+  await decodeProbe("atm pinned", "avia_paoa", { unit: "FLIGHT", tra_meas: "CAF_PAS", ...SINCE, tra_cov: "TOTAL", schedule: "TOTAL" }, ["DE_EDDF"], ["EDDF"]);
+  await decodeProbe("cargo production", "avia_gooa", { unit: "T", tra_meas: "FRM_LD_NLD", ...SINCE }, ["DE_EDDF"], ["EDDF"]);
+  await decodeProbe("cargo pinned", "avia_gooa", { unit: "T", tra_meas: "FRM_LD_NLD", ...SINCE, tra_cov: "TOTAL", schedule: "TOTAL" }, ["DE_EDDF"], ["EDDF"]);
+
+  console.log(`\n### done. 130+ months and ~400 airports = the fix. \n`);
 }
 
 main().catch((e) => { console.error("probe failed:", e); process.exit(1); });
