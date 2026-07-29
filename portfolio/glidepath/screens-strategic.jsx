@@ -4,9 +4,9 @@
 const { useMemo:useMemoS } = React;
 
 /* ---------- LONG-TERM STRATEGIC ------------------------------ */
-function LongTerm({ airport, history, scenario, go }){
+function LongTerm({ airport, history, scenario, ltOpts, baseMode, setBaseMode, go }){
   const macro = MACRO[airport.cc];
-  const lt = useMemoS(()=>GP_longTerm(airport.iata, history, scenario),[airport, history, scenario]);
+  const lt = useMemoS(()=>GP_longTerm(airport.iata, history, scenario, ltOpts),[airport, history, scenario, ltOpts]);
   const metricDefs = [{k:"pax",label:"Passengers"},
     ...(lt&&lt.hasAtm?[{k:"atm",label:"Movements"}]:[]),
     ...(lt&&lt.hasCargo?[{k:"cargo",label:"Cargo"}]:[])];
@@ -40,6 +40,7 @@ function LongTerm({ airport, history, scenario, go }){
   const end = lt.rows[lt.rows.length-1];
   const start = lt.rows[0];
   const cargoFmt = m==="cargo";
+  const modeled = lt.baseForecastMonths.length > 0;
 
   return (
     <div className="content fade-in">
@@ -61,7 +62,50 @@ function LongTerm({ airport, history, scenario, go }){
                 (lt.paxCap||lt.paxCapEnd) ? ((lt.paxCap?GP_fmt.k1(lt.paxCap):"—")+(lt.paxCapEnd!==lt.paxCap?"→"+(lt.paxCapEnd?GP_fmt.k1(lt.paxCapEnd):"—"):"")+" pax cap") : null,
                 (lt.atmCap||lt.atmCapEnd) ? ((lt.atmCap?GP_fmt.k(lt.atmCap):"—")+(lt.atmCapEnd!==lt.atmCap?"→"+(lt.atmCapEnd?GP_fmt.k(lt.atmCapEnd):"—"):"")+" slot cap") : null,
               ].filter(Boolean).join(" · ")}/>
-          : <KPI label={lt.baseYear+" passengers"} value={GP_fmt.k1(start.pax)} sub="observed base year"/>}
+          : <KPI label={lt.baseYear+" passengers"} value={GP_fmt.k1(start.pax)}
+              sub={modeled ? `base year · ${lt.baseObservedMonths} observed + ${lt.baseForecastMonths.length} modeled months` : "observed base year"}/>}
+      </div>
+
+      {/* ---- base-year provenance ----
+          The whole curve is this one number compounded, so how it was assembled
+          belongs on the screen rather than in a footnote. It's also the switch:
+          the tactical model that completes the base year is the one chosen (or
+          overridden) on the short-term screen, so the two forecasts move
+          together instead of disagreeing about the same year. */}
+      <div className="panel panel-pad" style={{marginBottom:16}}>
+        <SectionHead kicker="Base year" title={"Everything compounds off "+lt.baseYear}
+          right={<div className="seg seg-sub">
+            <button className={baseMode!=="observed"?"on":""} onClick={()=>setBaseMode("forecast")}>Forecast-completed</button>
+            <button className={baseMode==="observed"?"on":""} onClick={()=>setBaseMode("observed")}>Last full year</button>
+          </div>}/>
+        <div className="method">
+          {modeled ? <>
+            <b>{lt.baseObservedMonths} observed + {lt.baseForecastMonths.length} modeled —</b> {lt.baseYear} isn&rsquo;t over,
+            so its remaining months ({lt.baseForecastMonths.map(mm=>MONTHS[mm]).join(", ")}) come from the short-term
+            tactical model{lt.baseModel && GP_MODEL_META[String(lt.baseModel).replace("+carry","")]
+              ? <> ({GP_MODEL_META[String(lt.baseModel).replace("+carry","")].label}
+                  {String(lt.baseModel).endsWith("+carry") ? ", with any month it couldn't reach carried from a year earlier" : ""})</>
+              : null}, picked on the short-term screen. That links the two forecasts: the {lt.endYear} figure starts
+            from where the tactical model says {lt.baseYear} actually lands, not from a year that may be well over a
+            year stale.
+            {(lt.hasAtm || lt.hasCargo) && (()=>{
+              const carried = ["atm","cargo"].filter(k=>lt.baseCompletion[k]==="carry")
+                .map(k=>k==="atm"?"movements":"cargo");
+              return carried.length
+                ? <> {carried.join(" and ")} {carried.length>1?"have":"has"} no tactical forecast for those months, so
+                    {carried.length>1?" they carry":" it carries"} the prior year&rsquo;s same month instead.</>
+                : null;
+            })()}
+            <br/><br/>
+            <b>The trade —</b> a modeled base year inherits the tactical model&rsquo;s error into all {lt.endYear-lt.baseYear} projected
+            years. <em>Last full year</em> removes that at the cost of compounding a base that may be stale, or unusual.
+          </> : <>
+            <b>Fully observed —</b> {lt.baseYear} is complete in the data, so nothing here is modeled: all twelve months
+            are real filings and the projection compounds off the actual annual total.
+            {baseMode === "observed" && <> This gateway also has no later partial year to complete, so
+              <em> Forecast-completed</em> would resolve to the same year.</>}
+          </>}
+        </div>
       </div>
 
       <div className="grid" style={{gridTemplateColumns:"1.55fr 1fr", marginBottom:16}}>
@@ -135,7 +179,7 @@ function LongTerm({ airport, history, scenario, go }){
             </tbody>
           </table>
         </div>
-        <div className="air-meta" style={{marginTop:12}}>Passengers compound at the blended demand growth on the observed {lt.baseYear} seasonal shape{lt.hasAtm?"; movements are held proportional to passengers at the latest observed ratio":""}.{capped?<> A binding capacity cap is applied — this table shows <b style={{color:"var(--amber)"}}>served traffic</b>; the chart's unconstrained line is demand.</>:null}</div>
+        <div className="air-meta" style={{marginTop:12}}>Passengers compound at the blended demand growth on the {modeled?"":"observed "}{lt.baseYear} seasonal shape{lt.hasAtm?"; movements are held proportional to passengers at the latest observed ratio":""}.{capped?<> A binding capacity cap is applied — this table shows <b style={{color:"var(--amber)"}}>served traffic</b>; the chart's unconstrained line is demand.</>:null}</div>
       </div>
         );
       })()}
@@ -164,7 +208,7 @@ function LongTerm({ airport, history, scenario, go }){
             <SectionHead kicker="Design day · peak hour" title="What the terminal has to handle"
               right={<span className="air-meta">passengers, from the observed seasonal shape</span>}/>
             <table className="tbl">
-              <thead><tr><th style={{textAlign:"left"}}>Measure</th><th>{lt.baseYear} (observed)</th><th>{lt.endYear} (scenario{lt.hasCap?", constrained":""})</th></tr></thead>
+              <thead><tr><th style={{textAlign:"left"}}>Measure</th><th>{lt.baseYear} {modeled?"(part modeled)":"(observed)"}</th><th>{lt.endYear} (scenario{lt.hasCap?", constrained":""})</th></tr></thead>
               <tbody>
                 {rows.map((r,i)=>(
                   <tr key={i}>
@@ -248,16 +292,16 @@ const PRESETS = {
   shock:   { label:"Demand shock", desc:"Recession-style contraction", icon:"⊘", set:{ gdp:-2.0, tourism:-2.5, fuel:10, pop:-0.4, lcc:0 } },
 };
 
-function Scenario({ airport, history, scenario, setScenario }){
+function Scenario({ airport, history, scenario, setScenario, ltOpts }){
   const base = useMemoS(()=>GP_defaultScenario(airport.iata),[airport]);
   const d = useMemoS(()=>{
     // this page is the lever baseline — show the assumptions without shock
     // events (those live on their own page); compare against the macro default
-    const lt = GP_longTerm(airport.iata, history, { ...scenario, events: [] });
-    const baseLt = GP_longTerm(airport.iata, history, { ...base, horizon: scenario.horizon || base.horizon });
+    const lt = GP_longTerm(airport.iata, history, { ...scenario, events: [] }, ltOpts);
+    const baseLt = GP_longTerm(airport.iata, history, { ...base, horizon: scenario.horizon || base.horizon }, ltOpts);
     const labels = lt ? lt.months.map(r=>r.label) : [];
     return { lt, baseLt, labels };
-  },[airport, history, scenario, base]);
+  },[airport, history, scenario, base, ltOpts]);
 
   // metric the impact chart + KPIs focus on; extra metrics appear only when the
   // gateway actually carries movements / cargo
@@ -559,13 +603,13 @@ function Scenario({ airport, history, scenario, setScenario }){
    Each event is a window with a peak impact that either recovers fully or
    permanently re-baselines the forecast, and can hit all traffic or a single
    passenger sector (e.g. a transborder collapse reshaping the mix). */
-function EventSim({ airport, history, scenario, setScenario }){
+function EventSim({ airport, history, scenario, setScenario, ltOpts }){
   const d = useMemoS(()=>{
-    const lt = GP_longTerm(airport.iata, history, scenario);                       // with events
-    const baseLt = GP_longTerm(airport.iata, history, { ...scenario, events: [] }); // same levers, no shocks
+    const lt = GP_longTerm(airport.iata, history, scenario, ltOpts);                       // with events
+    const baseLt = GP_longTerm(airport.iata, history, { ...scenario, events: [] }, ltOpts); // same levers, no shocks
     const labels = lt ? lt.months.map(r=>r.label) : [];
     return { lt, baseLt, labels };
-  },[airport, history, scenario]);
+  },[airport, history, scenario, ltOpts]);
 
   const metricDefs = [{ k:"pax", label:"Passengers" },
     ...(d.lt && d.lt.hasAtm   ? [{ k:"atm",   label:"Movements" }] : []),
@@ -743,12 +787,12 @@ function GP_saveBlob(blob, filename){
   setTimeout(()=>URL.revokeObjectURL(url), 4000);
 }
 
-function ExportView({ airport, history, scenario }){
+function ExportView({ airport, history, scenario, ltOpts, stModel }){
   const d = useMemoS(()=>{
-    const lt = GP_longTerm(airport.iata, history, scenario);
-    const st = GP_tacticalForecast(airport.iata, "pax", history);
+    const lt = GP_longTerm(airport.iata, history, scenario, ltOpts);
+    const st = GP_tacticalForecast(airport.iata, "pax", history, stModel);
     return { lt, st };
-  },[airport, history, scenario]);
+  },[airport, history, scenario, ltOpts, stModel]);
   const [fmtSel, setFmt] = React.useState("pptx");
   const [busy, setBusy] = React.useState(null);     // id currently generating
   const [note, setNote] = React.useState(null);     // {ok, msg}
@@ -784,7 +828,13 @@ function ExportView({ airport, history, scenario }){
       .filter(l => l.k==="bellyShare" ? hasCargo : l.k==="bellyBeta" ? (hasCargo && hasAtm) : hasAtm)
       .map(l=>({ name:l.name+" (constraint response)", value:(scenario[l.k] ?? 0), unit:l.unit })) : []),
   ];
-  const stModelName = d.st ? (d.st.method==="ets" ? "Holt-Winters ETS" : "Prophet") : null;
+  // the model that actually produced this export's short-term numbers, and how
+  // the long-term's base year was assembled — an exported deck outlives the
+  // session that made it, so both have to travel with the figures
+  const stModelName = d.st ? (GP_MODEL_META[d.st.method]||{}).label : null;
+  const baseNote = d.lt.baseForecastMonths.length
+    ? `${d.lt.baseYear} base year: ${d.lt.baseObservedMonths} observed months + ${d.lt.baseForecastMonths.length} from the ${stModelName||"tactical"} short-term model`
+    : `${d.lt.baseYear} base year: 12 observed months`;
   const events = Array.isArray(scenario.events) ? scenario.events.filter(e=>e&&e.start) : [];
   const segLabelOf = (k)=> k==="all" ? "All traffic" : (d.lt.segLabels[d.lt.segKeys.indexOf(k)] || k);
   const stamp = new Date().toLocaleDateString("en-CA");
@@ -855,6 +905,9 @@ function ExportView({ airport, history, scenario }){
         [end.y+" unserved demand (spill)", end.spill ?? 0],
       ]:[]),
       ...(d.st&&d.st.mape!=null?[["Next-12mo confidence ±MAPE (%)", d.st.mape]]:[]),
+      ...(d.st&&d.st.mase!=null?[["Short-term MASE (1.00 = seasonal-naive)", d.st.mase]]:[]),
+      ...(stModelName?[["Short-term model", stModelName]]:[]),
+      ["Base year composition", baseNote],
     ];
     XLSX.utils.book_append_sheet(wb, XLSX.utils.aoa_to_sheet(summary), "Summary");
 
@@ -938,6 +991,8 @@ function ExportView({ airport, history, scenario }){
         ? [["Unserved demand (spill) "+end.y, GP_fmt.k1(end.spill||0)]]
         : [["Base year ("+base.y+") PAX", GP_fmt.k1(base.pax)]]),
       ...(d.st&&d.st.mape!=null?[["Next-12mo confidence", "±"+d.st.mape+"%"]]:[]),
+      ...(stModelName?[["Short-term model", stModelName+(d.st.mase!=null?` · MASE ${d.st.mase.toFixed(2)}`:"")]]:[]),
+      ["Base year", baseNote],
     ];
     kpis.forEach((k,i)=>{
       const col = i%3, row = Math.floor(i/3);
@@ -1046,7 +1101,7 @@ function ExportView({ airport, history, scenario }){
 <p>This brief sets out the long-term passenger demand outlook for <b>${esc(airport.name)}</b> (${esc(airport.iata)}).
 Under the current scenario, annual passengers grow from <b>${GP_fmt.int(base.pax)}</b> in ${base.y} to
 <b>${GP_fmt.int(end.pax)}</b> by ${end.y} — a compound annual growth rate of <b>${GP_fmt.pct(d.lt.cagr)}</b>,
-driven by blended income, population and tourism dynamics totalling <b>${GP_fmt.pct(d.lt.gDemand)}</b> annual demand growth.${d.st&&d.st.mape!=null?` The short-term ${stModelName} model carries a backtested confidence band of <b>&plusmn;${d.st.mape}%</b> over the next twelve months${d.st.coverage!=null?` (80% interval covered ${d.st.coverage}% of held-out months)`:""}.`:""}${d.lt.hasCap?` Demand is assessed against ${[
+driven by blended income, population and tourism dynamics totalling <b>${GP_fmt.pct(d.lt.gDemand)}</b> annual demand growth. Projections compound off the ${GP_escapeHtml(baseNote)}.${d.st&&d.st.mape!=null?` The short-term ${GP_escapeHtml(stModelName)} model &mdash; selected because it won this series' own rolling-origin backtest${d.st.mase!=null?` (MASE ${d.st.mase.toFixed(2)}, where 1.00 is a seasonal naive)`:""} &mdash; carries a backtested confidence band of <b>&plusmn;${d.st.mape}%</b> over the next twelve months${d.st.coverage!=null?` (80% interval covered ${d.st.coverage}% of held-out months)`:""}.`:""}${d.lt.hasCap?` Demand is assessed against ${[
   d.lt.paxCap?`an annual terminal capacity of <b>${GP_fmt.int(d.lt.paxCap)}</b> passengers`:null,
   d.lt.atmCap?`a slot capacity of <b>${GP_fmt.int(d.lt.atmCap)}</b> movements`:null,
 ].filter(Boolean).join(" and ") || "phased capacity limits"}; unserved demand (spill) reaches <b>${GP_fmt.int(end.spill||0)}</b> by ${end.y}.`:""}</p>
@@ -1076,8 +1131,8 @@ ${events.length?`<h2>Shock events</h2>
 
 <h2>Provenance</h2>
 <p style='font-size:9.5pt;color:#444;'>${airport.custom
-  ? "This forecast runs on the monthly passenger figures uploaded by the report's author, not a public feed, plus World Bank population &amp; GDP/capita for the macro drivers. The short-term tactical forecast, where present, is a Holt-Winters (ETS) model fit in the author's browser &mdash; the nightly Meta Prophet model runs only for the committed public data sources."
-  : "OpenFlights reference &middot; World Bank (GDP per capita &amp; population) &middot; Eurostat / StatCan / US BTS (monthly passengers, movements, cargo) &middot; Meta Prophet short-term forecast. Every figure traces to a public source."}</p>
+  ? "This forecast runs on the monthly passenger figures uploaded by the report's author, not a public feed, plus World Bank population &amp; GDP/capita for the macro drivers. The short-term tactical forecast, where present, is a Holt-Winters (ETS) model fit in the author's browser &mdash; the nightly server-side model selection runs only for the committed public data sources."
+  : "OpenFlights reference &middot; World Bank (GDP per capita &amp; population) &middot; Eurostat / StatCan / US BTS (monthly passengers, movements, cargo) &middot; short-term forecast auto-selected per series from a seasonal naive, a damped Holt-Winters and Meta Prophet on backtest MASE. Every figure traces to a public source."}</p>
 </body></html>`;
     GP_saveBlob(new Blob(["﻿"+html], {type:"application/msword"}), fileBase+"_brief.doc");
   };
@@ -1178,6 +1233,8 @@ ${events.length?`<h2>Shock events</h2>
               [end.y+" PAX",GP_fmt.int(end.pax)],
               [(end.y-base.y)+"-yr CAGR",GP_fmt.pct(d.lt.cagr)],
               ...(d.st&&d.st.mape!=null?[["Next-12mo confidence","±"+d.st.mape+"%"]]:[]),
+              ...(stModelName?[["Short-term model",stModelName+(d.st.mase!=null?` · MASE ${d.st.mase.toFixed(2)}`:"")]]:[]),
+              ["Base year",baseNote],
               ...(hasAtm?[[end.y+" movements",GP_fmt.int(end.atm)]]:[]),
               ...(d.lt.hasCap&&end.paxC!=null&&end.paxC<end.pax?[[end.y+" PAX (served)",GP_fmt.int(end.paxC)]]:[]),
               ...(d.lt.hasCap&&hasAtm&&end.atmC!=null&&end.atmC<end.atm?[[end.y+" movements (served)",GP_fmt.int(end.atmC)]]:[]),
@@ -1193,7 +1250,7 @@ ${events.length?`<h2>Shock events</h2>
           </div>
           <div className="method" style={{marginTop:16}}>
             <b>Provenance —</b> {airport.custom
-              ? "runs on the monthly figures you uploaded, plus World Bank population & GDP/capita for the macro drivers. The short-term view is a Holt-Winters (ETS) model fit in your browser — the nightly Prophet model only runs for the committed public data sources."
+              ? "runs on the monthly figures you uploaded, plus World Bank population & GDP/capita for the macro drivers. The short-term view is a Holt-Winters (ETS) model fit in your browser — the nightly model selection only runs for the committed public data sources."
               : "OpenFlights reference · World Bank (GDP per capita & population) · Eurostat/StatCan/BTS (monthly passengers, movements & cargo, wired nightly). Every figure traces to a public source; the workbook ships the full audit trail."}
           </div>
         </div>

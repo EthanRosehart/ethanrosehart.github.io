@@ -209,6 +209,59 @@ test("checkForecastDoc: forecast rows need date + v/lo/hi, lo<=hi, non-negative"
   assert.ok(errs.some((e) => e.includes("lo > hi")));
 });
 
+test("checkForecastDoc: accepts a candidate block and holds it to the chosen-model contract", () => {
+  const rows = (v) => [{ date: "2026-08", y: 2026, m: 7, v, lo: v - 1, hi: v + 1 }];
+  const ok = () => ({ pax: {
+    chosen: "snaive", chosen_reason: "test", mase: 0.3, mape: 7,
+    forecast: rows(10), backtest: [{ date: "2025-08", v: 9, actual: 10 }],
+    candidates: {
+      snaive: { mase: 0.3, mape: 7 },                                  // winner: scores only
+      prophet: { mase: 0.9, mape: 20, forecast: rows(30), backtest: [] }, // alternative: full rows
+    },
+  } });
+
+  let errs = [];
+  checkForecastDoc(ok(), "f", errs);
+  assert.deepEqual(errs, []);
+
+  // a pre-selection snapshot has neither field and must still pass — the
+  // nightly's own output is what changed, not every committed file at once
+  errs = [];
+  checkForecastDoc({ pax: { mape: 4.2, forecast: rows(10) } }, "f", errs);
+  assert.deepEqual(errs, []);
+
+  // `chosen` naming a model that isn't in `candidates` would leave the browser
+  // reading scores for one model and rows for another
+  errs = [];
+  const orphan = ok(); orphan.pax.chosen = "ets";
+  checkForecastDoc(orphan, "f", errs);
+  assert.ok(errs.some((e) => e.includes("missing from candidates")));
+
+  errs = [];
+  const bogus = ok(); bogus.pax.chosen = "arima";
+  checkForecastDoc(bogus, "f", errs);
+  assert.ok(errs.some((e) => e.includes("unknown model")));
+
+  // duplicating the winner's rows inside `candidates` triples the nightly
+  // commit across 446 airports — the gate has to catch that regression
+  errs = [];
+  const dup = ok(); dup.pax.candidates.snaive.forecast = rows(10);
+  checkForecastDoc(dup, "f", errs);
+  assert.ok(errs.some((e) => e.includes("belong at the top level")));
+
+  // an alternative with no switchable forecast would break the model toggle
+  errs = [];
+  const empty = ok(); delete empty.pax.candidates.prophet.forecast;
+  checkForecastDoc(empty, "f", errs);
+  assert.ok(errs.some((e) => e.includes("candidates.prophet.forecast")));
+
+  // and an alternative's rows are held to the same invariants as the winner's
+  errs = [];
+  const bad = ok(); bad.pax.candidates.prophet.forecast = [{ date: "2026-08", v: 10, lo: 14, hi: 12 }];
+  checkForecastDoc(bad, "f", errs);
+  assert.ok(errs.some((e) => e.includes("lo > hi")));
+});
+
 /* ---- check-snapshots --------------------------------------------- */
 
 test("staleSnapshots: flags old and missing snapshots, passes fresh ones", () => {

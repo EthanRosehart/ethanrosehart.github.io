@@ -1,5 +1,5 @@
 /* ============================================================
-   screens-forecast.jsx — Overview + Short-term tactical (Prophet)
+   screens-forecast.jsx — Overview + Short-term tactical (auto-selected model)
    ============================================================ */
 const { useMemo:useMemoF } = React;
 
@@ -42,8 +42,8 @@ function DataCaveat({ airport, style }){
         <b>Your data —</b> {airport.iata} runs on the monthly figures you uploaded, not a public feed. The long-term
         elasticity forecast, scenario levers, event simulator and export all work exactly the same as for a catalogue
         gateway. The short-term view uses a Holt-Winters (ETS) model fit right here in your browser — the nightly
-        server-side Prophet model only runs for the committed public data sources, and the model card says which
-        one you're looking at.
+        server-side model bake-off (seasonal naïve vs damped ETS vs Prophet) only runs for the committed public
+        data sources, so there&rsquo;s no model toggle here; the model card says exactly what you&rsquo;re looking at.
       </div>
     );
   }
@@ -60,16 +60,17 @@ function DataCaveat({ airport, style }){
 }
 
 /* ---------- OVERVIEW ----------------------------------------- */
-function Overview({ airport, history, scenario, go }){
+function Overview({ airport, history, scenario, ltOpts, go }){
   const macro = MACRO[airport.cc];
   const d = useMemoF(()=>{
     const paxY = GP_fullYears(history,"pax");
     const atmY = GP_fullYears(history,"atm");
     const cargoY = GP_fullYears(history,"cargo");
-    const lt = GP_longTerm(airport.iata, history, scenario);
-    // Prophet where the nightly fit exists, in-browser ETS otherwise (custom
-    // uploads, or a real gateway Prophet hasn't cleared its minimum for)
-    const st = GP_tacticalForecast(airport.iata, "pax", history);
+    const lt = GP_longTerm(airport.iata, history, scenario, ltOpts);
+    // whichever model the nightly picked for this series (or the visitor's
+    // override), else in-browser ETS — custom uploads, or a real gateway the
+    // nightly hasn't cleared its history minimum for
+    const st = GP_tacticalForecast(airport.iata, "pax", history, ltOpts && ltOpts.model);
     // and if even ETS can't run (< 24 contiguous months), fall back to a
     // seasonal index read straight off the observed months rather than
     // hiding the seasonality panel.
@@ -78,11 +79,16 @@ function Overview({ airport, history, scenario, go }){
     const last = paxY.length?paxY[paxY.length-1].v:0, prev = paxY.length>1?paxY[paxY.length-2].v:last;
     return { paxY, atmY, cargoY, lt, st, seasIdx, last, prev,
       hasAtm:atmY.length>0, hasCargo:cargoY.length>0 };
-  },[airport, history, scenario]);
+  },[airport, history, scenario, ltOpts]);
 
   const yrLabels = d.paxY.map(r=>"'"+String(r.y).slice(2));
-  const baseYear = d.lt ? d.lt.baseYear : (d.paxY.length?d.paxY[d.paxY.length-1].y:"");
+  // the last COMPLETE observed calendar year — what every observed-history KPI
+  // and panel on this screen reports. Distinct from d.lt.baseYear, which is the
+  // year the long-term model compounds off and may be the current year with its
+  // remaining months filled in by the tactical model.
+  const obsYear = d.paxY.length ? d.paxY[d.paxY.length-1].y : "";
   const endYear = d.lt ? d.lt.endYear : "";
+  const modeled = d.lt && d.lt.baseForecastMonths.length;
 
   // align movements to the passenger years so chart indices line up even when
   // the two series cover slightly different complete-year spans
@@ -95,26 +101,27 @@ function Overview({ airport, history, scenario, go }){
     <div className="content fade-in">
       <DataCaveat airport={airport}/>
       <div className="grid g-4" style={{marginBottom:16}}>
-        <KPI accent label={"PAX · "+baseYear} value={GP_fmt.k1(d.last)}
-          delta={d.prev?GP_fmt.pct((d.last/d.prev-1)*100):null} deltaDir={d.last>=d.prev?"up":"down"} sub={"vs "+(baseYear-1)}
+        <KPI accent label={"PAX · "+obsYear} value={GP_fmt.k1(d.last)}
+          delta={d.prev?GP_fmt.pct((d.last/d.prev-1)*100):null} deltaDir={d.last>=d.prev?"up":"down"} sub={"vs "+(obsYear-1)}
           spark={d.paxY.slice(-6).map(r=>r.v)} sparkColor="var(--pink)"/>
         {d.lt && <KPI label={endYear+" PAX · forecast"} value={GP_fmt.k1(d.lt.rows[d.lt.rows.length-1].pax)}
           delta={GP_fmt.pct(d.lt.cagr)+" CAGR"} deltaDir="up" sub="elasticity model"
           spark={d.lt.rows.map(r=>r.pax)} sparkColor="var(--cyan)"/>}
         {d.hasAtm
-          ? <KPI label={"Movements · "+baseYear} value={GP_fmt.k(d.atmY[d.atmY.length-1].v)}
+          ? <KPI label={"Movements · "+d.atmY[d.atmY.length-1].y} value={GP_fmt.k(d.atmY[d.atmY.length-1].v)}
               sub="observed flights" spark={d.atmY.slice(-6).map(r=>r.v)} sparkColor="var(--lime)"/>
           : d.hasCargo
-          ? <KPI label={"Cargo · "+baseYear} value={GP_fmt.k(d.cargoY[d.cargoY.length-1].v)+"t"}
+          ? <KPI label={"Cargo · "+d.cargoY[d.cargoY.length-1].y} value={GP_fmt.k(d.cargoY[d.cargoY.length-1].v)+"t"}
               sub="observed freight" spark={d.cargoY.slice(-6).map(r=>r.v)} sparkColor="var(--lime)"/>
           : <KPI label="History" value={d.paxY.length+" yrs"} sub="observed monthly"/>}
         {d.st && d.st.mape!=null && <KPI label="Next-12mo confidence" value={"±"+d.st.mape+"%"}
-          sub={(d.st.method==="ets"?"ETS":"Prophet")+" backtest MAPE"} spark={d.st.forecast.slice(0,12).map(r=>r.v)} sparkColor="var(--violet)"/>}
+          sub={(GP_MODEL_META[d.st.method]||{}).short+" backtest MAPE"+(d.st.mase!=null?` · MASE ${d.st.mase.toFixed(2)}`:"")}
+          spark={d.st.forecast.slice(0,12).map(r=>r.v)} sparkColor="var(--violet)"/>}
       </div>
 
       <div className="grid" style={{gridTemplateColumns:"1.55fr 1fr", marginBottom:16}}>
         <div className="panel panel-pad">
-          <SectionHead kicker={"Observed history · "+(d.paxY.length?d.paxY[0].y:"")+"–"+baseYear} title="Annual throughput"
+          <SectionHead kicker={"Observed history · "+(d.paxY.length?d.paxY[0].y:"")+"–"+obsYear} title="Annual throughput"
             right={<div className="chart-legend">
               <span className="legend-item"><span className="legend-line" style={{borderColor:"var(--pink)"}}></span>Passengers</span>
               {d.hasAtm && <span className="legend-item"><span className="legend-line" style={{borderColor:"var(--lime)"}}></span>Movements <span style={{color:"var(--faint)"}}>(right axis)</span></span>}
@@ -126,7 +133,7 @@ function Overview({ airport, history, scenario, go }){
             ]}/>
           {(d.hasAtm || d.hasCargo) && (
             <div className="stat-strip" style={{marginTop:14}}>
-              <div><div className="air-meta">Passengers · {baseYear}</div><div className="num" style={{color:"var(--pink-2)"}}>{GP_fmt.k1(d.last)}</div></div>
+              <div><div className="air-meta">Passengers · {obsYear}</div><div className="num" style={{color:"var(--pink-2)"}}>{GP_fmt.k1(d.last)}</div></div>
               {latestAtm && <div><div className="air-meta">Movements · {latestAtm.y}</div><div className="num" style={{color:"var(--lime)"}}>{GP_fmt.k(latestAtm.v)}</div></div>}
               {latestCargo && <div><div className="air-meta">Cargo · {latestCargo.y}</div><div className="num" style={{color:"var(--cyan)"}}>{GP_fmt.t(latestCargo.v)}</div></div>}
             </div>
@@ -184,13 +191,13 @@ function Overview({ airport, history, scenario, go }){
 
       <div className="grid g-3" style={{marginBottom:16}}>
         {d.st && <div className="panel panel-pad" style={{cursor:"pointer"}} onClick={()=>go("short")}>
-          <div className="eyebrow" style={{marginBottom:10}}>Tactical · {d.st.method==="ets"?"ETS":"Prophet"}</div>
+          <div className="eyebrow" style={{marginBottom:10}}>Tactical · {(GP_MODEL_META[d.st.method]||{}).short}</div>
           <div style={{fontSize:17,fontWeight:600,marginBottom:6}}>Short-term forecast</div>
-          <p style={{fontSize:13,color:"var(--dim)",marginBottom:14}}>{d.st.method==="ets"
+          <p style={{fontSize:13,color:"var(--dim)",marginBottom:14}}>{d.st.source==="browser"
             ? "24-month Holt-Winters (ETS) demand forecast, fit in your browser on the observed months."
-            : "24-month Meta Prophet demand with country holidays, for capacity & roster planning."}</p>
+            : `24-month demand forecast for capacity & roster planning — ${(GP_MODEL_META[d.st.method]||{}).label} won this series' backtest.`}</p>
           <div className="stat-strip" style={{border:"none",gap:14}}>
-            <div style={{padding:0,border:"none"}}><div className="air-meta">MAPE</div><div className="num" style={{fontSize:17}}>{d.st.mape!=null?"±"+d.st.mape+"%":"—"}</div></div>
+            <div style={{padding:0,border:"none"}}><div className="air-meta">MASE</div><div className="num" style={{fontSize:17}}>{d.st.mase!=null?d.st.mase.toFixed(2):"—"}</div></div>
             <div style={{padding:0,border:"none"}}><div className="air-meta">Next peak</div><div className="num" style={{fontSize:17}}>{GP_fmt.k(Math.max(...d.st.forecast.slice(0,12).map(r=>r.v)))}</div></div>
           </div>
           <div className="btn btn-sm" style={{marginTop:14,width:"100%",justifyContent:"center",color:"var(--pink-2)",borderColor:"var(--pink-line)"}}>Open tactical view {GP_Ico.arrow}</div>
@@ -198,7 +205,10 @@ function Overview({ airport, history, scenario, go }){
         {d.lt && <div className="panel panel-pad" style={{cursor:"pointer"}} onClick={()=>go("long")}>
           <div className="eyebrow" style={{marginBottom:10}}>Strategic · Elasticity</div>
           <div style={{fontSize:17,fontWeight:600,marginBottom:6}}>{d.lt.endYear-d.lt.baseYear}-year forecast</div>
-          <p style={{fontSize:13,color:"var(--dim)",marginBottom:14}}>Macro-driven trajectory to {endYear} for master-planning & business cases.</p>
+          <p style={{fontSize:13,color:"var(--dim)",marginBottom:14}}>Macro-driven trajectory to {endYear} for master-planning & business cases
+            {modeled
+              ? <>, compounding off a {d.lt.baseYear} base year completed by the tactical model.</>
+              : <>, compounding off the observed {d.lt.baseYear}.</>}</p>
           <div className="stat-strip" style={{border:"none",gap:14}}>
             <div style={{padding:0,border:"none"}}><div className="air-meta">PAX CAGR</div><div className="num" style={{fontSize:17,color:"var(--cyan)"}}>{GP_fmt.pct(d.lt.cagr)}</div></div>
             <div style={{padding:0,border:"none"}}><div className="air-meta">{endYear} PAX</div><div className="num" style={{fontSize:17}}>{GP_fmt.k1(d.lt.rows[d.lt.rows.length-1].pax)}</div></div>
@@ -220,10 +230,10 @@ function Overview({ airport, history, scenario, go }){
   );
 }
 
-/* ---------- SHORT-TERM TACTICAL (Prophet / ETS) --------------- */
-function ShortTerm({ airport, history }){
+/* ---------- SHORT-TERM TACTICAL (auto-selected model) --------- */
+function ShortTerm({ airport, history, stModel, setStModel }){
   // a metric is offered when a tactical model can actually run on it —
-  // the nightly Prophet output where it exists, in-browser ETS otherwise
+  // the nightly output where it exists, in-browser ETS otherwise
   const avail = useMemoF(()=> GP_availableMetrics(airport.iata)
     .filter(k => GP_hasForecast(airport.iata,k) || GP_tacticalForecast(airport.iata,k,history)),
     [airport, history]);
@@ -231,9 +241,12 @@ function ShortTerm({ airport, history }){
   const [metric, setMetric] = React.useState(metrics[0]?metrics[0].key:"pax");
   const [horizon, setHorizon] = React.useState(24);
   const macro = MACRO[airport.cc];
+  // every candidate the nightly scored for THIS metric, in simplest-first
+  // order, with the scores each earned on identical folds
+  const models = useMemoF(()=> GP_forecastModels(airport.iata, metric), [airport, metric]);
 
   const d = useMemoF(()=>{
-    const st = GP_tacticalForecast(airport.iata, metric, history);
+    const st = GP_tacticalForecast(airport.iata, metric, history, stModel);
     if (!st) return null;
     const fc = st.forecast.slice(0, horizon);
     const tail = history.filter(r=>r[metric]!=null).slice(-18);
@@ -246,12 +259,15 @@ function ShortTerm({ airport, history }){
     fc.forEach((r,i)=>{ lo[nHist+i]=r.lo; hi[nHist+i]=r.hi; });
     if (nHist>0){ lo[nHist-1]=tail[tail.length-1][metric]; hi[nHist-1]=tail[tail.length-1][metric]; }
     return { st, fc, labels, actual, fitted, lo, hi, nHist, tail };
-  },[airport, history, metric, horizon]);
+  },[airport, history, metric, horizon, stModel]);
 
   if (!d) return <div className="content fade-in"><div className="panel panel-pad"><div className="air-meta">No forecast available for this gateway yet — the tactical models need at least 24 contiguous months of history.</div></div></div>;
 
-  const isEts = d.st.method === "ets";
-  const modelName = isEts ? "Holt-Winters (ETS)" : "Meta Prophet";
+  const meta = GP_MODEL_META[d.st.method] || GP_MODEL_META.prophet;
+  const inBrowser = d.st.source === "browser";
+  const modelName = meta.label;
+  // an override is only "overridden" if it actually differs from the auto-pick
+  const overridden = !inBrowser && d.st.method !== d.st.chosen;
   const unit = metric==="cargo" ? (v=>GP_fmt.k(v)+"t") : (v=>GP_fmt.k(v));
   const next12 = d.fc.slice(0,12);
   const next12sum = next12.reduce((s,r)=>s+r.v,0);
@@ -264,13 +280,56 @@ function ShortTerm({ airport, history }){
     <div className="content fade-in">
       <DataCaveat airport={airport}/>
       <div className="grid g-4" style={{marginBottom:16}}>
-        <KPI accent label="Model MAPE" value={d.st.mape!=null?("±"+d.st.mape+"%"):"—"}
-          sub={nFolds>1?`mean of ${nFolds} rolling 12-mo holdouts`:"12-mo holdout backtest"} deltaDir="up"
-          delta={d.st.skill!=null ? (d.st.skill>0?"beats seasonal-naïve":"≤ seasonal-naïve") : (d.st.mape!=null&&d.st.mape<7?"strong fit":"usable")}/>
+        {/* MASE leads, not MAPE: it's the number model selection actually runs
+            on, and it stays meaningful on series MAPE can't score — a gateway
+            whose traffic collapsed, or a cargo feed at single-digit tonnes. */}
+        {d.st.mase!=null
+          ? <KPI accent label="Model MASE" value={d.st.mase.toFixed(2)}
+              sub={"1.00 = seasonal-naïve; lower is better"+(nFolds>1?` · mean of ${nFolds} folds`:"")}
+              deltaDir={d.st.mase<1 ? "up" : "down"}
+              delta={d.st.mase<1?"beats seasonal-naïve":"loses to seasonal-naïve"}/>
+          : <KPI accent label="Model MAPE" value={d.st.mape!=null?("±"+d.st.mape+"%"):"—"}
+              sub="MASE undefined — no year-on-year variation to scale by"
+              deltaDir="up" delta={nFolds>1?`mean of ${nFolds} folds`:"12-mo holdout"}/>}
         <KPI label="Next 12 months" value={unit(next12sum)} delta={ly?GP_fmt.pct((next12sum/ly-1)*100):null} deltaDir={next12sum>=ly?"up":"down"} sub="vs trailing year"/>
         <KPI label="Forecast peak" value={unit(Math.max(...next12.map(r=>r.v)))} sub={next12.reduce((a,b)=>a.v>b.v?a:b).label}/>
         <KPI label="Seasonal swing" value={seasSwing?seasSwing+"×":"—"} sub="peak ÷ trough month"/>
       </div>
+
+      {/* ---- model picker ----
+          The nightly scores all three candidates on identical folds and
+          publishes the winner; this is where that decision becomes visible and
+          reversible. Selecting a model also re-anchors the long-term forecast's
+          base year (see GP_longTerm's baseMode), which is why it lives in app
+          state rather than here. */}
+      {models.length>1 && (
+        <div className="panel panel-pad" style={{marginBottom:16}}>
+          <SectionHead kicker="Model selection" title={"Scored on the same held-out months"}
+            right={overridden
+              ? <button className="btn btn-sm" onClick={()=>setStModel(null)}>Back to auto-pick</button>
+              : <span className="air-meta">auto-picked nightly by MASE</span>}/>
+          <div className="seg" style={{flexWrap:"wrap"}}>
+            {models.map(m=>(
+              <button key={m.key} className={d.st.method===m.key?"on":""}
+                title={m.blurb} onClick={()=>setStModel(m.key===d.st.chosen ? null : m.key)}>
+                {m.label}{m.chosen?" ★":""}
+                <span style={{marginLeft:7,fontFamily:"var(--mono)",fontSize:11,opacity:.72}}>
+                  {m.mase!=null?m.mase.toFixed(2):(m.mape!=null?"±"+m.mape+"%":"—")}
+                </span>
+              </button>
+            ))}
+          </div>
+          <div className="method" style={{marginTop:12}}>
+            <b>★ is the nightly's pick —</b> the candidate with the lowest backtest MASE, with a 5% margin
+            required to unseat a simpler model (ties go to the simpler one, and the seasonal naive is the
+            incumbent rather than a footnote). The numbers on the buttons are MASE — or MAPE, where this
+            series has no year-on-year variation for MASE to scale by. Every candidate was trained on the
+            same months and scored on the same holdouts, so they're directly comparable.
+            {overridden && <> You&rsquo;re currently overriding it with <b>{meta.label}</b> — the whole page,
+            including the long-term base year, follows this choice.</>}
+          </div>
+        </div>
+      )}
 
       <div className="panel panel-pad" style={{marginBottom:16}}>
         <SectionHead kicker={"Tactical forecast · "+modelName} title="Monthly demand, actuals → forecast"
@@ -294,7 +353,9 @@ function ShortTerm({ airport, history }){
         <div style={{display:"flex",gap:18,marginTop:12,flexWrap:"wrap",alignItems:"center"}}>
           <span className="legend-item"><span className="legend-line" style={{borderColor:"var(--text)"}}></span>Actual ({GP_sourceLabel(GP_activityFor(airport.iata).source)})</span>
           <span className="legend-item"><span className="legend-line" style={{borderColor:"var(--pink)",borderStyle:"dashed"}}></span>{modelName} forecast</span>
-          <span className="legend-item"><span className="legend-swatch" style={{background:"var(--pink)",opacity:.3}}></span>{isEts?"80% interval (approx.)":Math.round((GP_FORECAST_META?.interval||0.8)*100)+"% interval (P10–P90)"}</span>
+          {/* only Prophet's band is a sampled posterior — the closed-form ones
+              say so rather than borrowing its authority */}
+          <span className="legend-item"><span className="legend-swatch" style={{background:"var(--pink)",opacity:.3}}></span>{d.st.method==="prophet"?Math.round((GP_FORECAST_META?.interval||0.8)*100)+"% interval (P10–P90)":"80% interval (approx.)"}</span>
         </div>
       </div>
 
@@ -330,10 +391,15 @@ function ShortTerm({ airport, history }){
           <SectionHead kicker="Under the hood" title="Model card"/>
           <div style={{display:"flex",flexDirection:"column",gap:0}}>
             {[
-              ...(isEts ? [
-                ["Method","Holt-Winters (ETS) · trend + seasonality"],
+              ["Model", meta.label + (overridden ? " · your override" : d.st.chosen===d.st.method && !inBrowser ? " · auto-picked" : "")],
+              ...(d.st.method==="snaive" ? [
+                ["Method","Seasonal naive · last observed same month"],
+                ["Seasonality","Carried, not fitted"],
+                ["Band","Seasonal random walk · σ√cycles"],
+              ] : d.st.method==="ets" ? [
+                ["Method","Holt-Winters · damped trend + seasonality"],
                 ["Seasonality","Multiplicative monthly indices"],
-                ["Fit","In this browser, on the observed months"],
+                ...(inBrowser?[["Fit","In this browser, on the observed months"]]:[["Damping","φ grid-searched with the smoothing constants"]]),
               ] : [
                 ["Method","Meta Prophet · trend + yearly + holidays"],
                 ["Seasonality","Multiplicative yearly (Fourier)"],
@@ -344,28 +410,56 @@ function ShortTerm({ airport, history }){
                 ["Shocks","COVID 2020–21 modeled as events"],
               ]),
               ["Backtest", nFolds>1 ? `rolling-origin · ${nFolds} × 12-mo holdouts` : "12-month holdout"],
-              ["Accuracy", d.st.mape!=null?("MAPE ±"+d.st.mape+"%"+(nFolds>1?` (folds ${d.st.mapeFolds.join(" / ")})`:"")):"—"],
-              ...(d.st.naiveMape!=null?[["vs seasonal-naïve", "±"+d.st.naiveMape+"%"+(d.st.skill!=null?` · skill ${d.st.skill>0?"+":""}${Math.round(d.st.skill*100)}%`:"")]]:[]),
+              ["Accuracy", d.st.mase!=null
+                ? ("MASE "+d.st.mase.toFixed(3)+(nFolds>1?` (folds ${d.st.maseFolds.join(" / ")})`:""))
+                : (d.st.mae!=null ? "MAE "+GP_fmt.int(d.st.mae)+" · MASE undefined" : "—")],
+              ["MAPE", d.st.mape!=null?("±"+d.st.mape+"%"+(nFolds>1?` (folds ${d.st.mapeFolds.join(" / ")})`:"")):"—"],
+              ...(d.st.naiveMase!=null?[["vs seasonal-naïve", "MASE "+d.st.naiveMase.toFixed(3)
+                +(d.st.naiveMape!=null?` · ±${d.st.naiveMape}%`:"")]]:[]),
               ...(d.st.coverage!=null?[["80% band coverage", d.st.coverage+"% of held-out months"]]:[]),
-              ["Refresh", isEts ? "Live · in this browser" : "Nightly · server-side"],
-            ].map((r,i,arr)=>(
-              <div key={i} style={{display:"flex",justifyContent:"space-between",gap:16,padding:"10px 0",borderBottom:i<arr.length-1?"1px solid var(--line)":"none"}}>
-                <span style={{color:"var(--faint)",fontSize:13}}>{r[0]}</span>
-                <span style={{fontSize:13,textAlign:"right",fontFamily:r[0]==="Backtest"||r[0]==="Accuracy"?"var(--mono)":"var(--sans)",color:r[0]==="Backtest"||r[0]==="Accuracy"?"var(--pink-2)":"var(--dim)"}}>{r[1]}</span>
-              </div>
-            ))}
+              ["Refresh", inBrowser ? "Live · in this browser" : "Nightly · server-side"],
+            ].map((r,i,arr)=>{
+              const mono = r[0]==="Backtest"||r[0]==="Accuracy"||r[0]==="MAPE";
+              return (
+                <div key={i} style={{display:"flex",justifyContent:"space-between",gap:16,padding:"10px 0",borderBottom:i<arr.length-1?"1px solid var(--line)":"none"}}>
+                  <span style={{color:"var(--faint)",fontSize:13}}>{r[0]}</span>
+                  <span style={{fontSize:13,textAlign:"right",fontFamily:mono?"var(--mono)":"var(--sans)",color:mono?"var(--pink-2)":"var(--dim)"}}>{r[1]}</span>
+                </div>
+              );
+            })}
           </div>
-          {isEts
-            ? <div className="method" style={{marginTop:14}}>
-                <b>What ETS is —</b> exponential smoothing with an additive trend and multiplicative monthly
-                seasonality, smoothing constants grid-searched on one-step error. The 80% band grows from the
-                in-sample residuals — an approximation, not a full posterior like Prophet's. No holidays, no
-                macro regressor: it's the honest small model for data that lives only in this browser.
-              </div>
-            : <div className="method" style={{marginTop:14}}>
-                <b>COVID handling —</b> the 2020–21 collapse is fit as explicit monthly events, so it doesn't distort seasonality or widen the forecast band. No data is dropped — every observed month still trains the model and shows on the chart.
-              </div>}
-          {!isEts && d.st.holidays.length>0 && <div className="method" style={{marginTop:14}}>
+          <div className="method" style={{marginTop:14}}>
+            <b>Why MASE —</b> mean absolute error over the held-out months divided by the in-sample
+            seasonal-naïve error, so 1.00 means &ldquo;no better than repeating last year&rsquo;s month&rdquo;.
+            Unlike MAPE it never divides by the actual, which is what makes it usable on a series that
+            approaches zero — a gateway that lost its traffic, or cargo measured in single-digit tonnes,
+            where MAPE runs into the thousands of percent and says nothing. Model selection uses MASE alone;
+            MAPE is shown because planners recognise it, but it decides nothing.
+          </div>
+          {d.st.coverage!=null && d.st.coverage < 65 && <div className="method" style={{marginTop:14}}>
+            <b>Read the band with caution —</b> only {d.st.coverage}% of held-out months landed inside this
+            model&rsquo;s 80% interval, so the interval is narrower than the errors it&rsquo;s meant to cover.
+            The point forecast is scored above on its own terms; the band is not yet calibrated against
+            measured coverage.
+          </div>}
+          {d.st.method==="snaive" && <div className="method" style={{marginTop:14}}>
+            <b>What the seasonal naïve is —</b> every month simply repeats the most recent observed value for
+            that calendar month. No trend, no holidays, no macro. It is here as a competitor rather than a
+            benchmark because across this catalogue it wins more often than not — and a fitted model that
+            can&rsquo;t beat it isn&rsquo;t earning its complexity.
+          </div>}
+          {d.st.method==="ets" && <div className="method" style={{marginTop:14}}>
+            <b>What ETS is —</b> exponential smoothing with an additive <em>damped</em> trend and
+            multiplicative monthly seasonality, constants grid-searched on one-step error. Damping is what it
+            brings: where an undamped trend compounds whatever slope the last months happened to show,
+            φ&nbsp;&lt;&nbsp;1 flattens it out. The 80% band grows from the in-sample residuals — an
+            approximation, not a posterior.
+            {inBrowser && " No holidays, no macro regressor: it's the honest small model for data that lives only in this browser."}
+          </div>}
+          {d.st.method==="prophet" && <div className="method" style={{marginTop:14}}>
+            <b>COVID handling —</b> the 2020–21 collapse is fit as explicit monthly events, so it doesn't distort seasonality or widen the forecast band. No data is dropped — every observed month still trains the model and shows on the chart.
+          </div>}
+          {d.st.method==="prophet" && d.st.holidays.length>0 && <div className="method" style={{marginTop:14}}>
             <b>Top holiday effects —</b> {d.st.holidays.slice(0,4).join(" · ")}.
           </div>}
         </div>

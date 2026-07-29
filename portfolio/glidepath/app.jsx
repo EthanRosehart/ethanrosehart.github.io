@@ -9,7 +9,7 @@ const NAV = [
   { id:"connect",  label:"Connect data",   group:"Setup", step:2, icon:GP_Ico.db },
   { id:"upload",   label:"Upload data",    group:"Setup", icon:GP_Ico.upload }, // alt path to "connect" — see the "or" divider rendered between them
   { id:"overview", label:"Overview",       group:"Forecast", icon:<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><rect x="3" y="3" width="7" height="9" rx="1"/><rect x="14" y="3" width="7" height="5" rx="1"/><rect x="14" y="12" width="7" height="9" rx="1"/><rect x="3" y="16" width="7" height="5" rx="1"/></svg> },
-  { id:"short",    label:"Short-term (Prophet)",group:"Forecast", icon:<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><path d="M3 17l5-5 4 3 8-9"/><path d="M21 6v5h-5"/></svg> },
+  { id:"short",    label:"Short-term tactical",group:"Forecast", icon:<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><path d="M3 17l5-5 4 3 8-9"/><path d="M21 6v5h-5"/></svg> },
   { id:"long",     label:"Long-term",group:"Forecast", icon:<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><path d="M3 3v18h18"/><path d="M7 14l4-4 3 3 5-6"/></svg> },
   { id:"scenario", label:"Baseline assumptions",group:"Forecast", icon:<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><circle cx="6" cy="8" r="2"/><path d="M6 10v6M6 4v2"/><circle cx="14" cy="14" r="2"/><path d="M14 4v8M14 16v4"/><circle cx="20" cy="7" r="0"/></svg> },
   { id:"events",   label:"Event simulator",group:"Forecast", icon:<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><path d="M13 2L4 14h7l-1 8 9-12h-7l1-8z"/></svg> },
@@ -51,6 +51,18 @@ function App(){
     if (saved.iata) return { ...GP_defaultScenario(saved.iata), ...(sc || {}) };
     return sc;
   });
+  /* Short-term model override, and how the long-term picks its base year. Both
+     live up here rather than inside a screen because they are the same choice
+     seen twice: the tactical screen's model toggle also decides which model
+     completes the long-term model's base year, so the strategic curve compounds
+     off the forecast the visitor is actually looking at. null = whichever model
+     the nightly chose per series (the default, and per-metric, so it can differ
+     between passengers and cargo on the same gateway). */
+  const [stModel, setStModel] = useStateApp(
+    GP_MODEL_KEYS.includes(saved.stModel) ? saved.stModel : null);
+  const [baseMode, setBaseMode] = useStateApp(saved.baseMode === "observed" ? "observed" : "forecast");
+  const ltOpts = useMemoApp(()=>({ baseMode, model:stModel }), [baseMode, stModel]);
+
   const [macroMeta, setMacroMeta] = useStateApp(window.GP_MACRO_META || null);
   const [actMeta, setActMeta] = useStateApp(window.GP_ACTIVITY_META || null);
   const [ofMeta, setOfMeta] = useStateApp(window.GP_OF_META || null);
@@ -140,7 +152,7 @@ function App(){
     return ()=>{ alive = false; };
   },[]);
 
-  // Meta Prophet's shared model metadata (data/forecast-meta.json) — small,
+  // the shared short-term model metadata (data/forecast-meta.json) — small,
   // loaded once. Each airport's actual forecast is fetched lazily below.
   const [fcMeta, setFcMeta] = useStateApp(window.GP_FORECAST_META || null);
   useEffectApp(()=>{
@@ -170,7 +182,7 @@ function App(){
       .then(seriesJson => {
         if (!alive) return null;
         GP_setAirportSeries(iata, seriesJson);
-        // the forecast is best-effort — some gateways don't clear Prophet's
+        // the forecast is best-effort — some gateways don't clear the nightly's
         // minimum history yet, and a missing one is already handled by the
         // screens ("No forecast available"), so a 404 here isn't fatal.
         return fetch(`data/forecasts/${iata}.json`, { cache:"no-cache" }).then(r => r.ok ? r.json() : null).catch(()=>null);
@@ -247,7 +259,7 @@ function App(){
   },[]);
 
   useEffectApp(()=>{
-    const payload = { screen, iata:airport?.iata, connected, scenario };
+    const payload = { screen, iata:airport?.iata, connected, scenario, stModel, baseMode };
     // a custom airport has no server to re-fetch from on the next visit, so
     // its meta + series ride along in localStorage itself (a few KB at most
     // for a decade of monthly numbers)
@@ -261,7 +273,7 @@ function App(){
     }
     try { localStorage.setItem(LS, JSON.stringify(payload)); }
     catch(e){ /* storage full or blocked — persistence is best-effort */ }
-  },[screen, airport, connected, scenario]);
+  },[screen, airport, connected, scenario, stModel, baseMode]);
 
   // ensure scenario resets to airport default when airport changes & none set
   useEffectApp(()=>{
@@ -270,7 +282,10 @@ function App(){
 
   const selectAirport = (a, proceed)=>{
     setCustomPending(false);
-    if (!airport || airport.iata!==a.iata){ setAirport(a); setScenario(GP_defaultScenario(a.iata)); setConnected(false); }
+    // a model override is only meaningful for the gateway it was chosen on —
+    // carrying "force Prophet" onto a different airport would silently override
+    // that one's own backtest winner
+    if (!airport || airport.iata!==a.iata){ setAirport(a); setScenario(GP_defaultScenario(a.iata)); setStModel(null); setConnected(false); }
     if (proceed) setScreen("connect");
   };
   const startUpload = ()=>{ setCustomPending(true); setScreen("connect"); };
@@ -281,6 +296,7 @@ function App(){
     const a = AIRPORTS.find(x=>x.iata===iata);
     setAirport(a);
     setScenario(GP_defaultScenario(iata));
+    setStModel(null);
     setConnected(true);
     setCustomPending(false);
     setScreen("overview");
@@ -293,7 +309,7 @@ function App(){
     if (!window.confirm("Start over? This clears the selected gateway, scenario and any uploaded data.")) return;
     if (airport?.custom) GP_removeCustomAirport(airport.iata);
     localStorage.removeItem(LS);
-    setAirport(null); setConnected(false); setScenario(null); setCustomPending(false);
+    setAirport(null); setConnected(false); setScenario(null); setStModel(null); setCustomPending(false);
     setScreen("select"); setActVer(v=>v+1); setNavOpen(false);
   };
 
@@ -319,6 +335,8 @@ function App(){
     }
     setAirport(a);
     setScenario(session.scenario || GP_defaultScenario(a.iata));
+    setStModel(GP_MODEL_KEYS.includes(session.stModel) ? session.stModel : null);
+    setBaseMode(session.baseMode === "observed" ? "observed" : "forecast");
     setConnected(true);
     setCustomPending(false);
     setScreen("overview");
@@ -380,7 +398,7 @@ function App(){
                   <div className={"nav-item"+(active?" active":"")+(done&&!active?" done":"")+(ok?"":" nav-disabled")} onClick={onClick}>
                     {n.step ? <span className="step-n">{done&&!active?"✓":n.step}</span> : <span style={{width:18,display:"grid",placeItems:"center"}}>{n.icon}</span>}
                     {/* an uploaded gateway's tactical model is in-browser ETS,
-                        not the nightly server-side Prophet — say which */}
+                        with no nightly model selection behind it — say which */}
                     <span>{n.id==="short" && airport?.custom ? "Short-term (ETS)" : n.label}</span>
                   </div>
                 </React.Fragment>
@@ -487,12 +505,12 @@ function App(){
             {seriesStatus.error ? `Couldn't load ${airport.iata}'s data — check your connection and reload.` : `Loading ${airport.iata} data…`}
           </div></div></div>
         )}
-        {screen==="overview" && airport && connected && dataReady && scenario && <Overview airport={airport} history={history} scenario={scenario} go={go}/>}
-        {screen==="short"    && airport && connected && dataReady && <ShortTerm airport={airport} history={history}/>}
-        {screen==="long"     && airport && connected && dataReady && scenario && <LongTerm airport={airport} history={history} scenario={scenario} go={go}/>}
-        {screen==="scenario" && airport && connected && dataReady && scenario && <Scenario airport={airport} history={history} scenario={scenario} setScenario={setScenario}/>}
-        {screen==="events"   && airport && connected && dataReady && scenario && <EventSim airport={airport} history={history} scenario={scenario} setScenario={setScenario}/>}
-        {screen==="export"   && airport && connected && dataReady && scenario && <ExportView airport={airport} history={history} scenario={scenario}/>}
+        {screen==="overview" && airport && connected && dataReady && scenario && <Overview airport={airport} history={history} scenario={scenario} ltOpts={ltOpts} go={go}/>}
+        {screen==="short"    && airport && connected && dataReady && <ShortTerm airport={airport} history={history} stModel={stModel} setStModel={setStModel}/>}
+        {screen==="long"     && airport && connected && dataReady && scenario && <LongTerm airport={airport} history={history} scenario={scenario} ltOpts={ltOpts} baseMode={baseMode} setBaseMode={setBaseMode} go={go}/>}
+        {screen==="scenario" && airport && connected && dataReady && scenario && <Scenario airport={airport} history={history} scenario={scenario} setScenario={setScenario} ltOpts={ltOpts}/>}
+        {screen==="events"   && airport && connected && dataReady && scenario && <EventSim airport={airport} history={history} scenario={scenario} setScenario={setScenario} ltOpts={ltOpts}/>}
+        {screen==="export"   && airport && connected && dataReady && scenario && <ExportView airport={airport} history={history} scenario={scenario} ltOpts={ltOpts} stModel={stModel}/>}
       </main>
     </div>
   );

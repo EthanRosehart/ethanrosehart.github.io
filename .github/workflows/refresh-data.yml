@@ -109,7 +109,7 @@ jobs:
       - name: Install forecasting deps (Prophet + holidays)
         run: pip install -r portfolio/glidepath/scripts/requirements.txt
 
-      - name: Build short-term forecasts (Meta Prophet)
+      - name: Build short-term forecasts (3 candidates, best by MASE)
         id: forecast
         run: python portfolio/glidepath/scripts/build-forecast.py
         continue-on-error: true   # never block the data refresh on the model step
@@ -184,7 +184,7 @@ jobs:
           [ "${{ steps.bts.outcome }}" = "failure" ]         && note "fetch-bts missed — US airports keep last-good (watched for staleness)"
           [ "${{ steps.macro.outcome }}" = "failure" ]       && note "fetch-data (World Bank) missed — macro.json keeps last-good (watched for staleness)"
           [ "${{ steps.imf.outcome }}" = "failure" ]         && note "fetch-imf (IMF WEO) missed — last-good kept (forecast falls back to trailing-rate)"
-          [ "${{ steps.forecast.outcome }}" = "failure" ]    && note "build-forecast (Prophet) missed — forecasts keep last-good (watched for staleness)"
+          [ "${{ steps.forecast.outcome }}" = "failure" ]    && note "build-forecast missed — forecasts keep last-good (watched for staleness)"
 
           # activity exit 2 = a feed answered with nothing usable tonight and
           # every airport was kept on its committed history. The site stays

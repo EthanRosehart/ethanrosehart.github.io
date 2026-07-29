@@ -124,26 +124,68 @@ export function checkImf(doc, errs) {
   }
 }
 
-/** data/forecasts/<IATA>.json: metric -> forecast payload. */
+/** The models build-forecast.py may publish, and the one it defaults to for a
+ *  payload written before candidate selection existed. */
+const FORECAST_MODELS = ["snaive", "ets", "prophet"];
+
+/** A forecast row array — the shape the browser charts directly. */
+function checkForecastRows(rows, p, errs) {
+  if (!Array.isArray(rows) || !rows.length) { errs.push(`${p}: must be a non-empty array`); return; }
+  for (const r of rows) {
+    if (!isObj(r) || !isMonthKey(r.date ?? "") || !isFiniteNum(r.v) || !isFiniteNum(r.lo) || !isFiniteNum(r.hi)) {
+      errs.push(`${p}: rows need date "YYYY-MM" + numeric v/lo/hi`); break;
+    }
+    if (r.lo > r.hi) { errs.push(`${p} ${r.date}: lo > hi`); break; }
+    if (r.v < 0 || r.lo < 0) { errs.push(`${p} ${r.date}: negative volumes`); break; }
+  }
+}
+
+function checkBacktestRows(rows, p, errs) {
+  if (!Array.isArray(rows)) { errs.push(`${p}: must be an array`); return; }
+  for (const r of rows) {
+    if (!isObj(r) || !isMonthKey(r.date ?? "") || !isFiniteNum(r.v) || !isFiniteNum(r.actual)) {
+      errs.push(`${p}: rows need date + numeric v/actual`); break;
+    }
+  }
+}
+
+/** data/forecasts/<IATA>.json: metric -> forecast payload.
+ *  The model the nightly chose sits at the TOP LEVEL (forecast/backtest/scores);
+ *  `candidates` carries every candidate's scores plus the ALTERNATIVES' arrays,
+ *  which is what the UI's model toggle switches to. The chosen candidate's
+ *  arrays are deliberately not duplicated inside `candidates`, so this gate
+ *  asserts that asymmetry rather than requiring arrays everywhere — otherwise
+ *  a regression that duplicated them (tripling the nightly commit) would pass. */
 export function checkForecastDoc(doc, path, errs) {
   if (!isObj(doc) || !Object.keys(doc).length) { errs.push(`${path}: empty forecast doc`); return; }
   for (const [metric, m] of Object.entries(doc)) {
     const p = `${path}.${metric}`;
     if (!METRICS.includes(metric)) { errs.push(`${p}: unknown metric`); continue; }
     if (!isObj(m)) { errs.push(`${p}: not an object`); continue; }
-    if (!Array.isArray(m.forecast) || !m.forecast.length) { errs.push(`${p}.forecast: must be a non-empty array`); continue; }
-    for (const r of m.forecast) {
-      if (!isObj(r) || !isMonthKey(r.date ?? "") || !isFiniteNum(r.v) || !isFiniteNum(r.lo) || !isFiniteNum(r.hi)) {
-        errs.push(`${p}.forecast: rows need date "YYYY-MM" + numeric v/lo/hi`); break;
-      }
-      if (r.lo > r.hi) { errs.push(`${p}.forecast ${r.date}: lo > hi`); break; }
-      if (r.v < 0 || r.lo < 0) { errs.push(`${p}.forecast ${r.date}: negative volumes`); break; }
-    }
+    checkForecastRows(m.forecast, `${p}.forecast`, errs);
     if (m.mape != null && !isFiniteNum(m.mape)) errs.push(`${p}.mape: must be a number or null`);
+    if (m.mase != null && !isFiniteNum(m.mase)) errs.push(`${p}.mase: must be a number or null`);
     if (m.seasonal12 != null && (!Array.isArray(m.seasonal12) || m.seasonal12.length !== 12)) errs.push(`${p}.seasonal12: must be 12 values`);
-    if (m.backtest != null) {
-      if (!Array.isArray(m.backtest)) errs.push(`${p}.backtest: must be an array`);
-      else for (const r of m.backtest) if (!isObj(r) || !isMonthKey(r.date ?? "") || !isFiniteNum(r.v) || !isFiniteNum(r.actual)) { errs.push(`${p}.backtest: rows need date + numeric v/actual`); break; }
+    if (m.backtest != null) checkBacktestRows(m.backtest, `${p}.backtest`, errs);
+
+    // candidate block is optional (a pre-selection snapshot has none), but when
+    // present it must name a real chosen model and stay internally consistent
+    if (m.candidates == null && m.chosen == null) continue;
+    if (!isObj(m.candidates)) { errs.push(`${p}.candidates: must be an object when \`chosen\` is set`); continue; }
+    if (!FORECAST_MODELS.includes(m.chosen)) { errs.push(`${p}.chosen: unknown model ${JSON.stringify(m.chosen)}`); continue; }
+    if (!(m.chosen in m.candidates)) { errs.push(`${p}.chosen: ${m.chosen} is missing from candidates`); continue; }
+    for (const [name, c] of Object.entries(m.candidates)) {
+      const cp = `${p}.candidates.${name}`;
+      if (!FORECAST_MODELS.includes(name)) { errs.push(`${cp}: unknown model`); continue; }
+      if (!isObj(c)) { errs.push(`${cp}: not an object`); continue; }
+      if (c.mase != null && !isFiniteNum(c.mase)) errs.push(`${cp}.mase: must be a number or null`);
+      if (c.mape != null && !isFiniteNum(c.mape)) errs.push(`${cp}.mape: must be a number or null`);
+      if (name === m.chosen) {
+        if (c.forecast != null) errs.push(`${cp}.forecast: the chosen model's rows belong at the top level, not duplicated here`);
+      } else {
+        checkForecastRows(c.forecast, `${cp}.forecast`, errs);
+        if (c.backtest != null) checkBacktestRows(c.backtest, `${cp}.backtest`, errs);
+      }
     }
   }
 }
