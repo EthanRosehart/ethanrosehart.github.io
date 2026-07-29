@@ -82,6 +82,26 @@ const GEO = {
 
 export function normMonth(s) { return String(s).replace("M", "-").slice(0, 7); }
 
+/* PIN EVERY DIMENSION. avia_paoa/avia_gooa are 7-dimension cubes and
+   esDecode() walks only rep_airp and time — so any dimension left
+   unpinned collapses to whatever Eurostat happens to sort FIRST, silently.
+
+   That is what broke the catalogue in July 2026. `schedule` carries two
+   generations of codes with the same label ("TOTAL" and "TOT" both read
+   "Total", as do "NSCHED"/"N_SCHED"), the older generation is near-empty,
+   and it sorts first. Measured from a runner (scripts/probe-eurostat.mjs):
+
+     schedule=   TOTAL   TOT   SCHED  NSCHED  N_SCHED  UNK
+     Frankfurt       5   133     137       5      133   29
+     Amsterdam       3   135     135       3      135   27
+     Paris CDG       0   132     132       0      132   24
+
+   We had been reading the TOTAL column. Hence 3-6 month replies that
+   chooseSeries rightly rejected, and airports whose empty slice made them
+   invisible to the enumerate entirely — CDG among them. Identical grid
+   for passengers, movements and cargo. */
+export const ES_PINS = { schedule: "TOT", tra_cov: "TOTAL" };
+
 /* ============================================================
    EUROSTAT — JSON-stat. A single all-airports pull is rejected
    with HTTP 413 (ASYNCHRONOUS_RESPONSE), so we (1) enumerate which
@@ -108,6 +128,18 @@ export function esDecode(js, dataset) {
   const di = (n) => ids.indexOf(n);
   const repDim = di("rep_airp"), timeDim = di("time");
   if (repDim < 0 || timeDim < 0) throw new Error(`${dataset}: missing rep_airp/time dim`);
+  /* Refuse to silently collapse an unpinned dimension. Reading category 0
+     of a dimension we didn't ask about is exactly how the July 2026 loss
+     went unnoticed for days: the response looked fine, the decode was
+     empty. If Eurostat adds a dimension or renames a code out from under
+     ES_PINS, this throws and the run reports it instead of shipping a
+     hollow snapshot. */
+  const loose = ids.filter((d, i) => d !== "rep_airp" && d !== "time" && size[i] > 1);
+  if (loose.length) {
+    throw new Error(`${dataset}: ${loose.length} dimension(s) not pinned to a single category — ` +
+      loose.map((d) => `${d}(${size[ids.indexOf(d)]})`).join(", ") +
+      `. esDecode would silently read category 0; pin them in the query (see ES_PINS).`);
+  }
   const repIdx = js.dimension.rep_airp.category.index;
   const timeEntries = Object.entries(js.dimension.time.category.index).sort((a, b) => a[1] - b[1]);
   const getVal = (f) => (Array.isArray(value) ? value[f] : (value[f] ?? value[String(f)]));
@@ -142,7 +174,7 @@ async function esGet(dataset, q, reps) {
 // time window until Eurostat answers synchronously
 async function esEnumerate() {
   for (const lastN of [12, 6, 3, 1]) {
-    try { return await esGet("avia_paoa", { unit: "PAS", tra_meas: "PAS_CRD", lastTimePeriod: String(lastN) }); }
+    try { return await esGet("avia_paoa", { unit: "PAS", tra_meas: "PAS_CRD", ...ES_PINS, lastTimePeriod: String(lastN) }); }
     catch (e) { if (e.code === 413) { console.warn(`  enumerate lastTimePeriod=${lastN} -> 413, shrinking`); continue; } throw e; }
   }
   return {};
@@ -370,7 +402,7 @@ async function main() {
     ["cargo", "avia_gooa", "T", "FRM_LD_NLD"],
   ]) {
     if (!repCodes.length) { euData[metric] = {}; continue; }
-    try { euData[metric] = await esBatch(ds, { unit, tra_meas: tm, sinceTimePeriod: "2015-01" }, repCodes); console.log(`  eurostat ${metric}: ${Object.keys(euData[metric]).length} airports`); }
+    try { euData[metric] = await esBatch(ds, { unit, tra_meas: tm, ...ES_PINS, sinceTimePeriod: "2015-01" }, repCodes); console.log(`  eurostat ${metric}: ${Object.keys(euData[metric]).length} airports`); }
     catch (e) { euData[metric] = {}; console.warn(`  eurostat ${metric} FAILED: ${e.message}`); }
   }
 
@@ -380,7 +412,7 @@ async function main() {
   const euSeg = {};   // segKey -> { icao -> { geo, monthly } }
   for (const [segKey, cov] of [["domestic", "NAT"], ["international", "INTL"]]) {
     if (!repCodes.length) { euSeg[segKey] = {}; continue; }
-    try { euSeg[segKey] = await esBatch("avia_paoa", { unit: "PAS", tra_meas: "PAS_CRD", tra_cov: cov, sinceTimePeriod: "2015-01" }, repCodes); console.log(`  eurostat seg ${segKey}: ${Object.keys(euSeg[segKey]).length} airports`); }
+    try { euSeg[segKey] = await esBatch("avia_paoa", { unit: "PAS", tra_meas: "PAS_CRD", ...ES_PINS, tra_cov: cov, sinceTimePeriod: "2015-01" }, repCodes); console.log(`  eurostat seg ${segKey}: ${Object.keys(euSeg[segKey]).length} airports`); }
     catch (e) { euSeg[segKey] = {}; console.warn(`  eurostat seg ${segKey} FAILED: ${e.message}`); }
   }
 

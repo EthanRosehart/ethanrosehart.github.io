@@ -135,7 +135,7 @@ above).
 
 | Market | Source | Notes |
 |--------|--------|-------|
-| Europe | Eurostat `avia_paoa` (PAS_CRD pax, CAF_PAS flights) + `avia_gooa` (FRM_LD_NLD cargo, tonnes) | A single all-airports pull is rejected with HTTP 413 (async). The script enumerates reporting airports with a small `lastTimePeriod` call, then batch-fetches full series for **every** one of them in `rep_airp` chunks, splitting any chunk that still trips the 413 guard. **No cap and no volume ranking** — an earlier version kept only the "busiest 70" by summing whatever months the enumerate call returned, which stops being a size measure the moment the feed degrades (2026-07-26: Eurostat returned 3–5 months for some countries and none for others, so mid-size airports outranked Paris CDG at zero and CDG fell out of the catalogue). The cap only ever existed to bound the nightly Prophet build; that budget is cheap. Passenger composition is also pulled by transport coverage (`tra_cov` NAT/INTL) into `paxSeg`. |
+| Europe | Eurostat `avia_paoa` (PAS_CRD pax, CAF_PAS flights) + `avia_gooa` (FRM_LD_NLD cargo, tonnes) | A single all-airports pull is rejected with HTTP 413 (async). The script enumerates reporting airports with a small `lastTimePeriod` call, then batch-fetches full series for **every** one of them in `rep_airp` chunks, splitting any chunk that still trips the 413 guard. **No cap and no volume ranking** — an earlier version kept only the "busiest 70" by summing whatever months the enumerate call returned, which stops being a size measure the moment a pull decodes thin (2026-07-26: we read 3–5 months for some airports and none for others — our own query bug, see **Pin every dimension** below — so mid-size airports outranked Paris CDG at zero and CDG fell out of the catalogue). The cap only ever existed to bound the nightly Prophet build; that budget is cheap. Every dimension of the cube is pinned (`ES_PINS`). Passenger composition is also pulled by transport coverage (`tra_cov` NAT/INTL) into `paxSeg` — the one place `tra_cov` is deliberately varied. |
 | Canada | StatCan WDS — 23-10-0312 (screened pax) + 23-10-0296 (aircraft movements, with 23-10-0008 as fallback) | The eight CATSA Class-1 airports, resolved by airport name against the cube metadata. StatCan stopped updating the older movements cube 23-10-0008 after 2022-09, so the current cube 23-10-0296 ("NAV CANADA services and other selected airports") is tried first. Screened pax are also split by sector (domestic / transborder / international) into `paxSeg`. |
 | US | DOT BTS **T-100 segment, all carriers** — TranStats download form, per-year extracts (`scripts/fetch-bts.mjs`) | Live probing (Actions runs 48–59) established that DOT's Socrata catalogs carry only *annual* T-100 summaries and the PREZIP area holds unpredictable cached user extracts; the reliable monthly source is the table's own download form (`DL_SelectFields.aspx`). The fetcher requests one zip per year back to 2015: it GETs the form, harvests the WebForms hidden state and session cookies, posts the per-column checkboxes (YEAR, MONTH, ORIGIN, PASSENGERS, FREIGHT, DEPARTURES_PERFORMED) with `cboGeography=All`/`cboYear`/`cboPeriod=All`, unzips the reply with a dependency-free reader (picking the data CSV over the bundled field-description file) and aggregates BOTH ends of every segment so the measures match the catalogue's conventions: passengers = enplaned + deplaned (total passengers, the figure airports publish — origin-only sums would be enplanements, roughly half), movements = departures + arrivals, freight = tonnes loaded + unloaded (lbs→tonnes), matching Eurostat's PAS_CRD / CAF_PAS / FRM_LD_NLD definitions, by airport × month for the ~35 largest US gateways. Socrata is still tried first (it wins automatically if DOT ever publishes a monthly table there) and PREZIP remains a merge-safe fallback. Best-effort with last-good fallback; total failure exits non-zero into the pipeline-health issue. Note T-100 publishes with a ~2–3 month lag, so US `latest` months trail the European feed. |
 
@@ -143,6 +143,37 @@ Eurostat airport codes are `<geo>_<ICAO>` (e.g. `ES_LEMD`, `AT_LOWG`); the geo
 prefix gives the country (`EL`→GR, `UK`→GB, else ISO-3166 alpha-2). The country,
 ISO codes, region and display name ride on each airport in
 `activity-index.json`.
+
+#### Pin every dimension
+
+`avia_paoa` and `avia_gooa` are **seven-dimension** cubes — `freq`, `unit`,
+`tra_meas`, `rep_airp`, `schedule`, `tra_cov`, `time` — and `esDecode()` walks
+only two of them (`rep_airp` × `time`). Anything left unpinned in the query
+comes back with more than one category and the stride maths silently reads
+**category 0**, which is whatever sorts first, not whatever holds data.
+
+`schedule` is the trap: it carries two generations of codes whose labels are
+identical. `TOTAL` and `TOT` both read "Total" in the dataviewer. The old
+generation sorts first and is near-empty:
+
+| `schedule` | Frankfurt | Amsterdam | Madrid | Paris CDG |
+|---|---|---|---|---|
+| `TOTAL` (what we sent) | 5 | 3 | 3 | **0** |
+| `TOT` (where the data lives) | 133 | 135 | 135 | 132 |
+
+Same story on all three metrics. So every dimension is now pinned in one
+place —
+
+```js
+export const ES_PINS = { schedule: "TOT", tra_cov: "TOTAL" };
+```
+
+— spread into the enumerate, all three metric pulls and the segment pulls
+(`paxSeg` overrides `tra_cov` on purpose), and `esDecode()` **throws** rather
+than decode a response with any loose dimension. `scripts/probe-eurostat.mjs`
+(manual workflow `Probe Eurostat`) imports `ES_PINS` and `esDecode` from the
+fetcher and checks the real production query against the live API — re-run it
+whenever Eurostat changes shape or the pins are edited.
 
 ### Macro drivers — `data/macro.json` (`scripts/fetch-data.mjs`)
 Pulls three World Bank indicators for every country present in

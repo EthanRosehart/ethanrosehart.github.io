@@ -2,6 +2,47 @@
 
 Notable changes to Glidepath. Dates are UTC.
 
+## Unreleased — the Eurostat loss was our query, not their feed (2026-07)
+
+### Fixed
+- **Root cause of the overnight losses: we were reading the wrong `schedule`
+  code.** `avia_paoa`/`avia_gooa` are seven-dimension cubes and `esDecode()`
+  walks only `rep_airp` × `time`; we pinned `unit` and `tra_meas` and left
+  `schedule` and `tra_cov` open, so the stride maths silently read category 0
+  of each. `schedule` carries two generations of codes with *identical*
+  labels — `TOTAL` and `TOT` both display as "Total" — and the older,
+  near-empty one sorts first. Measured against the live API: Frankfurt
+  decoded 5 months on `TOTAL` versus 133 on `TOT`, Amsterdam 3 vs 135, Madrid
+  3 vs 135, and Paris CDG **0 vs 132** — which is why CDG disappeared from
+  the catalogue entirely. Same on all three metrics. Every dimension is now
+  pinned through one exported `ES_PINS`, applied to the enumerate, all three
+  metric pulls and the segment pulls.
+- `esDecode()` no longer guesses. Any dimension other than `rep_airp`/`time`
+  arriving with more than one category throws, naming the offenders, instead
+  of quietly decoding category 0. That is the guard that would have caught
+  this on day one.
+- Everything shipped before this — sticky membership, `chooseSeries`, the
+  mass-drop alert, exit-code tiering — was correct and stays, but it was
+  treating the symptom. The 29 gateways those guards were holding on last-good
+  history should come back live on the next nightly.
+
+### Added
+- `scripts/probe-eurostat.mjs` + the manual **Probe Eurostat** workflow. The
+  dev sandbox can't reach `ec.europa.eu`, so there was no way to check this
+  code against the real API; the probe runs from an Actions runner and
+  imports `ES_PINS`/`esDecode` from `fetch-activity`, so it verifies the
+  *production* query, not a copy of it. It checks 8 gateways × 3 metrics for
+  ≥100 months, that the enumerate decodes the whole catalogue (413 airports
+  with the fix, 252 with the bug) including CDG, that a production-sized
+  batch still returns full history, and that an unpinned query throws. Exits
+  non-zero, so a red run means the nightly is about to decode hollow
+  snapshots. Verified green against the live API before merge.
+
+### Note
+- Earlier entries and issue comments describing this as a *degraded Eurostat
+  feed* were wrong. The feed was healthy the whole time; the export from the
+  dataviewer is what proved it and redirected the search to our own query.
+
 ## Unreleased — tell a degraded feed apart from a crash (2026-07)
 
 ### Fixed
@@ -10,8 +51,9 @@ Notable changes to Glidepath. Dates are UTC.
   `fetch-activity` exits non-zero in two very different situations — it
   crashed, or a feed answered with nothing usable and every airport was kept
   on its committed history — and the workflow could only see "non-zero". The
-  2026-07-26 06:13 run was the second kind: Eurostat returned 3–6 months per
-  airport, 165 series were held on last-good, zero airports were dropped,
+  2026-07-26 06:13 run was the second kind: we decoded 3–6 months per airport
+  (the `schedule` bug fixed above, not Eurostat), 165 series were held on
+  last-good, zero airports were dropped,
   zero histories shrank, and the snapshot committed and validated. It still
   paged as a crash. The degraded case now exits **2** and is tiered as a
   note; a genuine crash keeps exit 1 and the (now accurate) alert.
@@ -39,9 +81,9 @@ Notable changes to Glidepath. Dates are UTC.
   The cap arrived as a side effect of an unrelated build-tooling commit
   (`1d2d4f4`, 2026-07-01) and was never a deliberate product decision; it
   existed only to bound the nightly Prophet build, which is cheap. The
-  ranking it fed was also actively harmful once the feed degraded: it summed
-  whatever months came back, so on 2026-07-26 a mid-size airport returning 5
-  months outranked Paris CDG returning zero.
+  ranking it fed was also actively harmful once a pull came back thin: it
+  summed whatever months decoded, so on 2026-07-26 a mid-size airport at 5
+  months outranked Paris CDG at zero.
 
 ### Fixed
 - **Catalogue membership is now sticky, which is the root cause behind the

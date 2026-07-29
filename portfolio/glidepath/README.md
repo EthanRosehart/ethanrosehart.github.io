@@ -315,6 +315,16 @@ extrapolation math), plus three real (small) Prophet fits through
 (forecasts just stop updating), and it's worth the ~2 minutes to catch it in
 CI instead.
 
+One suite runs on demand rather than on push:
+[`.github/workflows/probe-eurostat.yml`](../../.github/workflows/probe-eurostat.yml)
+(`scripts/probe-eurostat.mjs`) checks the **live** Eurostat query — it imports
+`ES_PINS` and `esDecode` from `fetch-activity.mjs`, so it exercises the real
+production configuration rather than a copy, and goes red if the API starts
+returning something the decoder would misread. It hits a third-party API, so
+it's manual dispatch plus pushes that actually touch the fetcher or the probe.
+See [Pin every dimension](data/README.md#pin-every-dimension) for what it
+caught.
+
 ## Deploying
 
 Part of the root [ethanrosehart.github.io](../../README.md) GitHub Pages

@@ -52,6 +52,22 @@ test("esDecode: malformed payload throws instead of returning junk", () => {
   assert.throws(() => esDecode({ id: ["time"], size: [1] }, "avia_paoa"));
 });
 
+test("esDecode: an unpinned dimension throws rather than silently reading category 0", () => {
+  // The July 2026 catalogue loss in miniature. avia_paoa's `schedule`
+  // dimension carries two generations of codes with the same label —
+  // "TOTAL" and "TOT" both read "Total" — and the near-empty one sorts
+  // first. Reading category 0 of a dimension nobody pinned decoded 5
+  // months for Frankfurt instead of 133, and nothing at all for Paris CDG.
+  const loose = structuredClone(JSONSTAT_FIXTURE);
+  const i = loose.id.indexOf("unit");
+  assert.ok(i >= 0, "fixture should carry a pinnable dimension");
+  loose.size[i] = 3;                       // pretend Eurostat widened it
+  assert.throws(() => esDecode(loose, "avia_paoa"), /not pinned to a single category/);
+
+  // and the pinned fixture still decodes, so the guard isn't just refusing
+  assert.ok(Object.keys(esDecode(JSONSTAT_FIXTURE, "avia_paoa")).length > 0);
+});
+
 test("normMonth: Eurostat 2024M03 and plain 2024-03 both normalize", () => {
   assert.equal(normMonth("2024M03"), "2024-03");
   assert.equal(normMonth("2024-03"), "2024-03");

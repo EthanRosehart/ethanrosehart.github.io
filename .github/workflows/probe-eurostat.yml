@@ -1,0 +1,43 @@
+name: Probe Eurostat
+
+# Diagnostic, not part of the nightly. The dev sandbox can't reach
+# ec.europa.eu, but an Actions runner can — so this runs the probe from a
+# machine that sees the API the same way fetch-activity.mjs does at 03:17.
+#
+# Kept (not deleted) because it verifies the REAL production query: it
+# imports ES_PINS and esDecode from fetch-activity, so re-run it whenever
+# Eurostat changes shape or the pins are edited. Exits non-zero on a failed
+# check, so a red run means the nightly is about to decode hollow snapshots.
+#
+# Triggers: manual dispatch, plus a push that actually touches the probe or
+# the fetcher it verifies. It hits a third-party API, so the path filter
+# keeps it from firing on unrelated work. Read-only: no commits, no issues,
+# no secrets.
+
+on:
+  workflow_dispatch: {}
+  push:
+    branches: ["claude/**"]
+    paths:
+      - "portfolio/glidepath/scripts/probe-eurostat.mjs"
+      - "portfolio/glidepath/scripts/fetch-activity.mjs"
+      - ".github/workflows/probe-eurostat.yml"
+
+permissions:
+  contents: read
+
+jobs:
+  probe:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+
+      - name: Probe Eurostat
+        working-directory: portfolio/glidepath
+        run: node scripts/probe-eurostat.mjs
