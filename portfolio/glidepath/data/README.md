@@ -348,9 +348,17 @@ the short-term model chosen above (or the one the visitor toggled to) — so the
 strategic curve starts from where the tactical model says this year lands rather
 than from a year that may be well over a year stale. Each metric is completed by
 its own tactical forecast, falling back to the prior year's same month when no
-model can reach it; `GP_longTerm` returns `baseMode`, `baseObservedMonths`,
-`baseForecastMonths`, `baseCompletion` and `baseModel` so every screen showing a
-base-year number can disclose how it was assembled. The Long-term screen has a
+model can reach it. Each metric resolves its *own* missing months, not
+passengers' — the feeds publish at different lags (YYZ: passengers through May,
+movements through April), and applying one gap set to all of them dropped
+movements out of the strategic view on 8 gateways. There is deliberately no
+flat-annual-average rung: cargo is published monthly, and projecting it off
+`annualCargo/12` erased its seasonal shape and took its level from a year that
+needn't be the base year. `GP_longTerm` returns `baseMode`, `baseObservedMonths`,
+`baseForecastMonths`, `baseModeledMonths` (per metric), `baseCompletion`,
+`baseModel` and `baseMonthly` (the base year's own twelve months, each flagged
+per metric — the monthly chart needs them to stay continuous) so every screen
+showing a base-year number can disclose how it was assembled. The Long-term screen has a
 **Last full year** switch that reverts to the old observed-only base — a modeled
 base year inherits the tactical model's error into every projected year, and that
 trade is the user's to make.

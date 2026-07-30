@@ -656,51 +656,27 @@ function defaultScenario(iata){
 
    Both builders return the same shape, plus a disclosure of which months were
    modeled and by which model, so every screen can say so. */
-function observedBase(history){
-  const paxYears = fullYears(history, "pax");
-  if (!paxYears.length) return null;
-  const baseYear = paxYears[paxYears.length-1].y;
-  const annualPax = paxYears[paxYears.length-1].v;
-  const baseMonths = history.filter(r => r.y===baseYear && r.pax!=null).sort((a,b)=>a.m-b.m);
-  if (baseMonths.length < 12) return null;
+/* Assemble one base year's twelve months for every metric, from a single
+   cascade: the published observation → (forecast mode only) that metric's own
+   tactical forecast → the prior year's same month. A metric that still can't be
+   resolved is dropped, and reported as dropped.
 
-  const atmYears = fullYears(history, "atm");
-  const cargoYears = fullYears(history, "cargo");
-  const annualAtm = atmYears.length ? atmYears[atmYears.length-1].v : null;
-  const annualCargo = cargoYears.length ? cargoYears[cargoYears.length-1].v : null;
-  const basePax = {}, baseAtm = {}, baseCargo = {};
-  baseMonths.forEach(r => { basePax[r.m] = r.pax; if (r.atm != null) baseAtm[r.m] = r.atm; if (r.cargo != null) baseCargo[r.m] = r.cargo; });
-  const hasAtm = annualAtm != null && baseMonths.every(r => r.atm != null);
-  const hasCargo = annualCargo != null;
-  return { mode:"observed", baseYear, annualPax, annualAtm, annualCargo, hasAtm, hasCargo,
-    basePax, baseAtm, baseCargo,
-    // a month missing from a metric falls back to that metric's own monthly
-    // average — only reachable for cargo, whose completeness test is the annual
-    // roll-up rather than all twelve base months
-    atmMonthAvg: hasAtm ? annualAtm/12 : null,
-    cargoMonthAvg: hasCargo ? annualCargo/12 : null,
-    forecastMonths:[], completion:{}, model:null, modeledMonths:{}, gaps:{} };
-}
-
-function forecastBase(iata, history, model){
-  const paxRows = history.filter(r => r.pax != null);
-  if (!paxRows.length) return null;
-  const baseYear = paxRows[paxRows.length-1].y;
-
+   There is deliberately NO flat-annual-average rung. The observed-mode builder
+   used to fall back to `annualCargo/12` for any base month cargo was missing,
+   taking that level from cargo's *own* last complete year — which needn't be the
+   base year — and flattening the metric's entire seasonal shape, with nothing on
+   screen to say so. Cargo is published monthly; there is no reason to project it
+   off an annual average. Unreachable on today's feeds (0 of 438 cargo gateways),
+   but only by luck of their publishing lag, and silent if it ever fired. */
+function buildBase(iata, history, baseYear, useModel, model){
   const obs = {}, prior = {};
   METRIC_KEYS.forEach(k => { obs[k] = {}; prior[k] = {}; });
   history.forEach(r => {
     const into = r.y === baseYear ? obs : (r.y === baseYear-1 ? prior : null);
     if (into) METRIC_KEYS.forEach(k => { if (r[k] != null) into[k][r.m] = r[k]; });
   });
-  if (Object.keys(obs.pax).length >= 12) return null;   // whole year — observedBase's job
 
   const completion = {}, gapsOf = {};
-  /* observed month → that metric's own tactical forecast → the prior year's
-     same month. The last rung matters: a gateway can publish passengers
-     monthly but movements or cargo on a lag, and dropping movements out of the
-     strategic view because the tactical model doesn't cover them would be a
-     worse answer than carrying last year's month forward and saying so. */
   const fill = (k) => {
     const out = { ...obs[k] };
     if (!Object.keys(out).length) return null;
@@ -712,7 +688,7 @@ function forecastBase(iata, history, model){
     for (let m=0; m<12; m++) if (out[m] == null) gaps.push(m);
     gapsOf[k] = gaps;
     if (!gaps.length) return out;            // already whole — nothing modeled
-    const st = tacticalForecast(iata, k, history, model);
+    const st = useModel ? tacticalForecast(iata, k, history, model) : null;
     const byM = {};
     if (st) st.forecast.forEach(r => { if (r.y === baseYear) byM[r.m] = r.v; });
     let usedModel = false, usedCarry = false;
@@ -728,23 +704,41 @@ function forecastBase(iata, history, model){
   const basePax = fill("pax");
   if (!basePax) return null;
   const baseAtm = fill("atm"), baseCargo = fill("cargo");
-  const missing = gapsOf.pax || [];
   const sum = (o) => Math.round(Object.keys(o).reduce((t,m)=>t+o[m], 0));
-  return { mode:"forecast", baseYear,
+  return { baseYear,
+    // every annual total is now the base year's OWN twelve months, so the base
+    // row can't disagree with the monthly shape it's charted against
     annualPax: sum(basePax),
     annualAtm: baseAtm ? sum(baseAtm) : null,
     annualCargo: baseCargo ? sum(baseCargo) : null,
     hasAtm: !!baseAtm, hasCargo: !!baseCargo,
     basePax, baseAtm: baseAtm || {}, baseCargo: baseCargo || {},
-    // every month is filled by construction above, so no averaging fallback
-    atmMonthAvg: null, cargoMonthAvg: null,
-    forecastMonths: missing, completion, model: completion.pax || null,
+    forecastMonths: gapsOf.pax || [], completion, model: completion.pax || null,
     // per metric, since the feeds publish at different lags — the disclosure
     // would otherwise report passengers' count for movements too
     modeledMonths: { pax:(gapsOf.pax||[]).length,
       ...(baseAtm ? { atm:(gapsOf.atm||[]).length } : {}),
       ...(baseCargo ? { cargo:(gapsOf.cargo||[]).length } : {}) },
     gaps: gapsOf };
+}
+
+function observedBase(history){
+  const paxYears = fullYears(history, "pax");
+  if (!paxYears.length) return null;
+  // the last COMPLETE pax year, and no model is consulted — so passengers are
+  // never modeled on this path, whatever the other metrics need
+  const base = buildBase(null, history, paxYears[paxYears.length-1].y, false, null);
+  return base ? { ...base, mode:"observed" } : null;
+}
+
+function forecastBase(iata, history, model){
+  const paxRows = history.filter(r => r.pax != null);
+  if (!paxRows.length) return null;
+  const baseYear = paxRows[paxRows.length-1].y;
+  // a whole latest year needs no completing — that IS observedBase's job
+  if (history.filter(r => r.y===baseYear && r.pax!=null).length >= 12) return null;
+  const base = buildBase(iata, history, baseYear, true, model);
+  return base ? { ...base, mode:"forecast" } : null;
 }
 
 /* The base year depends on the history, the mode and the chosen model — never on
@@ -775,7 +769,7 @@ function longTermForecast(iata, history, scenario, opts){
   const base = baseYearFor(iata, history, o.baseMode || "forecast", o.model);
   if (!base) return null;
   const { baseYear, annualPax, annualAtm, annualCargo, hasAtm, hasCargo,
-    basePax, baseAtm, baseCargo, atmMonthAvg, cargoMonthAvg } = base;
+    basePax, baseAtm, baseCargo } = base;
 
   const gIncome  = s.gdp * s.elasticity;
   const gPop     = s.pop;
@@ -886,8 +880,10 @@ function longTermForecast(iata, history, scenario, opts){
     const rec = { y:yy, m:mm, date:`${yy}-${String(mm+1).padStart(2,"0")}`,
       label:`${MONTHS[mm]} ${String(yy).slice(2)}`, pax:Math.round(pax) };
     if (segRec)   rec.seg   = segRec;
-    if (hasAtm)   rec.atm   = Math.round((baseAtm[mm]   != null ? baseAtm[mm]   : atmMonthAvg)   * Math.pow(1+gMovements, yf));
-    if (hasCargo) rec.cargo = Math.round((baseCargo[mm] != null ? baseCargo[mm] : cargoMonthAvg) * Math.pow(1+gCargo, yf));
+    // buildBase resolves all twelve months for any metric it reports, so these
+    // are always the metric's own real (or disclosed-modeled) month
+    if (hasAtm)   rec.atm   = Math.round(baseAtm[mm]   * Math.pow(1+gMovements, yf));
+    if (hasCargo) rec.cargo = Math.round(baseCargo[mm] * Math.pow(1+gCargo, yf));
     if (events.length){
       let touched = false;
       const paxBefore = rec.pax;   // pre-shock total, drives the movements coupling below

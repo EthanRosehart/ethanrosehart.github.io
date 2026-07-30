@@ -110,12 +110,22 @@ function LongTerm({ airport, history, scenario, ltOpts, baseMode, setBaseMode, g
             <br/><br/>
             <b>The trade —</b> a modeled base year inherits the tactical model&rsquo;s error into all {lt.endYear-lt.baseYear} projected
             years. <em>Last full year</em> removes that at the cost of compounding a base that may be stale, or unusual.
-          </> : <>
-            <b>Fully observed —</b> {lt.baseYear} is complete in the data, so nothing here is modeled: all twelve months
-            are real filings and the projection compounds off the actual annual total.
-            {baseMode === "observed" && <> This gateway also has no later partial year to complete, so
-              <em> Forecast-completed</em> would resolve to the same year.</>}
-          </>}
+          </> : (()=>{
+            /* "nothing is modeled" is a claim about PASSENGERS. A metric that
+               publishes on a lag can still have been carried from the prior year
+               even in a complete base year, and saying otherwise would overstate
+               it. (No gateway hits this on today's feeds — it's the disclosure
+               keeping pace with what the base-year builder can actually do.) */
+            const label = { atm:"movements", cargo:"cargo" };
+            const carried = ["atm","cargo"].filter(k => lt.baseModeledMonths[k] > 0).map(k=>label[k]);
+            return (<>
+              <b>{carried.length ? "Observed passengers" : "Fully observed"} —</b> {lt.baseYear} is complete for
+              passengers, so the headline compounds off twelve real filings and the actual annual total.
+              {carried.length ? <> {carried.join(" and ")}, however, {carried.length>1?"publish":"publishes"} on a
+                lag, so {carried.length>1?"their":"its"} missing months carry the prior year&rsquo;s same month.</> : null}
+              {baseMode === "observed" && <> This gateway also has no later partial year to complete, so
+                <em> Forecast-completed</em> would resolve to the same year.</>}</>);
+          })()}
         </div>
       </div>
 
