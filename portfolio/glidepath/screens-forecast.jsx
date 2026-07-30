@@ -267,7 +267,12 @@ function ShortTerm({ airport, history, stModel, setStModel }){
   const inBrowser = d.st.source === "browser";
   const modelName = meta.label;
   // an override is only "overridden" if it actually differs from the auto-pick
-  const overridden = !inBrowser && d.st.method !== d.st.chosen;
+  // set = the visitor has forced a model. That is NOT the same as `method !==
+  // chosen`: a metric that doesn't carry the forced candidate silently falls
+  // back to its own auto-pick, and the revert control has to stay reachable
+  // anyway, since the override is still in force for the other metrics.
+  const overridden = !inBrowser && !!stModel;
+  const overrideApplied = overridden && d.st.method === stModel;
   const unit = metric==="cargo" ? (v=>GP_fmt.k(v)+"t") : (v=>GP_fmt.k(v));
   const next12 = d.fc.slice(0,12);
   const next12sum = next12.reduce((s,r)=>s+r.v,0);
@@ -325,8 +330,11 @@ function ShortTerm({ airport, history, stModel, setStModel }){
             incumbent rather than a footnote). The numbers on the buttons are MASE — or MAPE, where this
             series has no year-on-year variation for MASE to scale by. Every candidate was trained on the
             same months and scored on the same holdouts, so they're directly comparable.
-            {overridden && <> You&rsquo;re currently overriding it with <b>{meta.label}</b> — the whole page,
+            {overrideApplied && <> You&rsquo;re currently overriding it with <b>{meta.label}</b> — the whole page,
             including the long-term base year, follows this choice.</>}
+            {overridden && !overrideApplied && <> You&rsquo;ve forced <b>{(GP_MODEL_META[stModel]||{}).label}</b>, but
+            this metric doesn&rsquo;t carry that candidate, so it&rsquo;s showing its own pick
+            (<b>{meta.label}</b>). The override still applies to the metrics that do.</>}
           </div>
         </div>
       )}
@@ -353,9 +361,10 @@ function ShortTerm({ airport, history, stModel, setStModel }){
         <div style={{display:"flex",gap:18,marginTop:12,flexWrap:"wrap",alignItems:"center"}}>
           <span className="legend-item"><span className="legend-line" style={{borderColor:"var(--text)"}}></span>Actual ({GP_sourceLabel(GP_activityFor(airport.iata).source)})</span>
           <span className="legend-item"><span className="legend-line" style={{borderColor:"var(--pink)",borderStyle:"dashed"}}></span>{modelName} forecast</span>
-          {/* only Prophet's band is a sampled posterior — the closed-form ones
-              say so rather than borrowing its authority */}
-          <span className="legend-item"><span className="legend-swatch" style={{background:"var(--pink)",opacity:.3}}></span>{d.st.method==="prophet"?Math.round((GP_FORECAST_META?.interval||0.8)*100)+"% interval (P10–P90)":"80% interval (approx.)"}</span>
+          {/* the band is the model's own, rescaled to the coverage it actually
+              achieved on held-out months — see the model card */}
+          <span className="legend-item"><span className="legend-swatch" style={{background:"var(--pink)",opacity:.3}}></span>
+            {Math.round((GP_FORECAST_META?.interval||0.8)*100)}% interval{d.st.bandScale!=null?" (backtest-calibrated)":" (uncalibrated)"}</span>
         </div>
       </div>
 
@@ -391,7 +400,7 @@ function ShortTerm({ airport, history, stModel, setStModel }){
           <SectionHead kicker="Under the hood" title="Model card"/>
           <div style={{display:"flex",flexDirection:"column",gap:0}}>
             {[
-              ["Model", meta.label + (overridden ? " · your override" : d.st.chosen===d.st.method && !inBrowser ? " · auto-picked" : "")],
+              ["Model", meta.label + (overrideApplied ? " · your override" : (!inBrowser && d.st.chosen===d.st.method) ? " · auto-picked" : "")],
               ...(d.st.method==="snaive" ? [
                 ["Method","Seasonal naive · last observed same month"],
                 ["Seasonality","Carried, not fitted"],
@@ -416,7 +425,9 @@ function ShortTerm({ airport, history, stModel, setStModel }){
               ["MAPE", d.st.mape!=null?("±"+d.st.mape+"%"+(nFolds>1?` (folds ${d.st.mapeFolds.join(" / ")})`:"")):"—"],
               ...(d.st.naiveMase!=null?[["vs seasonal-naïve", "MASE "+d.st.naiveMase.toFixed(3)
                 +(d.st.naiveMape!=null?` · ±${d.st.naiveMape}%`:"")]]:[]),
-              ...(d.st.coverage!=null?[["80% band coverage", d.st.coverage+"% of held-out months"]]:[]),
+              ...(d.st.coverage!=null?[["Raw band coverage", d.st.coverage+"% of held-out months"]]:[]),
+              ...(d.st.bandScale!=null?[["Band calibration", "\u00d7"+d.st.bandScale.toFixed(2)
+                +(d.st.coverageCal!=null?` \u2192 ${d.st.coverageCal}%`:"")]]:[]),
               ["Refresh", inBrowser ? "Live · in this browser" : "Nightly · server-side"],
             ].map((r,i,arr)=>{
               const mono = r[0]==="Backtest"||r[0]==="Accuracy"||r[0]==="MAPE";
@@ -436,11 +447,21 @@ function ShortTerm({ airport, history, stModel, setStModel }){
             where MAPE runs into the thousands of percent and says nothing. Model selection uses MASE alone;
             MAPE is shown because planners recognise it, but it decides nothing.
           </div>
-          {d.st.coverage!=null && d.st.coverage < 65 && <div className="method" style={{marginTop:14}}>
-            <b>Read the band with caution —</b> only {d.st.coverage}% of held-out months landed inside this
-            model&rsquo;s 80% interval, so the interval is narrower than the errors it&rsquo;s meant to cover.
-            The point forecast is scored above on its own terms; the band is not yet calibrated against
-            measured coverage.
+          {d.st.bandScale!=null && <div className="method" style={{marginTop:14}}>
+            <b>Band calibration —</b> this model&rsquo;s own band covered {d.st.coverage}% of held-out months
+            against a nominal 80%, so the plotted interval is scaled by <b>&times;{d.st.bandScale.toFixed(2)}</b> —
+            {d.st.bandScale < 1 ? " tightened, because the raw band was wider than the errors it needed to cover"
+              : " widened, because the raw band was narrower than the errors it needed to cover"}. The factor is
+            the 80th percentile of each held-out month&rsquo;s error measured in units of its own band.
+            {d.st.coverageCal!=null && <> On those months the scaled band covers {d.st.coverageCal}% — but the
+            factor was fitted on exactly those months, so treat that as in-sample, not a fresh measurement.</>}
+            {" "}The held-out chart above shows the <em>raw</em> band, which is what the model actually claimed at
+            the time.
+          </div>}
+          {(d.st.coverageCal ?? d.st.coverage) != null && (d.st.coverageCal ?? d.st.coverage) < 65 && <div className="method" style={{marginTop:14}}>
+            <b>Read the band with caution —</b> even after calibration only {d.st.coverageCal ?? d.st.coverage}% of
+            held-out months fall inside the interval. The calibration is clamped, so a model whose errors are this
+            far outside its own band can&rsquo;t be stretched into honesty — read the point forecast, not the range.
           </div>}
           {d.st.method==="snaive" && <div className="method" style={{marginTop:14}}>
             <b>What the seasonal naïve is —</b> every month simply repeats the most recent observed value for

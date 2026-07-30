@@ -364,6 +364,87 @@ def test_choose_model_falls_back_to_mae_when_the_mase_scale_degenerates(bf):
     assert chosen == "prophet" and "MASE" in reason
 
 
+# ---- band calibration -------------------------------------------------------
+
+def test_quantile_interpolates_and_handles_degenerate_inputs(bf):
+    assert bf.quantile([1, 2, 3, 4, 5], 0.0) == pytest.approx(1.0)
+    assert bf.quantile([1, 2, 3, 4, 5], 1.0) == pytest.approx(5.0)
+    assert bf.quantile([1, 2, 3, 4, 5], 0.5) == pytest.approx(3.0)
+    assert bf.quantile([0, 10], 0.8) == pytest.approx(8.0)     # interpolated
+    assert bf.quantile([7], 0.8) == pytest.approx(7.0)
+    assert bf.quantile([], 0.8) is None
+
+
+def test_band_scale_widens_a_band_that_was_too_narrow(bf):
+    # every held-out month landed ~2x outside its own band -> the band needs
+    # roughly doubling to cover what it claims
+    assert bf.band_scale_of([2.0] * 20) == pytest.approx(2.0)
+
+
+def test_band_scale_tightens_a_band_that_was_too_wide(bf):
+    # errors all well inside the band (a nominal 80% covering 100%) -> tighten
+    scale = bf.band_scale_of([0.3] * 20)
+    assert scale is not None and scale < 1.0
+
+
+def test_band_scale_is_clamped_at_both_ends(bf):
+    # a handful of held-out months can throw an extreme quantile; a 30x band is
+    # less useful than an honestly-wrong one
+    assert bf.band_scale_of([50.0] * 20) == pytest.approx(bf.BAND_SCALE_MAX)
+    assert bf.band_scale_of([0.0001] * 20) == pytest.approx(bf.BAND_SCALE_MIN)
+    assert bf.band_scale_of([]) is None
+    assert bf.band_scale_of([0.0, 0.0]) is None, "a perfect fit gives no scale to apply"
+
+
+def test_apply_band_scale_preserves_asymmetry_and_the_point_forecast(bf):
+    # Prophet's posterior isn't symmetric around yhat and a naive band clamps at
+    # zero, so scaling must stretch each side about v independently
+    v, lo, hi = bf.apply_band_scale(100.0, 90.0, 130.0, 2.0)
+    assert v == 100.0, "the point forecast must never move"
+    assert lo == pytest.approx(80.0)    # 10 below -> 20 below
+    assert hi == pytest.approx(160.0)   # 30 above -> 60 above
+    assert bf.apply_band_scale(100.0, 90.0, 130.0, None) == (100.0, 90.0, 130.0)
+
+
+def test_rolling_backtest_reports_a_calibration_that_actually_lands_near_nominal(bf):
+    monthly = {}
+    for i in range(60):
+        y, m = 2020 + i // 12, i % 12 + 1
+        seasonal = 1.0 + 0.3 * (1 if m in (6, 7, 8) else -0.2 if m in (1, 2) else 0)
+        monthly[f"{y}-{m:02d}"] = round(100000 * (1.004 ** i) * seasonal)
+    bt = bf.rolling_backtest(bf.series_frame(monthly), pd.DataFrame(columns=["holiday", "ds"]), folds=1)
+    for name, c in bt.items():
+        assert c["band_scale"] is None or c["band_scale"] > 0, f"{name}: a non-positive scale would invert the band"
+        if c["coverage_cal"] is not None and c["band_scale"] not in (bf.BAND_SCALE_MIN, bf.BAND_SCALE_MAX):
+            # unclamped, the calibrated band should sit near the nominal interval
+            assert 60 <= c["coverage_cal"] <= 100, f"{name}: calibrated coverage {c['coverage_cal']}%"
+
+
+def test_forecast_metric_calibrates_the_forward_band_but_not_the_backtest_rows(bf):
+    # The forward band ships calibrated. The held-out rows deliberately keep
+    # their RAW band: the factor was fitted on exactly those months, so widening
+    # them would flatter the model on its own training data.
+    monthly = {}
+    for i in range(72):
+        y, m = 2019 + i // 12, i % 12 + 1
+        seasonal = 1.0 + 0.3 * (1 if m in (6, 7, 8) else -0.2 if m in (1, 2) else 0)
+        monthly[f"{y}-{m:02d}"] = round(100000 * (1.004 ** i) * seasonal)
+    res = bf.forecast_metric("ES", monthly, 24)
+    assert res is not None
+    assert "band_scale" in res and "coverage_cal" in res
+
+    raw = bf.rolling_backtest(bf.series_frame(monthly), pd.DataFrame(columns=["holiday", "ds"]))
+    scale = res["band_scale"]
+    if scale and abs(scale - 1.0) > 0.05:
+        chosen_raw = raw[res["chosen"]]["backtest"]
+        assert res["backtest"] == chosen_raw, "held-out rows must keep the band the model actually claimed"
+        # and the forward rows must reflect the scale
+        widened = [r for r in res["forecast"] if r["hi"] > r["v"]]
+        assert widened, "a scaled band still has to have width"
+    for r in res["forecast"]:
+        assert 0 <= r["lo"] <= r["v"] <= r["hi"], "calibration must not invert or negate a band"
+
+
 def test_rolling_backtest_returns_none_when_history_is_too_short(bf):
     df = bf.series_frame({f"2024-{m:02d}": 100 for m in range(1, 13)})  # 12 months
     assert bf.rolling_backtest(df, pd.DataFrame(columns=["holiday", "ds"])) is None

@@ -96,6 +96,11 @@ CANDIDATES = ("snaive", "ets", "prophet")
 # silently changes for no real reason.
 SELECT_MARGIN = 0.05
 
+# Bounds on the band calibration factor (see band_scale_of). A few held-out
+# months can throw an extreme quantile, and a 30x-wide band is less useful than
+# an honestly-wrong one.
+BAND_SCALE_MIN, BAND_SCALE_MAX = 0.25, 4.0
+
 # ETS smoothing grid, scored on one-step error. phi is the damping factor;
 # 1.0 is an undamped Holt-Winters, so the grid spans both.
 ETS_GRID = {
@@ -282,6 +287,53 @@ def mape_of(preds, actuals):
     if not pairs:
         return None
     return sum(abs(p - a) / a for p, a in pairs) / len(pairs) * 100
+
+
+def quantile(vals, q):
+    """Empirical q-quantile, linearly interpolated. None on an empty list."""
+    if not vals:
+        return None
+    s = sorted(vals)
+    if len(s) == 1:
+        return s[0]
+    pos = q * (len(s) - 1)
+    lo = int(pos)
+    hi = min(lo + 1, len(s) - 1)
+    return s[lo] + (s[hi] - s[lo]) * (pos - lo)
+
+
+def band_scale_of(abs_z):
+    """How much a candidate's own prediction band has to be stretched (or
+    shrunk) for it to actually cover what it claims.
+
+    Each held-out month contributes |actual − forecast| divided by that month's
+    own one-sided band half-width, so `abs_z` is in units of "claimed bands".
+    The INTERVAL-th quantile of that is the factor which would have put exactly
+    INTERVAL of the held-out months inside the band. > 1 widens a band that was
+    too narrow, < 1 tightens one that was too wide.
+
+    This is needed because the three candidates derive their bands three
+    incompatible ways — Prophet samples a posterior, ETS grows from in-sample
+    residuals, the seasonal naive uses a seasonal-random-walk sigma — and
+    measured coverage of a nominal 80% band ran at a median 39% for Prophet and
+    100% for the naive. A published "80% interval" that covers 39% (or 100%) of
+    held-out months is simply mislabelled, whichever direction it errs in.
+
+    Clamped: a handful of held-out months can produce an absurd quantile, and a
+    30x band is less useful than an honestly-wrong one. None when nothing
+    scoreable."""
+    scale = quantile([z for z in abs_z if z is not None], INTERVAL)
+    if scale is None or scale <= 0:
+        return None
+    return round(min(BAND_SCALE_MAX, max(BAND_SCALE_MIN, scale)), 3)
+
+
+def apply_band_scale(v, lo, hi, scale):
+    """Stretch a band around its own point forecast, keeping any asymmetry
+    (Prophet's posterior is not symmetric, and a naive band clamps at zero)."""
+    if not scale:
+        return v, lo, hi
+    return v, v - (v - lo) * scale, v + (hi - v) * scale
 
 
 def mae_of(preds, actuals):
@@ -541,7 +593,7 @@ def rolling_backtest(df, hol_df, folds=BACKTEST_FOLDS, holdout=BACKTEST_H,
                   shipped so the UI can show what the model got wrong
     }, omitting any candidate that never scored. None when even one fold can't
     be formed (needs 24 training months)."""
-    acc = {n: {"mase": [], "mape": [], "mae": [], "hits": 0, "n_int": 0, "detail": None}
+    acc = {n: {"mase": [], "mape": [], "mae": [], "abs_z": [], "hits": 0, "n_int": 0, "detail": None}
            for n in CANDIDATES}
     scored_any = False
     for i in range(1, folds + 1):
@@ -578,10 +630,16 @@ def rolling_backtest(df, hol_df, folds=BACKTEST_FOLDS, holdout=BACKTEST_H,
                 continue
             scored_any = True
             for ds in months:
-                _, lo, hi = path[ds]
+                v, lo, hi = path[ds]
                 a["n_int"] += 1
                 if lo <= actual[ds] <= hi:
                     a["hits"] += 1
+                # distance to the actual in units of this month's own band, on
+                # the side the error actually fell — the raw material for the
+                # band calibration below
+                half = (hi - v) if actual[ds] > v else (v - lo)
+                if half > 0:
+                    a["abs_z"].append(abs(actual[ds] - v) / half)
             if i == 1:
                 a["detail"] = [
                     {"date": f"{ds.year}-{ds.month:02d}",
@@ -598,6 +656,7 @@ def rolling_backtest(df, hol_df, folds=BACKTEST_FOLDS, holdout=BACKTEST_H,
         a = acc[name]
         if not a["mase"] and not a["mape"] and not a["mae"]:
             continue
+        scale = band_scale_of(a["abs_z"])
         out[name] = {
             "mase": round(sum(a["mase"]) / len(a["mase"]), 3) if a["mase"] else None,
             "mase_folds": [round(m, 3) for m in a["mase"]],
@@ -605,7 +664,13 @@ def rolling_backtest(df, hol_df, folds=BACKTEST_FOLDS, holdout=BACKTEST_H,
             "mape_folds": [round(m, 1) for m in a["mape"]],
             # only load-bearing when MASE degenerates (see choose_model)
             "mae": round(sum(a["mae"]) / len(a["mae"]), 1) if a["mae"] else None,
+            # coverage of the model's RAW band, measured out-of-sample. Stays
+            # the honest headline number; the calibration below is fitted on
+            # these same months, so its coverage can't claim to be out-of-sample.
             "coverage": round(a["hits"] / a["n_int"] * 100) if a["n_int"] else None,
+            "band_scale": scale,
+            "coverage_cal": (round(sum(1 for z in a["abs_z"] if z <= scale) / len(a["abs_z"]) * 100)
+                             if (scale and a["abs_z"]) else None),
             "backtest": a["detail"] or [],
         }
     return out or None
@@ -638,15 +703,17 @@ def top_holidays(fc, names, k=5):
     return [c for c, _ in scored[:k]]
 
 
-def forecast_rows(path, target_ds):
-    """{ds: (v, lo, hi)} -> the row shape the browser reads. Rounding is
-    monotonic and clamped the same way for all three, so lo <= v <= hi and
-    lo >= 0 survive — validate-data.mjs gates on exactly that."""
+def forecast_rows(path, target_ds, band_scale=None):
+    """{ds: (v, lo, hi)} -> the row shape the browser reads, with the band
+    stretched by this candidate's measured calibration factor (see
+    band_scale_of). Rounding is monotonic and clamped the same way for all
+    three, so lo <= v <= hi and lo >= 0 survive — validate-data.mjs gates on
+    exactly that."""
     rows = []
     for ds in target_ds:
         if ds not in path:
             continue
-        v, lo, hi = path[ds]
+        v, lo, hi = apply_band_scale(*path[ds], band_scale)
         rows.append({
             "date": f"{ds.year}-{ds.month:02d}",
             "y": int(ds.year),
@@ -687,10 +754,14 @@ def forecast_metric(iso2, monthly, horizon, gdp_levels=None, gdp_growth=None, gd
     }
     candidates = {}
     for name in CANDIDATES:
-        rows = forecast_rows(paths.get(name) or {}, target)
+        c = dict(scores.get(name) or {})
+        # the published forward band is calibrated; the backtest rows shipped
+        # for the accountability chart deliberately are NOT, because the
+        # calibration was fitted on exactly those months — showing them
+        # widened would flatter the model on its own training data
+        rows = forecast_rows(paths.get(name) or {}, target, c.get("band_scale"))
         if not rows:
             continue
-        c = dict(scores.get(name) or {})
         c["forecast"] = rows
         candidates[name] = c
     if not candidates:
@@ -714,7 +785,8 @@ def forecast_metric(iso2, monthly, horizon, gdp_levels=None, gdp_growth=None, gd
     # airports, committed nightly.
     published = {}
     for name, c in candidates.items():
-        entry = {k: c.get(k) for k in ("mase", "mase_folds", "mape", "mape_folds", "mae", "coverage")}
+        entry = {k: c.get(k) for k in ("mase", "mase_folds", "mape", "mape_folds", "mae",
+                                       "coverage", "band_scale", "coverage_cal")}
         if name != chosen:
             entry["forecast"] = c["forecast"]
             entry["backtest"] = c.get("backtest") or []
@@ -735,6 +807,8 @@ def forecast_metric(iso2, monthly, horizon, gdp_levels=None, gdp_growth=None, gd
         "skill": (round(1 - mape / naive_mape, 2)
                   if (mape is not None and naive_mape) else None),
         "coverage": top.get("coverage"),
+        "band_scale": top.get("band_scale"),
+        "coverage_cal": top.get("coverage_cal"),
         "backtest": top.get("backtest") or [],
         "months_history": int(len(df)),
         "latest": f"{df['ds'].max().year}-{df['ds'].max().month:02d}",
@@ -886,6 +960,13 @@ def main():
         "interval": INTERVAL,
         "horizon": HORIZON,
         "backtest": f"rolling-origin, up to {BACKTEST_FOLDS} folds x {BACKTEST_H}mo holdouts; every candidate scored on identical folds; {round(INTERVAL * 100)}% interval coverage measured on the same held-out months",
+        "bands": (f"each candidate's raw interval is rescaled by the {round(INTERVAL * 100)}th percentile of its "
+                  f"held-out error measured in units of its own band half-width, clamped to "
+                  f"[{BAND_SCALE_MIN}, {BAND_SCALE_MAX}]. Raw coverage of a nominal {round(INTERVAL * 100)}% band ran "
+                  f"at a median 39% for Prophet and 100% for the seasonal naive, so the label was wrong in both "
+                  f"directions. `coverage` stays the raw out-of-sample number; `coverage_cal` is the scaled band on "
+                  f"the same months and is therefore in-sample. Applied to the forward forecast only - the shipped "
+                  f"backtest rows keep the band the model actually claimed."),
         "note": ("Short-term forecasts. Fit nightly by .github/workflows/refresh-data.yml "
                  "on the real observed series. Per-airport output lives in "
                  "data/forecasts/<IATA>.json, fetched by the browser once that gateway "

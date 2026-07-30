@@ -296,20 +296,49 @@ comparison meaningful. Each metric's forecast JSON carries `chosen`,
 `chosen_reason`, `mase` (mean across folds — the number selection ran on),
 `mase_folds`, `mape`, `mape_folds`, `mae`, `naive_mape`/`naive_mase` (the
 seasonal-naive candidate's own scores, over those same folds), `skill`
-(1 − mape/naive_mape), `coverage` (% of held-out months inside the claimed 80%
-interval), and `backtest` (the most recent fold's month-by-month
+(1 − mape/naive_mape), `coverage` / `band_scale` / `coverage_cal` (the band
+calibration described below), and `backtest` (the most recent fold's month-by-month
 predicted-vs-actual, which the Short-term screen charts) — plus the same score
 set per candidate under `candidates`. For a quick local run against a subset of
 airports: `GLIDEPATH_ONLY="AMS,YYZ" python scripts/build-forecast.py` (skips
 pruning, so the other committed forecasts survive).
 
-> **Coverage is a known open problem.** Measured 80%-band coverage runs well
-> below the claimed 80% on most series (median ~36% for the pre-selection
-> Prophet-only build). Selection above fixes *which point forecast* ships; it
-> does not recalibrate the interval. Coverage is measured and published per
-> candidate, and the Short-term screen warns when it falls under 65%, but the
-> bands themselves are still model-derived rather than fitted to the measured
-> coverage.
+**Bands are calibrated against measured coverage.** The three candidates derive
+their intervals three incompatible ways — Prophet samples a posterior, ETS grows
+one from in-sample residuals, the seasonal naive uses a seasonal-random-walk
+sigma — and none of them delivered the 80% they claimed. Measured on a
+60-airport sample:
+
+| candidate | median coverage of its raw "80%" band |
+| --- | --- |
+| `snaive`  | 100% (far too wide) |
+| `ets`     | 97% (too wide) |
+| `prophet` | 39% (far too narrow) |
+
+So the label was wrong in both directions, differently per model. Each candidate
+now publishes a `band_scale`: the INTERVAL-th quantile of each held-out month's
+error measured *in units of that month's own one-sided band half-width*
+(`band_scale_of`). Above 1 it widens a band that was too narrow, below 1 it
+tightens one that was too wide, and it works uniformly regardless of how the raw
+band was derived. It's clamped to `[0.25, 4.0]` — a handful of held-out months
+can throw an extreme quantile, and a 30x band is less useful than an honestly
+wrong one.
+
+Two coverage numbers are published, and the distinction matters:
+
+- **`coverage`** — the RAW band's coverage, measured out-of-sample. Still the
+  honest headline.
+- **`coverage_cal`** — what the scaled band achieves on those same held-out
+  months. The factor was fitted on exactly those months, so this is **in-sample**
+  and the model card says so.
+
+The scale is applied to the forward `forecast` rows only. The `backtest` rows
+shipped for the accountability chart keep their raw band deliberately: widening
+them would flatter the model on the very months the factor was fitted to. The
+in-browser ETS (uploaded gateways) applies the same formula to its single
+12-month holdout, with a floor of 8 scoreable months before it will calibrate at
+all. Where the clamp binds and coverage is still under 65%, the Short-term screen
+says to read the point forecast rather than the range.
 
 ### Which model the long-term forecast compounds off
 The long-term elasticity model raises **one base year** to the power of the

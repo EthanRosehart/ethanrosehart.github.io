@@ -165,6 +165,7 @@ export function checkForecastDoc(doc, path, errs) {
     checkForecastRows(m.forecast, `${p}.forecast`, errs);
     if (m.mape != null && !isFiniteNum(m.mape)) errs.push(`${p}.mape: must be a number or null`);
     if (m.mase != null && !isFiniteNum(m.mase)) errs.push(`${p}.mase: must be a number or null`);
+    if (m.band_scale != null && !(isFiniteNum(m.band_scale) && m.band_scale > 0)) errs.push(`${p}.band_scale: must be a positive number or null`);
     if (m.seasonal12 != null && (!Array.isArray(m.seasonal12) || m.seasonal12.length !== 12)) errs.push(`${p}.seasonal12: must be 12 values`);
     if (m.backtest != null) checkBacktestRows(m.backtest, `${p}.backtest`, errs);
 
@@ -180,6 +181,9 @@ export function checkForecastDoc(doc, path, errs) {
       if (!isObj(c)) { errs.push(`${cp}: not an object`); continue; }
       if (c.mase != null && !isFiniteNum(c.mase)) errs.push(`${cp}.mase: must be a number or null`);
       if (c.mape != null && !isFiniteNum(c.mape)) errs.push(`${cp}.mape: must be a number or null`);
+      // the band calibration multiplies a published interval, so a zero or
+      // negative factor would collapse or invert every band it touches
+      if (c.band_scale != null && !(isFiniteNum(c.band_scale) && c.band_scale > 0)) errs.push(`${cp}.band_scale: must be a positive number or null`);
       if (name === m.chosen) {
         if (c.forecast != null) errs.push(`${cp}.forecast: the chosen model's rows belong at the top level, not duplicated here`);
       } else {

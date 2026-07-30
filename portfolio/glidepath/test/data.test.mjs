@@ -400,6 +400,40 @@ test("GP_etsForecast: recovers a clean seasonal pattern and reports an honest ba
   assert.ok(st.forecast.every(r => r.lo <= r.v && r.v <= r.hi && r.lo >= 0));
 });
 
+test("GP_etsForecast: calibrates its forward band, leaving the held-out rows raw", () => {
+  const win = loadDataModule();
+  const pax = {};
+  for (let i = 0; i < 72; i++) {
+    const y = 2020 + Math.floor(i / 12), m = i % 12;
+    const seasonal = m >= 5 && m <= 7 ? 1.4 : m <= 1 ? 0.7 : 1.0;
+    pax[`${y}-${String(m + 1).padStart(2, "0")}`] = Math.round(100000 * Math.pow(1.003, i) * seasonal);
+  }
+  const history = Object.entries(pax).map(([date, v]) => ({ y: +date.slice(0, 4), m: +date.slice(5, 7) - 1, date, pax: v }));
+  const st = win.GP_etsForecast(history, "pax", 24);
+  assert.ok(st.bandScale != null, "12 held-out months is enough to calibrate");
+  assert.ok(st.bandScale > 0, "a non-positive scale would invert every band");
+  assert.ok(st.coverageCal != null);
+  // the calibration must not break the invariants the charts rely on
+  assert.ok(st.forecast.every((r) => r.lo >= 0 && r.lo <= r.v && r.v <= r.hi));
+  // the held-out rows keep the band the model actually claimed at the time —
+  // the factor was fitted on exactly those months
+  assert.ok(st.backtest.every((r) => r.lo <= r.v && r.v <= r.hi));
+  const rawCov = Math.round(st.backtest.filter((r) => r.lo <= r.actual && r.actual <= r.hi).length / st.backtest.length * 100);
+  assert.equal(st.coverage, rawCov, "`coverage` must describe the RAW band, not the scaled one");
+});
+
+test("GP_etsForecast: too few scoreable held-out months means no calibration at all", () => {
+  const win = loadDataModule();
+  // 30 months -> under the 36 the holdout backtest needs, so there is no
+  // backtest to calibrate from and the band must ship honestly uncalibrated
+  const history = [];
+  for (let i = 0; i < 30; i++) history.push({ y: 2023 + Math.floor(i / 12), m: i % 12, date: "x", pax: 1000 + (i % 12) * 100 });
+  const st = win.GP_etsForecast(history, "pax", 12);
+  assert.ok(st, "30 contiguous months still models");
+  assert.equal(st.bandScale, null, "no backtest -> no calibration factor invented");
+  assert.equal(st.coverageCal, null);
+});
+
 test("GP_etsForecast: refuses to model < 24 contiguous months instead of guessing", () => {
   const win = loadDataModule();
   const short = [];
@@ -664,6 +698,124 @@ test("longTermForecast: a metric no model can reach carries the prior year rathe
   assert.equal(lt.hasAtm, true, "dropping movements out of the strategic view would be the worse answer");
   assert.equal(lt.baseCompletion.atm, "carry", "and the fallback must be disclosed, not hidden");
   assert.equal(lt.rows[0].atm, 1200, "3 observed months at 100 + 9 carried from 2025 at 100");
+});
+
+test("longTermForecast: a metric that lags passengers by a month keeps its own gap set", () => {
+  const win = loadDataModule();
+  // the real YYZ shape: passengers published through May, movements through
+  // April. Completing movements over PASSENGERS' gap set (Jun-Dec) leaves May
+  // unfilled and drops movements from the strategic view entirely — it did, for
+  // 8 Canadian gateways.
+  const pax = { ...monthlySeries(2024, 1, 24, 1000), ...monthlySeries(2026, 1, 5, 1000) };
+  const atm = { ...monthlySeries(2024, 1, 24, 100), ...monthlySeries(2026, 1, 4, 100) };
+  const iata = setupAirport(win, { series: { pax, atm } });
+  const history = win.GP_buildHistory(iata);
+  const rows = (from, v) => { const o = []; for (let mm = from; mm < 12; mm++) o.push({ date: `2026-${String(mm + 1).padStart(2, "0")}`, y: 2026, m: mm, v, lo: v, hi: v }); return o; };
+  const doc = (from, v) => ({ chosen: "snaive", chosen_reason: "t", seasonal12: Array(12).fill(1), mase: 0.5, mape: 5, backtest: [], forecast: rows(from, v), candidates: { snaive: { mase: 0.5, mape: 5 } } });
+  win.GP_setAirportForecast(iata, { pax: doc(5, 5000), atm: doc(4, 500) });
+
+  const sc = { ...win.GP_defaultScenario(iata), gdp: 0, elasticity: 0, pop: 0, tourism: 0, fuel: 0, lcc: 0, horizon: 5 };
+  const lt = win.GP_longTerm(iata, history, sc);
+  assert.equal(lt.baseYear, 2026);
+  assert.equal(lt.hasAtm, true, "movements must survive a one-month publishing lag");
+  assert.equal(lt.baseForecastMonths.length, 7, "passengers: Jun-Dec modeled");
+  assert.equal(lt.baseModeledMonths.pax, 7);
+  assert.equal(lt.baseModeledMonths.atm, 8, "movements: May-Dec modeled — its OWN gap set");
+  assert.equal(lt.rows[0].pax, 5 * 1000 + 7 * 5000);
+  assert.equal(lt.rows[0].atm, 4 * 100 + 8 * 500);
+});
+
+test("longTermForecast: a metric already complete in the base year is not modeled at all", () => {
+  const win = loadDataModule();
+  // cargo happens to be published a month AHEAD of passengers — it needs no
+  // completion, so it must report nothing modeled rather than borrowing pax's count
+  const pax = { ...monthlySeries(2024, 1, 24, 1000), ...monthlySeries(2026, 1, 5, 1000) };
+  const cargo = { ...monthlySeries(2024, 1, 24, 50), ...monthlySeries(2026, 1, 12, 50) };
+  const iata = setupAirport(win, { series: { pax, cargo } });
+  const history = win.GP_buildHistory(iata);
+  const rows = []; for (let mm = 5; mm < 12; mm++) rows.push({ date: `2026-${String(mm + 1).padStart(2, "0")}`, y: 2026, m: mm, v: 5000, lo: 5000, hi: 5000 });
+  win.GP_setAirportForecast(iata, { pax: { chosen: "snaive", chosen_reason: "t", seasonal12: Array(12).fill(1), mase: 0.5, mape: 5, backtest: [], forecast: rows, candidates: { snaive: { mase: 0.5, mape: 5 } } } });
+
+  const sc = { ...win.GP_defaultScenario(iata), gdp: 0, elasticity: 0, pop: 0, tourism: 0, fuel: 0, lcc: 0, horizon: 5 };
+  const lt = win.GP_longTerm(iata, history, sc);
+  assert.equal(lt.hasCargo, true);
+  assert.equal(lt.baseModeledMonths.cargo, 0, "a complete metric has nothing modeled");
+  assert.equal(lt.baseCompletion.cargo, undefined, "and so has no completion method");
+  assert.equal(lt.rows[0].cargo, 12 * 50, "its base total is purely observed");
+});
+
+test("longTermForecast: a base month with an all-zero sector split still reconciles", () => {
+  const win = loadDataModule();
+  // PED's real shape: some months carry no sector split at all (both sectors
+  // zero). The per-month rescale has no shape to scale, so those months'
+  // passengers used to vanish from the mix while still counting in the headline
+  // — the donut silently stopped adding up to the total.
+  const pax = {}, dom = {}, intl = {};
+  for (let y = 2024; y <= 2025; y++) for (let m = 1; m <= 12; m++) {
+    const k = `${y}-${String(m).padStart(2, "0")}`;
+    pax[k] = 1000;
+    // March, April and December have no split on record at all
+    const blank = m === 3 || m === 4 || m === 12;
+    dom[k] = blank ? 0 : 200;
+    intl[k] = blank ? 0 : 800;
+  }
+  const iata = setupAirport(win, { series: { pax }, meta: { hasPaxSeg: true } });
+  win.GP_setAirportSeries(iata, { series: { pax }, paxSeg: { domestic: dom, international: intl } });
+  const history = win.GP_buildHistory(iata);
+  const lt = win.GP_longTerm(iata, history, { ...win.GP_defaultScenario(iata), horizon: 3 });
+
+  assert.ok(lt.hasSeg, "an airport with a real split most of the year must keep the sector view");
+  const seg = lt.rows[0].seg;
+  const total = lt.segKeys.reduce((t, k) => t + seg[k], 0);
+  assert.ok(Math.abs(total - lt.rows[0].pax) <= 12,
+    `sectors must reconcile to the headline: seg ${total} vs pax ${lt.rows[0].pax}`);
+  // the blank months took the shape of the months that do carry a split (20/80)
+  assert.ok(Math.abs(seg.domestic / total - 0.2) < 0.01, `domestic share ${seg.domestic / total}`);
+});
+
+test("longTermForecast: a sector split that is zero in EVERY base month is dropped, not invented", () => {
+  const win = loadDataModule();
+  const pax = {}, dom = {}, intl = {};
+  for (let y = 2024; y <= 2025; y++) for (let m = 1; m <= 12; m++) {
+    const k = `${y}-${String(m).padStart(2, "0")}`;
+    pax[k] = 1000; dom[k] = 0; intl[k] = 0;
+  }
+  const iata = setupAirport(win, { series: { pax }, meta: { hasPaxSeg: true } });
+  win.GP_setAirportSeries(iata, { series: { pax }, paxSeg: { domestic: dom, international: intl } });
+  const lt = win.GP_longTerm(iata, win.GP_buildHistory(iata), { ...win.GP_defaultScenario(iata), horizon: 3 });
+  assert.equal(lt.hasSeg, false, "no split anywhere means no sector view, not a fabricated one");
+  assert.equal(lt.segKeys.length, 0);
+  assert.equal(lt.rows[0].seg, undefined);
+});
+
+test("longTermForecast: baseMonthly closes the chart gap the advancing base year opened", () => {
+  const win = loadDataModule();
+  // `months` starts in January of baseYear+1, so with a mid-year base year the
+  // monthly chart drew the last observed month adjacent to January of the NEXT
+  // year — an 8-month jump rendered as one step.
+  const pax = { ...monthlySeries(2024, 1, 24, 1000), ...monthlySeries(2026, 1, 5, 1000) };
+  const iata = setupAirport(win, { series: { pax } });
+  const history = win.GP_buildHistory(iata);
+  const rows = []; for (let mm = 5; mm < 12; mm++) rows.push({ date: `2026-${String(mm + 1).padStart(2, "0")}`, y: 2026, m: mm, v: 5000, lo: 5000, hi: 5000 });
+  win.GP_setAirportForecast(iata, { pax: { chosen: "snaive", chosen_reason: "t", seasonal12: Array(12).fill(1), mase: 0.5, mape: 5, backtest: [], forecast: rows, candidates: { snaive: { mase: 0.5, mape: 5 } } } });
+  const lt = win.GP_longTerm(iata, history, { ...win.GP_defaultScenario(iata), horizon: 3 });
+
+  assert.equal(lt.baseMonthly.length, 12, "the base year's own twelve months must be exposed");
+  assert.equal(lt.baseMonthly.filter((r) => r.modeled.pax).length, 7, "Jun-Dec are modeled");
+  assert.equal(lt.baseMonthly.filter((r) => !r.modeled.pax).length, 5, "Jan-May are observed");
+  assert.equal(lt.baseMonthly[0].pax, 1000);
+  assert.equal(lt.baseMonthly[11].pax, 5000);
+  // the chart's own construction, from screens-strategic.jsx
+  const histTail = history.filter((r) => r.y >= lt.baseYear - 3 && r.pax != null);
+  const fc = [...lt.baseMonthly.filter((r) => r.modeled.pax && r.pax != null), ...lt.months];
+  const a = histTail[histTail.length - 1], b = fc[0];
+  assert.equal((b.y * 12 + b.m) - (a.y * 12 + a.m), 1, "actuals must hand off to the forecast one month later, not eight");
+
+  // `months` itself must be untouched — the event simulator indexes into it
+  // positionally and the capacity block scales it per year
+  assert.equal(lt.months[0].y, lt.baseYear + 1);
+  assert.equal(lt.months[0].m, 0);
+  assert.equal(lt.months.length, 3 * 12);
 });
 
 test("longTermForecast: the base-year memo can't serve a base built before the forecast arrived", () => {
