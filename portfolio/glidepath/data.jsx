@@ -421,14 +421,19 @@ function etsFit(pts, key, alpha, beta, gamma){
   const y1 = pts.slice(0,P).reduce((s,r)=>s+r[key],0) / P;
   const y2 = pts.slice(P,2*P).reduce((s,r)=>s+r[key],0) / P;
   let level = y1, trend = (y2-y1) / P;
+  const floor = Math.max(1e-9, 1e-6 * (pts.reduce((t,r)=>t+r[key],0) / pts.length));
   const resid = []; let sse = 0, n = 0;
   pts.forEach((r,t)=>{
     const mi = r.m, f = (level + trend) * (seas[mi] || 1);
     if (t >= P){ const e = r[key] - f; sse += e*e; n++; if (f > 0) resid.push(r[key]/f - 1); }
     const prev = level;
-    level = alpha * (r[key] / (seas[mi] || 1e-9)) + (1-alpha) * (level + trend);
+    // a multiplicative seasonal model has no meaning at or below zero: on a
+    // collapsing series the level crosses zero, r[key]/level flips sign, and the
+    // seasonal index goes negative — which makes the point forecast negative and
+    // inverts the band around it. Floor both, scaled to the series.
+    level = Math.max(floor, alpha * (r[key] / (seas[mi] || floor)) + (1-alpha) * (level + trend));
     trend = beta * (level - prev) + (1-beta) * trend;
-    seas[mi] = gamma * (r[key] / (level || 1e-9)) + (1-gamma) * seas[mi];
+    seas[mi] = Math.max(floor, gamma * (r[key] / (level || floor)) + (1-gamma) * seas[mi]);
   });
   return { level, trend, seas, resid, mse: n ? sse/n : Infinity };
 }
@@ -451,11 +456,14 @@ function etsProject(fit, lastY, lastM, horizon){
   let y = lastY, m = lastM;
   for (let h=1; h<=horizon; h++){
     m++; if (m>11){ m=0; y++; }
-    const v = Math.max(0, (fit.level + h*fit.trend)) * (fit.seas[m] || 1);
+    // clamp the product, not just the level — a negative seasonal factor would
+    // otherwise turn a clamped-positive level into a negative forecast
+    const v = Math.max(0, (fit.level + h*fit.trend) * (fit.seas[m] || 1));
     const w = Z * sd * Math.sqrt(h);
+    const lo = Math.max(0, Math.round(v*(1-w))), hi = Math.max(0, Math.round(v*(1+w))), vr = Math.max(0, Math.round(v));
     out.push({ date:`${y}-${String(m+1).padStart(2,"0")}`, y, m,
       label:`${MONTHS[m]} ${String(y).slice(2)}`,
-      v:Math.max(0,Math.round(v)), lo:Math.max(0,Math.round(v*(1-w))), hi:Math.max(0,Math.round(v*(1+w))) });
+      v:vr, lo:Math.min(lo, vr, hi), hi:Math.max(lo, vr, hi) });
   }
   return out;
 }
@@ -703,7 +711,47 @@ function buildBase(iata, history, baseYear, useModel, model){
 
   const basePax = fill("pax");
   if (!basePax) return null;
-  const baseAtm = fill("atm"), baseCargo = fill("cargo");
+  const baseCargo = fill("cargo");
+
+  /* ---- movements, deliberately NOT completed by their own model ----
+     The long-term model's central assumption is that movements track passengers
+     (gauge=0 ⇒ strictly proportional), so the base year's pax-per-movement ratio
+     has to mean something. It IS `ratioBase` in the capacity block, which sets
+     `ratioCeil` — the up-gauging ceiling the whole coupled constraint pivots on —
+     and it compounds into every projected year.
+
+     Completing passengers and movements from INDEPENDENTLY selected models broke
+     that. BTS came out at 174 passengers per movement against an observed 104
+     (+67%) purely because passengers won on ETS and movements on a seasonal
+     naive: two unrelated model choices, and nothing holding their ratio to
+     anything. A 67% one-year shift in aircraft gauge is not a real operational
+     change, and it would have silently inflated BTS's modelled slot capacity.
+
+     So a missing movements month is derived from that month's passengers —
+     observed or modeled — at the ratio the two metrics actually exhibit where
+     both are published. Movements' own forecast still drives the tactical
+     screen, which is where a pure movements prediction belongs; here, the
+     model's own proportionality is the better estimator and the coherent one. */
+  let baseAtm = null;
+  if (Object.keys(obs.atm).length){
+    const gaps = [];
+    for (let m=0; m<12; m++) if (obs.atm[m] == null) gaps.push(m);
+    gapsOf.atm = gaps;
+    baseAtm = { ...obs.atm };
+    if (gaps.length){
+      const both = history.filter(r => r.pax != null && r.atm != null).slice(-12);
+      const paxSum = both.reduce((t,r)=>t+r.pax, 0), atmSum = both.reduce((t,r)=>t+r.atm, 0);
+      const ratio = (both.length >= 6 && atmSum > 0 && paxSum > 0) ? paxSum/atmSum : null;
+      let usedRatio = false, usedCarry = false;
+      for (const m of gaps){
+        if (ratio && basePax[m] != null){ baseAtm[m] = Math.round(basePax[m] / ratio); usedRatio = true; }
+        else if (prior.atm[m] != null){ baseAtm[m] = prior.atm[m]; usedCarry = true; }
+        else { baseAtm = null; break; }
+      }
+      if (baseAtm) completion.atm = usedRatio ? ("pax-implied" + (usedCarry ? "+carry" : "")) : "carry";
+    }
+  }
+
   const sum = (o) => Math.round(Object.keys(o).reduce((t,m)=>t+o[m], 0));
   return { baseYear,
     // every annual total is now the base year's OWN twelve months, so the base

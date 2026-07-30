@@ -351,7 +351,27 @@ its own tactical forecast, falling back to the prior year's same month when no
 model can reach it. Each metric resolves its *own* missing months, not
 passengers' — the feeds publish at different lags (YYZ: passengers through May,
 movements through April), and applying one gap set to all of them dropped
-movements out of the strategic view on 8 gateways. There is deliberately no
+movements out of the strategic view on 8 gateways.
+
+**Movements are the exception: they are derived from passengers, not from their
+own model.** The long-term model's central assumption is that flights track
+passengers (`gauge=0` ⇒ strictly proportional), so the base year's
+pax-per-movement ratio is load-bearing — it *is* `ratioBase` in the capacity
+block, which sets `ratioCeil`, the up-gauging ceiling the coupled constraint
+pivots on, and it compounds into every projected year. Completing passengers and
+movements from *independently selected* models broke that: BTS came out at 174
+passengers per movement against an observed 104 (+67%), purely because passengers
+won on ETS and movements on a seasonal naive. A 67% one-year shift in aircraft
+gauge is not a real operational change, and it would have silently inflated BTS's
+modelled slot capacity. So a missing movements month is derived from that month's
+passengers — observed or modeled — at the ratio the two metrics exhibit where
+both are published (trailing 12 months; a per-calendar-month ratio was tried and
+rejected, since on small airports the monthly ratio swings 5–87 and amplifies
+noise instead of reducing it). Across the catalogue this cut gateways whose base
+ratio sits >10% off recent observed reality from 45 to 7, and the residual 7 are
+genuine level shifts or single-digit-ratio noise, not artifacts. Movements' own
+forecast still drives the tactical screen, where a pure movements prediction is
+what's wanted. There is deliberately no
 flat-annual-average rung: cargo is published monthly, and projecting it off
 `annualCargo/12` erased its seasonal shape and took its level from a year that
 needn't be the base year. `GP_longTerm` returns `baseMode`, `baseObservedMonths`,

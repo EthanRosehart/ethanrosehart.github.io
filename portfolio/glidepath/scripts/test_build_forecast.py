@@ -297,6 +297,42 @@ def test_ets_fit_needs_two_seasons_and_indexes_by_real_calendar_month(bf):
     assert fit["seas"].index(max(fit["seas"])) == 11, "December is slot 11"
 
 
+def test_ets_keeps_a_collapsing_series_from_inverting_its_band(bf):
+    """BMA: passengers collapse, the multiplicative level crosses zero, y/level
+    flips sign and the September seasonal index fits at -9.4. That made the point
+    forecast negative and inverted the band around it (v=0, lo=17217, hi=0 once
+    each field was clamped independently). validate-data rejects lo > hi as a
+    HARD GATE, so this one series would have failed the nightly and frozen
+    last-good forecasts for all 446 airports."""
+    # a steep collapse to near-zero with one erratic spike month — the shape that
+    # drives the level negative under a multiplicative seasonal fit
+    monthly = {}
+    for i in range(60):
+        y, m = 2021 + i // 12, i % 12 + 1
+        base = max(5.0, 40000 * (0.90 ** i))
+        monthly[f"{y}-{m:02d}"] = round(base * (14 if m == 9 else 1))
+    df = bf.series_frame(monthly)
+    fit = bf.ets_best_fit(bf.contiguous_tail(df))
+    assert fit is not None
+    assert all(v >= 0 for v in fit["seas"]), f"multiplicative seasonal indices must stay >= 0, got {fit['seas']}"
+    assert fit["level"] >= 0, "the level of a multiplicative model must not go negative"
+
+    target = [df["ds"].max() + pd.DateOffset(months=h) for h in range(1, 25)]
+    for ds, (v, lo, hi) in bf.ets_path(df, target).items():
+        assert 0 <= lo <= v <= hi, f"{ds}: inverted band v={v} lo={lo} hi={hi}"
+
+
+def test_forecast_rows_restores_ordering_rather_than_freezing_the_nightly(bf):
+    # Last-resort invariant. Whatever a band source does, a row must never ship
+    # with lo > hi: validate-data is a hard gate, so one bad row keeps last-good
+    # for the entire catalogue rather than just that series.
+    ds = pd.Timestamp(2026, 9, 1)
+    rows = bf.forecast_rows({ds: (0.0, 17217.0, 0.0)}, [ds])
+    assert len(rows) == 1
+    r = rows[0]
+    assert 0 <= r["lo"] <= r["v"] <= r["hi"], f"ordering not restored: {r}"
+
+
 def test_ets_path_produces_a_coherent_band_for_every_requested_month(bf):
     monthly = {}
     for i in range(48):

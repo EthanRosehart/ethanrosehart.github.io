@@ -452,6 +452,15 @@ def ets_fit(df, alpha, beta, gamma, phi, P=12):
     seas = [s / mean_seas for s in seas]
     y1, y2 = sum(ys[:P]) / P, sum(ys[P:2 * P]) / P
     level, trend = y1, (y2 - y1) / P
+    # A MULTIPLICATIVE seasonal model has no meaning at or below zero. On a
+    # collapsing series the level crosses zero, y/level flips sign, and the
+    # seasonal index goes negative — BMA fitted September at -9.428, which made
+    # the point forecast negative and inverted every band derived from it
+    # (v=0, lo=17217, hi=0 after clamping). validate-data is a HARD GATE in the
+    # nightly, so one such series fails the run and freezes last-good forecasts
+    # for the whole catalogue. Floor both states at a hair above zero, scaled to
+    # the series so it stays numerically harmless.
+    floor = max(1e-9, 1e-6 * (sum(ys) / n))
     resid, sse, scored = [], 0.0, 0
     for t in range(n):
         mi = ms[t]
@@ -462,9 +471,9 @@ def ets_fit(df, alpha, beta, gamma, phi, P=12):
             if f > 0:
                 resid.append(ys[t] / f - 1)
         prev = level
-        level = alpha * (ys[t] / (seas[mi] or 1e-9)) + (1 - alpha) * (level + phi * trend)
+        level = max(floor, alpha * (ys[t] / (seas[mi] or floor)) + (1 - alpha) * (level + phi * trend))
         trend = beta * (level - prev) + (1 - beta) * phi * trend
-        seas[mi] = gamma * (ys[t] / (level or 1e-9)) + (1 - gamma) * seas[mi]
+        seas[mi] = max(floor, gamma * (ys[t] / (level or floor)) + (1 - gamma) * seas[mi])
     return {"level": level, "trend": trend, "phi": phi, "seas": seas,
             "resid": resid, "mse": (sse / scored) if scored else float("inf")}
 
@@ -506,9 +515,11 @@ def ets_path(train, target_ds):
     for h in range(1, horizon + 1):
         damp += fit["phi"] ** h
         ds = last + pd.DateOffset(months=h)
-        v = max(0.0, fit["level"] + damp * fit["trend"]) * (fit["seas"][ds.month - 1] or 1.0)
+        # clamp the product, not the level: a negative seasonal factor would
+        # otherwise turn a clamped-positive level into a negative forecast
+        v = max(0.0, (fit["level"] + damp * fit["trend"]) * (fit["seas"][ds.month - 1] or 1.0))
         w = Z_INTERVAL * sd * (h ** 0.5)
-        out[ds] = (v, max(0.0, v * (1 - w)), v * (1 + w))
+        out[ds] = (v, max(0.0, v * (1 - w)), max(0.0, v * (1 + w)))
     return {ds: out[ds] for ds in target_ds if ds in out}
 
 
@@ -714,6 +725,12 @@ def forecast_rows(path, target_ds, band_scale=None):
         if ds not in path:
             continue
         v, lo, hi = apply_band_scale(*path[ds], band_scale)
+        # Last-resort ordering guarantee. validate-data rejects lo > hi as a hard
+        # gate, which would keep last-good for EVERY airport, so a single
+        # pathological series must not be able to freeze the refresh. Ordering is
+        # restored rather than the row dropped, so the failure stays visible in
+        # the numbers instead of becoming a silent gap.
+        lo, hi = min(lo, v, hi), max(lo, v, hi)
         rows.append({
             "date": f"{ds.year}-{ds.month:02d}",
             "y": int(ds.year),

@@ -101,8 +101,16 @@ function LongTerm({ airport, history, scenario, ltOpts, baseMode, setBaseMode, g
               const others = ["atm","cargo"].filter(k => lt.baseModeledMonths[k] != null);
               const differing = others.filter(k => lt.baseModeledMonths[k] !== lt.baseForecastMonths.length);
               const carried = others.filter(k => lt.baseCompletion[k] === "carry").map(k=>label[k]);
+              const implied = String(lt.baseCompletion.atm || "").startsWith("pax-implied");
+              const ratio = (lt.rows[0].atm > 0) ? lt.rows[0].pax / lt.rows[0].atm : null;
               return (<>
                 {differing.length ? <> {differing.map(k=>`${label[k]} run${lt.baseModeledMonths[k]===1?"s":""} a different lag (${lt.baseModeledMonths[k]} modeled month${lt.baseModeledMonths[k]===1?"":"s"})`).join(", ")}.</> : null}
+                {implied ? <> Movements aren&rsquo;t taken from their own forecast: this model holds flights
+                    proportional to passengers, so a missing movements month is derived from that month&rsquo;s
+                    passengers at the ratio the two actually show where both are published
+                    {ratio ? <> — about {ratio.toFixed(0)} passengers per movement here</> : null}. Letting two
+                    independently-picked models set that ratio drifted it as far as +67% on one gateway, which
+                    would quietly reshape the capacity headroom.</> : null}
                 {carried.length ? <> {carried.join(" and ")} {carried.length>1?"have":"has"} no tactical forecast for those months, so
                     {carried.length>1?" they carry":" it carries"} the prior year&rsquo;s same month instead.</> : null}
               </>);
