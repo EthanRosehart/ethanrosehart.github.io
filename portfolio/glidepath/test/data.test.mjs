@@ -400,6 +400,59 @@ test("GP_etsForecast: recovers a clean seasonal pattern and reports an honest ba
   assert.ok(st.forecast.every(r => r.lo <= r.v && r.v <= r.hi && r.lo >= 0));
 });
 
+test("GP_etsForecast: calibrates its forward band, leaving the held-out rows raw", () => {
+  const win = loadDataModule();
+  const pax = {};
+  for (let i = 0; i < 72; i++) {
+    const y = 2020 + Math.floor(i / 12), m = i % 12;
+    const seasonal = m >= 5 && m <= 7 ? 1.4 : m <= 1 ? 0.7 : 1.0;
+    pax[`${y}-${String(m + 1).padStart(2, "0")}`] = Math.round(100000 * Math.pow(1.003, i) * seasonal);
+  }
+  const history = Object.entries(pax).map(([date, v]) => ({ y: +date.slice(0, 4), m: +date.slice(5, 7) - 1, date, pax: v }));
+  const st = win.GP_etsForecast(history, "pax", 24);
+  assert.ok(st.bandScale != null, "12 held-out months is enough to calibrate");
+  assert.ok(st.bandScale > 0, "a non-positive scale would invert every band");
+  assert.ok(st.coverageCal != null);
+  // the calibration must not break the invariants the charts rely on
+  assert.ok(st.forecast.every((r) => r.lo >= 0 && r.lo <= r.v && r.v <= r.hi));
+  // the held-out rows keep the band the model actually claimed at the time —
+  // the factor was fitted on exactly those months
+  assert.ok(st.backtest.every((r) => r.lo <= r.v && r.v <= r.hi));
+  const rawCov = Math.round(st.backtest.filter((r) => r.lo <= r.actual && r.actual <= r.hi).length / st.backtest.length * 100);
+  assert.equal(st.coverage, rawCov, "`coverage` must describe the RAW band, not the scaled one");
+});
+
+test("GP_etsForecast: too few scoreable held-out months means no calibration at all", () => {
+  const win = loadDataModule();
+  // 30 months -> under the 36 the holdout backtest needs, so there is no
+  // backtest to calibrate from and the band must ship honestly uncalibrated
+  const history = [];
+  for (let i = 0; i < 30; i++) history.push({ y: 2023 + Math.floor(i / 12), m: i % 12, date: "x", pax: 1000 + (i % 12) * 100 });
+  const st = win.GP_etsForecast(history, "pax", 12);
+  assert.ok(st, "30 contiguous months still models");
+  assert.equal(st.bandScale, null, "no backtest -> no calibration factor invented");
+  assert.equal(st.coverageCal, null);
+});
+
+test("GP_etsForecast: a collapsing series can't invert its own band", () => {
+  const win = loadDataModule();
+  // the in-browser twin of the BMA failure: a multiplicative seasonal fit on a
+  // collapsing series drove the level negative, flipped the seasonal index, and
+  // produced a negative point forecast with an inverted band around it
+  const history = [];
+  for (let i = 0; i < 60; i++) {
+    const y = 2021 + Math.floor(i / 12), m = i % 12;
+    const base = Math.max(5, 40000 * Math.pow(0.90, i));
+    history.push({ y, m, date: `${y}-${String(m + 1).padStart(2, "0")}`, pax: Math.round(base * (m === 8 ? 14 : 1)) });
+  }
+  const st = win.GP_etsForecast(history, "pax", 24);
+  assert.ok(st, "a collapsing series should still model");
+  assert.ok(st.forecast.every((r) => r.lo >= 0 && r.lo <= r.v && r.v <= r.hi),
+    "every forecast row must satisfy 0 <= lo <= v <= hi, whatever the fit did");
+  assert.ok(st.backtest.every((r) => r.lo <= r.v && r.v <= r.hi));
+  assert.ok(st.seasIdx.every((v) => v >= 0), "multiplicative seasonal indices must stay >= 0");
+});
+
 test("GP_etsForecast: refuses to model < 24 contiguous months instead of guessing", () => {
   const win = loadDataModule();
   const short = [];
@@ -424,10 +477,436 @@ test("GP_tacticalForecast: prefers the nightly Prophet output, falls back to ETS
 
   const ets = win.GP_tacticalForecast(iata, "pax", history);
   assert.equal(ets.method, "ets", "no Prophet file on record -> in-browser ETS");
+  assert.equal(ets.source, "browser", "and it must say where it was fit");
 
   win.GP_setAirportForecast(iata, { pax: { mape: 3.0, forecast: [{ date: "2026-01", y: 2026, m: 0, v: 1, lo: 1, hi: 1 }] } });
   const pro = win.GP_tacticalForecast(iata, "pax", history);
   assert.equal(pro.method, "prophet", "a nightly Prophet forecast must win over ETS");
+  assert.equal(pro.source, "nightly");
+});
+
+/* ---- nightly model selection + the client-side toggle ---- */
+
+/** A nightly payload in the shape build-forecast.py writes: the chosen model's
+ *  arrays at the top level, the alternatives' under `candidates`. */
+function forecastDoc({ chosen = "snaive", cands, latest = "2026-03" } = {}) {
+  const rows = (v) => [1, 2, 3].map((mm) => ({ date: `2026-${String(mm + 3).padStart(2, "0")}`, y: 2026, m: mm + 2, v, lo: v * 0.9, hi: v * 1.1 }));
+  const doc = { chosen, chosen_reason: "test", latest, candidates: {}, seasonal12: Array(12).fill(1) };
+  for (const [name, c] of Object.entries(cands)) {
+    doc.candidates[name] = { mase: c.mase, mase_folds: [c.mase], mape: c.mape, mape_folds: [c.mape], coverage: c.coverage ?? null };
+    if (name === chosen) {
+      Object.assign(doc, { mase: c.mase, mase_folds: [c.mase], mape: c.mape, mape_folds: [c.mape], coverage: c.coverage ?? null, forecast: rows(c.v), backtest: [] });
+    } else {
+      doc.candidates[name].forecast = rows(c.v);
+      doc.candidates[name].backtest = [];
+    }
+  }
+  return doc;
+}
+
+test("GP_forecastFor: reads the model the nightly chose, and switches on request", () => {
+  const win = loadDataModule();
+  win.GP_setAirportForecast("TST", {
+    pax: forecastDoc({ chosen: "snaive", cands: {
+      snaive: { mase: 0.28, mape: 7.0, v: 100 },
+      ets: { mase: 0.38, mape: 8.2, v: 200 },
+      prophet: { mase: 0.30, mape: 6.7, v: 300 },
+    } }),
+  });
+
+  const auto = win.GP_forecastFor("TST", "pax");
+  assert.equal(auto.method, "snaive", "no preference -> the nightly's pick");
+  assert.equal(auto.mase, 0.28);
+  assert.equal(auto.forecast[0].v, 100, "the winner's rows come from the top level");
+
+  const pro = win.GP_forecastFor("TST", "pax", "prophet");
+  assert.equal(pro.method, "prophet");
+  assert.equal(pro.mase, 0.30, "switching must carry that model's OWN score, not the winner's");
+  assert.equal(pro.forecast[0].v, 300, "an alternative's rows come from `candidates`");
+  assert.equal(pro.chosen, "snaive", "and it still reports what the nightly would have picked");
+
+  // a model this series doesn't carry falls back rather than returning nothing
+  const bogus = win.GP_forecastFor("TST", "pax", "nope");
+  assert.equal(bogus.method, "snaive");
+});
+
+test("GP_forecastFor: skill is recomputed per model, so the toggle can't show the winner's", () => {
+  const win = loadDataModule();
+  win.GP_setAirportForecast("TST", {
+    pax: forecastDoc({ chosen: "snaive", cands: {
+      snaive: { mase: 0.50, mape: 10.0, v: 100 },
+      prophet: { mase: 0.60, mape: 20.0, v: 300 },
+    } }),
+  });
+  // the naive IS the benchmark, so its own skill is 0
+  assert.equal(win.GP_forecastFor("TST", "pax").skill, 0);
+  // prophet is twice the naive's error -> skill -1
+  assert.equal(win.GP_forecastFor("TST", "pax", "prophet").skill, -1);
+});
+
+test("GP_forecastFor: a pre-selection snapshot (no candidates) still reads as Prophet", () => {
+  const win = loadDataModule();
+  // exactly what data/forecasts/<IATA>.json looked like before model selection
+  win.GP_setAirportForecast("OLD", { pax: { mape: 6.7, naive_mape: 7.0, skill: 0.04, forecast: [{ date: "2026-04", y: 2026, m: 3, v: 5, lo: 4, hi: 6 }] } });
+  const f = win.GP_forecastFor("OLD", "pax");
+  assert.equal(f.method, "prophet", "a payload with no `chosen` was Prophet by definition");
+  assert.equal(f.mape, 6.7);
+  assert.equal(f.forecast.length, 1);
+  assert.equal(win.GP_forecastModels("OLD", "pax").length, 1, "nothing to toggle between");
+});
+
+test("GP_forecastModels: lists candidates simplest-first with the auto-pick flagged", () => {
+  const win = loadDataModule();
+  win.GP_setAirportForecast("TST", {
+    pax: forecastDoc({ chosen: "ets", cands: {
+      prophet: { mase: 1.4, mape: 30, v: 300 },
+      snaive: { mase: 1.0, mape: 12, v: 100 },
+      ets: { mase: 0.5, mape: 9, v: 200 },
+    } }),
+  });
+  const models = win.GP_forecastModels("TST", "pax");
+  assert.equal(models.length, 3);
+  assert.equal(models.map((x) => x.key).join(","), "snaive,ets,prophet", "simplest-first, regardless of payload key order");
+  assert.equal(models.filter((x) => x.chosen).length, 1);
+  assert.equal(models.find((x) => x.chosen).key, "ets");
+  assert.equal(models.find((x) => x.key === "prophet").mase, 1.4);
+  assert.equal(win.GP_forecastModels("TST", "atm").length, 0, "a metric with no forecast has nothing to offer");
+});
+
+/* ---- the long-term ↔ short-term link ----
+   The strategic curve compounds ONE base year, so which year that is (and how
+   it was assembled) moves the endpoint more than any lever. These pin the link
+   down: the base year is completed by the SAME model the tactical screen shows,
+   and "observed" remains a true revert to the old behaviour. */
+
+test("longTermForecast: a partial current year is completed by the chosen short-term model", () => {
+  const win = loadDataModule();
+  // 2024 complete, 2025 complete, 2026 observed through March only
+  const pax = { ...monthlySeries(2024, 1, 24, 1000), ...monthlySeries(2026, 1, 3, 1000) };
+  const iata = setupAirport(win, { series: { pax } });
+  const history = win.GP_buildHistory(iata);
+  // a nightly forecast covering the rest of 2026 at a deliberately distinctive
+  // level, so we can tell the modeled months apart from carried ones
+  win.GP_setAirportForecast(iata, {
+    pax: forecastDoc({ chosen: "snaive", cands: { snaive: { mase: 0.5, mape: 5, v: 0 } } }),
+  });
+  const doc = { chosen: "snaive", chosen_reason: "t", candidates: { snaive: { mase: 0.5, mape: 5 } }, mase: 0.5, mape: 5,
+    forecast: [], backtest: [], seasonal12: Array(12).fill(1) };
+  for (let mm = 3; mm < 12; mm++) doc.forecast.push({ date: `2026-${String(mm + 1).padStart(2, "0")}`, y: 2026, m: mm, v: 5000, lo: 4000, hi: 6000 });
+  win.GP_setAirportForecast(iata, { pax: doc });
+
+  const sc = { ...win.GP_defaultScenario(iata), gdp: 0, elasticity: 0, pop: 0, tourism: 0, fuel: 0, lcc: 0, horizon: 5 };
+  const lt = win.GP_longTerm(iata, history, sc);
+  assert.equal(lt.baseYear, 2026, "the base year must be the current partial year, not the last full one");
+  assert.equal(lt.baseMode, "forecast");
+  assert.equal(lt.baseObservedMonths, 3);
+  assert.equal(lt.baseForecastMonths.length, 9);
+  assert.equal(lt.baseCompletion.pax, "snaive", "and it must disclose WHICH model completed it");
+  // 3 observed months at 1000 + 9 modeled at 5000
+  assert.equal(lt.rows[0].pax, 3 * 1000 + 9 * 5000);
+  assert.equal(lt.rows[0].partial, true, "the base row must flag that it isn't wholly observed");
+});
+
+test("longTermForecast: the base year follows the model toggle, not just the nightly's pick", () => {
+  const win = loadDataModule();
+  const pax = { ...monthlySeries(2024, 1, 24, 1000), ...monthlySeries(2026, 1, 3, 1000) };
+  const iata = setupAirport(win, { series: { pax } });
+  const history = win.GP_buildHistory(iata);
+  // two candidates that disagree sharply about the rest of 2026
+  const rows = (v) => { const o = []; for (let mm = 3; mm < 12; mm++) o.push({ date: `2026-${String(mm + 1).padStart(2, "0")}`, y: 2026, m: mm, v, lo: v, hi: v }); return o; };
+  win.GP_setAirportForecast(iata, { pax: {
+    chosen: "snaive", chosen_reason: "t", seasonal12: Array(12).fill(1),
+    mase: 0.5, mape: 5, forecast: rows(5000), backtest: [],
+    candidates: { snaive: { mase: 0.5, mape: 5 }, prophet: { mase: 0.9, mape: 9, forecast: rows(9000), backtest: [] } },
+  } });
+  const sc = { ...win.GP_defaultScenario(iata), gdp: 0, elasticity: 0, pop: 0, tourism: 0, fuel: 0, lcc: 0, horizon: 5 };
+
+  const auto = win.GP_longTerm(iata, history, sc);
+  assert.equal(auto.rows[0].pax, 3 * 1000 + 9 * 5000, "default base year uses the auto-picked model");
+
+  const forced = win.GP_longTerm(iata, history, sc, { model: "prophet" });
+  assert.equal(forced.rows[0].pax, 3 * 1000 + 9 * 9000, "overriding the model must move the base year with it");
+  assert.equal(forced.baseCompletion.pax, "prophet");
+  assert.ok(forced.rows[forced.rows.length - 1].pax > auto.rows[auto.rows.length - 1].pax,
+    "and the whole 25-year curve has to move — that's the point of linking them");
+});
+
+test("longTermForecast: baseMode 'observed' is a true revert to the last complete year", () => {
+  const win = loadDataModule();
+  const pax = { ...monthlySeries(2024, 1, 24, 1000), ...monthlySeries(2026, 1, 3, 1000) };
+  const iata = setupAirport(win, { series: { pax } });
+  const history = win.GP_buildHistory(iata);
+  const doc = { chosen: "snaive", chosen_reason: "t", seasonal12: Array(12).fill(1), mase: 0.5, mape: 5, forecast: [], backtest: [], candidates: { snaive: { mase: 0.5, mape: 5 } } };
+  for (let mm = 3; mm < 12; mm++) doc.forecast.push({ date: `2026-${String(mm + 1).padStart(2, "0")}`, y: 2026, m: mm, v: 5000, lo: 5000, hi: 5000 });
+  win.GP_setAirportForecast(iata, { pax: doc });
+
+  const sc = { ...win.GP_defaultScenario(iata), gdp: 0, elasticity: 0, pop: 0, tourism: 0, fuel: 0, lcc: 0, horizon: 5 };
+  const obs = win.GP_longTerm(iata, history, sc, { baseMode: "observed" });
+  assert.equal(obs.baseYear, 2025, "observed mode ignores the partial year entirely");
+  assert.equal(obs.baseMode, "observed");
+  assert.equal(obs.rows[0].pax, 12000, "and reports the real observed annual total");
+  assert.equal(obs.baseForecastMonths.length, 0);
+  assert.equal(Object.keys(obs.baseCompletion).length, 0);
+});
+
+test("longTermForecast: a complete latest year needs no completing, in either mode", () => {
+  const win = loadDataModule();
+  const iata = setupAirport(win, { series: { pax: monthlySeries(2024, 1, 24, 1000) } });
+  const history = win.GP_buildHistory(iata);
+  const sc = { ...win.GP_defaultScenario(iata), gdp: 0, elasticity: 0, pop: 0, tourism: 0, fuel: 0, lcc: 0, horizon: 5 };
+  const fc = win.GP_longTerm(iata, history, sc);
+  const obs = win.GP_longTerm(iata, history, sc, { baseMode: "observed" });
+  assert.equal(fc.baseYear, 2025);
+  assert.equal(fc.baseMode, "observed", "2025 is whole, so there is nothing to model");
+  assert.equal(fc.baseForecastMonths.length, 0);
+  assert.equal(fc.rows[0].pax, obs.rows[0].pax, "the two modes must agree exactly here");
+});
+
+test("longTermForecast: with no forecast to complete it, a partial year falls back to the last full one", () => {
+  const win = loadDataModule();
+  const pax = { ...monthlySeries(2024, 1, 24, 1000), ...monthlySeries(2026, 1, 3, 1000) };
+  const iata = setupAirport(win, { series: { pax } });
+  const history = win.GP_buildHistory(iata);
+  // no GP_setAirportForecast at all, and 27 months is under the 36 the in-browser
+  // ETS backtest wants — but ETS itself can still run, so the base year gets
+  // completed by it rather than silently reverting
+  const sc = { ...win.GP_defaultScenario(iata), gdp: 0, elasticity: 0, pop: 0, tourism: 0, fuel: 0, lcc: 0, horizon: 5 };
+  const lt = win.GP_longTerm(iata, history, sc);
+  assert.ok(lt, "must still produce a forecast");
+  assert.ok(lt.baseYear === 2026 || lt.baseYear === 2025);
+  if (lt.baseYear === 2026) assert.equal(lt.baseCompletion.pax, "ets", "in-browser ETS is a legitimate completer");
+});
+
+test("longTermForecast: each metric is completed by its OWN tactical model where one can run", () => {
+  const win = loadDataModule();
+  // pax and atm both have enough contiguous history for the in-browser ETS to
+  // reach into 2026, so neither should need the carry fallback
+  const pax = { ...monthlySeries(2024, 1, 24, 1000), ...monthlySeries(2026, 1, 3, 1000) };
+  const atm = { ...monthlySeries(2024, 1, 24, 100), ...monthlySeries(2026, 1, 3, 100) };
+  const iata = setupAirport(win, { series: { pax, atm } });
+  const history = win.GP_buildHistory(iata);
+  const doc = { chosen: "snaive", chosen_reason: "t", seasonal12: Array(12).fill(1), mase: 0.5, mape: 5, forecast: [], backtest: [], candidates: { snaive: { mase: 0.5, mape: 5 } } };
+  for (let mm = 3; mm < 12; mm++) doc.forecast.push({ date: `2026-${String(mm + 1).padStart(2, "0")}`, y: 2026, m: mm, v: 5000, lo: 5000, hi: 5000 });
+  win.GP_setAirportForecast(iata, { pax: doc });   // nightly covers pax only
+
+  const sc = { ...win.GP_defaultScenario(iata), gdp: 0, elasticity: 0, pop: 0, tourism: 0, fuel: 0, lcc: 0, horizon: 5 };
+  const lt = win.GP_longTerm(iata, history, sc);
+  assert.equal(lt.baseYear, 2026);
+  assert.equal(lt.hasAtm, true);
+  assert.equal(lt.baseCompletion.pax, "snaive", "pax has a nightly forecast — use it");
+  // movements are deliberately NOT completed by their own model: the long-term
+  // model assumes movements track passengers, so the base year's pax-per-movement
+  // ratio has to stay anchored (it IS ratioBase in the capacity block)
+  assert.equal(lt.baseCompletion.atm, "pax-implied");
+});
+
+test("longTermForecast: movements are derived from passengers, not from their own model", () => {
+  const win = loadDataModule();
+  // BTS's real failure: passengers won on ETS, movements on a seasonal naive, and
+  // nothing held their ratio to anything — 174 pax/movement against an observed
+  // 104. Here movements' own forecast says something absurd; the base year must
+  // ignore it and keep the observed ratio instead.
+  const pax = { ...monthlySeries(2024, 1, 24, 1000), ...monthlySeries(2026, 1, 3, 1000) };
+  const atm = { ...monthlySeries(2024, 1, 24, 100), ...monthlySeries(2026, 1, 3, 100) };
+  const iata = setupAirport(win, { series: { pax, atm } });
+  const history = win.GP_buildHistory(iata);
+  const rows = (v) => { const o = []; for (let mm = 3; mm < 12; mm++) o.push({ date: `2026-${String(mm + 1).padStart(2, "0")}`, y: 2026, m: mm, v, lo: v, hi: v }); return o; };
+  const doc = (v) => ({ chosen: "snaive", chosen_reason: "t", seasonal12: Array(12).fill(1), mase: 0.5, mape: 5, backtest: [], forecast: rows(v), candidates: { snaive: { mase: 0.5, mape: 5 } } });
+  // observed ratio is 1000/100 = 10. The movements forecast claims 999/mo, which
+  // would imply ~5 pax per movement — a 2x gauge collapse in one year.
+  win.GP_setAirportForecast(iata, { pax: doc(5000), atm: doc(999) });
+
+  const sc = { ...win.GP_defaultScenario(iata), gdp: 0, elasticity: 0, pop: 0, tourism: 0, fuel: 0, lcc: 0, horizon: 5 };
+  const lt = win.GP_longTerm(iata, history, sc);
+  assert.equal(lt.baseCompletion.atm, "pax-implied");
+  // 3 observed months at 100, then 9 months at 5000/10 = 500
+  assert.equal(lt.rows[0].atm, 3 * 100 + 9 * 500);
+  const ratio = lt.rows[0].pax / lt.rows[0].atm;
+  assert.ok(Math.abs(ratio - 10) < 0.01, `base ratio must hold at the observed 10, got ${ratio}`);
+});
+
+test("longTermForecast: cargo no model can reach carries the prior year rather than vanishing", () => {
+  const win = loadDataModule();
+  // cargo has only 15 months — under the 24 contiguous the in-browser ETS needs,
+  // and no nightly forecast either. The base year still has to resolve it.
+  const pax = { ...monthlySeries(2024, 1, 24, 1000), ...monthlySeries(2026, 1, 3, 1000) };
+  const cargo = monthlySeries(2025, 1, 15, 40);     // 2025-01 .. 2026-03
+  const iata = setupAirport(win, { series: { pax, cargo } });
+  const history = win.GP_buildHistory(iata);
+  assert.equal(win.GP_etsForecast(history, "cargo", 24), null, "sanity: no model can forecast this metric");
+
+  const doc = { chosen: "snaive", chosen_reason: "t", seasonal12: Array(12).fill(1), mase: 0.5, mape: 5, forecast: [], backtest: [], candidates: { snaive: { mase: 0.5, mape: 5 } } };
+  for (let mm = 3; mm < 12; mm++) doc.forecast.push({ date: `2026-${String(mm + 1).padStart(2, "0")}`, y: 2026, m: mm, v: 5000, lo: 5000, hi: 5000 });
+  win.GP_setAirportForecast(iata, { pax: doc });
+
+  const sc = { ...win.GP_defaultScenario(iata), gdp: 0, elasticity: 0, pop: 0, tourism: 0, fuel: 0, lcc: 0, horizon: 5 };
+  const lt = win.GP_longTerm(iata, history, sc);
+  assert.equal(lt.baseYear, 2026);
+  assert.equal(lt.hasCargo, true, "dropping cargo out of the strategic view would be the worse answer");
+  assert.equal(lt.baseCompletion.cargo, "carry", "and the fallback must be disclosed, not hidden");
+  assert.equal(lt.rows[0].cargo, 480, "3 observed months at 40 + 9 carried from 2025 at 40");
+});
+
+test("longTermForecast: movements fall back to carry when no observed ratio exists", () => {
+  const win = loadDataModule();
+  // Contrived, but it's the safety net worth pinning: movements overlap
+  // passengers in only ONE month, so there is no ratio to derive from — yet the
+  // prior year carries movements for every month. Carry, don't drop.
+  const pax = { ...monthlySeries(2024, 1, 12, 1000), ...monthlySeries(2026, 1, 5, 1000) };
+  const atm = { ...monthlySeries(2025, 1, 12, 100), ...monthlySeries(2026, 1, 1, 100) };
+  const iata = setupAirport(win, { series: { pax, atm } });
+  const history = win.GP_buildHistory(iata);
+  const doc = { chosen: "snaive", chosen_reason: "t", seasonal12: Array(12).fill(1), mase: 0.5, mape: 5, forecast: [], backtest: [], candidates: { snaive: { mase: 0.5, mape: 5 } } };
+  for (let mm = 5; mm < 12; mm++) doc.forecast.push({ date: `2026-${String(mm + 1).padStart(2, "0")}`, y: 2026, m: mm, v: 1000, lo: 1000, hi: 1000 });
+  win.GP_setAirportForecast(iata, { pax: doc });
+
+  const sc = { ...win.GP_defaultScenario(iata), gdp: 0, elasticity: 0, pop: 0, tourism: 0, fuel: 0, lcc: 0, horizon: 5 };
+  const lt = win.GP_longTerm(iata, history, sc);
+  assert.equal(lt.hasAtm, true);
+  assert.equal(lt.baseCompletion.atm, "carry", "one overlapping month is too thin for a ratio");
+  assert.equal(lt.rows[0].atm, 1200, "1 observed + 11 carried, all at 100");
+});
+
+test("longTermForecast: a metric that lags passengers by a month keeps its own gap set", () => {
+  const win = loadDataModule();
+  // the real YYZ shape: passengers published through May, movements through
+  // April. Completing movements over PASSENGERS' gap set (Jun-Dec) leaves May
+  // unfilled and drops movements from the strategic view entirely — it did, for
+  // 8 Canadian gateways.
+  const pax = { ...monthlySeries(2024, 1, 24, 1000), ...monthlySeries(2026, 1, 5, 1000) };
+  const atm = { ...monthlySeries(2024, 1, 24, 100), ...monthlySeries(2026, 1, 4, 100) };
+  const iata = setupAirport(win, { series: { pax, atm } });
+  const history = win.GP_buildHistory(iata);
+  const rows = (from, v) => { const o = []; for (let mm = from; mm < 12; mm++) o.push({ date: `2026-${String(mm + 1).padStart(2, "0")}`, y: 2026, m: mm, v, lo: v, hi: v }); return o; };
+  const doc = (from, v) => ({ chosen: "snaive", chosen_reason: "t", seasonal12: Array(12).fill(1), mase: 0.5, mape: 5, backtest: [], forecast: rows(from, v), candidates: { snaive: { mase: 0.5, mape: 5 } } });
+  win.GP_setAirportForecast(iata, { pax: doc(5, 5000), atm: doc(4, 500) });
+
+  const sc = { ...win.GP_defaultScenario(iata), gdp: 0, elasticity: 0, pop: 0, tourism: 0, fuel: 0, lcc: 0, horizon: 5 };
+  const lt = win.GP_longTerm(iata, history, sc);
+  assert.equal(lt.baseYear, 2026);
+  assert.equal(lt.hasAtm, true, "movements must survive a one-month publishing lag");
+  assert.equal(lt.baseForecastMonths.length, 7, "passengers: Jun-Dec modeled");
+  assert.equal(lt.baseModeledMonths.pax, 7);
+  assert.equal(lt.baseModeledMonths.atm, 8, "movements: May-Dec modeled — its OWN gap set");
+  assert.equal(lt.rows[0].pax, 5 * 1000 + 7 * 5000);
+  // movements are pax-implied at the observed ratio of 10: May takes observed
+  // May passengers (1000/10), Jun-Dec take the modeled 5000/10
+  assert.equal(lt.rows[0].atm, 4 * 100 + 1 * 100 + 7 * 500);
+});
+
+test("longTermForecast: a metric already complete in the base year is not modeled at all", () => {
+  const win = loadDataModule();
+  // cargo happens to be published a month AHEAD of passengers — it needs no
+  // completion, so it must report nothing modeled rather than borrowing pax's count
+  const pax = { ...monthlySeries(2024, 1, 24, 1000), ...monthlySeries(2026, 1, 5, 1000) };
+  const cargo = { ...monthlySeries(2024, 1, 24, 50), ...monthlySeries(2026, 1, 12, 50) };
+  const iata = setupAirport(win, { series: { pax, cargo } });
+  const history = win.GP_buildHistory(iata);
+  const rows = []; for (let mm = 5; mm < 12; mm++) rows.push({ date: `2026-${String(mm + 1).padStart(2, "0")}`, y: 2026, m: mm, v: 5000, lo: 5000, hi: 5000 });
+  win.GP_setAirportForecast(iata, { pax: { chosen: "snaive", chosen_reason: "t", seasonal12: Array(12).fill(1), mase: 0.5, mape: 5, backtest: [], forecast: rows, candidates: { snaive: { mase: 0.5, mape: 5 } } } });
+
+  const sc = { ...win.GP_defaultScenario(iata), gdp: 0, elasticity: 0, pop: 0, tourism: 0, fuel: 0, lcc: 0, horizon: 5 };
+  const lt = win.GP_longTerm(iata, history, sc);
+  assert.equal(lt.hasCargo, true);
+  assert.equal(lt.baseModeledMonths.cargo, 0, "a complete metric has nothing modeled");
+  assert.equal(lt.baseCompletion.cargo, undefined, "and so has no completion method");
+  assert.equal(lt.rows[0].cargo, 12 * 50, "its base total is purely observed");
+});
+
+test("longTermForecast: a base month with an all-zero sector split still reconciles", () => {
+  const win = loadDataModule();
+  // PED's real shape: some months carry no sector split at all (both sectors
+  // zero). The per-month rescale has no shape to scale, so those months'
+  // passengers used to vanish from the mix while still counting in the headline
+  // — the donut silently stopped adding up to the total.
+  const pax = {}, dom = {}, intl = {};
+  for (let y = 2024; y <= 2025; y++) for (let m = 1; m <= 12; m++) {
+    const k = `${y}-${String(m).padStart(2, "0")}`;
+    pax[k] = 1000;
+    // March, April and December have no split on record at all
+    const blank = m === 3 || m === 4 || m === 12;
+    dom[k] = blank ? 0 : 200;
+    intl[k] = blank ? 0 : 800;
+  }
+  const iata = setupAirport(win, { series: { pax }, meta: { hasPaxSeg: true } });
+  win.GP_setAirportSeries(iata, { series: { pax }, paxSeg: { domestic: dom, international: intl } });
+  const history = win.GP_buildHistory(iata);
+  const lt = win.GP_longTerm(iata, history, { ...win.GP_defaultScenario(iata), horizon: 3 });
+
+  assert.ok(lt.hasSeg, "an airport with a real split most of the year must keep the sector view");
+  const seg = lt.rows[0].seg;
+  const total = lt.segKeys.reduce((t, k) => t + seg[k], 0);
+  assert.ok(Math.abs(total - lt.rows[0].pax) <= 12,
+    `sectors must reconcile to the headline: seg ${total} vs pax ${lt.rows[0].pax}`);
+  // the blank months took the shape of the months that do carry a split (20/80)
+  assert.ok(Math.abs(seg.domestic / total - 0.2) < 0.01, `domestic share ${seg.domestic / total}`);
+});
+
+test("longTermForecast: a sector split that is zero in EVERY base month is dropped, not invented", () => {
+  const win = loadDataModule();
+  const pax = {}, dom = {}, intl = {};
+  for (let y = 2024; y <= 2025; y++) for (let m = 1; m <= 12; m++) {
+    const k = `${y}-${String(m).padStart(2, "0")}`;
+    pax[k] = 1000; dom[k] = 0; intl[k] = 0;
+  }
+  const iata = setupAirport(win, { series: { pax }, meta: { hasPaxSeg: true } });
+  win.GP_setAirportSeries(iata, { series: { pax }, paxSeg: { domestic: dom, international: intl } });
+  const lt = win.GP_longTerm(iata, win.GP_buildHistory(iata), { ...win.GP_defaultScenario(iata), horizon: 3 });
+  assert.equal(lt.hasSeg, false, "no split anywhere means no sector view, not a fabricated one");
+  assert.equal(lt.segKeys.length, 0);
+  assert.equal(lt.rows[0].seg, undefined);
+});
+
+test("longTermForecast: baseMonthly closes the chart gap the advancing base year opened", () => {
+  const win = loadDataModule();
+  // `months` starts in January of baseYear+1, so with a mid-year base year the
+  // monthly chart drew the last observed month adjacent to January of the NEXT
+  // year — an 8-month jump rendered as one step.
+  const pax = { ...monthlySeries(2024, 1, 24, 1000), ...monthlySeries(2026, 1, 5, 1000) };
+  const iata = setupAirport(win, { series: { pax } });
+  const history = win.GP_buildHistory(iata);
+  const rows = []; for (let mm = 5; mm < 12; mm++) rows.push({ date: `2026-${String(mm + 1).padStart(2, "0")}`, y: 2026, m: mm, v: 5000, lo: 5000, hi: 5000 });
+  win.GP_setAirportForecast(iata, { pax: { chosen: "snaive", chosen_reason: "t", seasonal12: Array(12).fill(1), mase: 0.5, mape: 5, backtest: [], forecast: rows, candidates: { snaive: { mase: 0.5, mape: 5 } } } });
+  const lt = win.GP_longTerm(iata, history, { ...win.GP_defaultScenario(iata), horizon: 3 });
+
+  assert.equal(lt.baseMonthly.length, 12, "the base year's own twelve months must be exposed");
+  assert.equal(lt.baseMonthly.filter((r) => r.modeled.pax).length, 7, "Jun-Dec are modeled");
+  assert.equal(lt.baseMonthly.filter((r) => !r.modeled.pax).length, 5, "Jan-May are observed");
+  assert.equal(lt.baseMonthly[0].pax, 1000);
+  assert.equal(lt.baseMonthly[11].pax, 5000);
+  // the chart's own construction, from screens-strategic.jsx
+  const histTail = history.filter((r) => r.y >= lt.baseYear - 3 && r.pax != null);
+  const fc = [...lt.baseMonthly.filter((r) => r.modeled.pax && r.pax != null), ...lt.months];
+  const a = histTail[histTail.length - 1], b = fc[0];
+  assert.equal((b.y * 12 + b.m) - (a.y * 12 + a.m), 1, "actuals must hand off to the forecast one month later, not eight");
+
+  // `months` itself must be untouched — the event simulator indexes into it
+  // positionally and the capacity block scales it per year
+  assert.equal(lt.months[0].y, lt.baseYear + 1);
+  assert.equal(lt.months[0].m, 0);
+  assert.equal(lt.months.length, 3 * 12);
+});
+
+test("longTermForecast: the base-year memo can't serve a base built before the forecast arrived", () => {
+  const win = loadDataModule();
+  const pax = { ...monthlySeries(2024, 1, 24, 1000), ...monthlySeries(2026, 1, 3, 1000) };
+  const iata = setupAirport(win, { series: { pax } });
+  const history = win.GP_buildHistory(iata);
+  const sc = { ...win.GP_defaultScenario(iata), gdp: 0, elasticity: 0, pop: 0, tourism: 0, fuel: 0, lcc: 0, horizon: 5 };
+
+  // app.jsx fetches the forecast lazily, so the first render happens BEFORE it
+  // lands — the base year gets completed by in-browser ETS and memoized
+  const before = win.GP_longTerm(iata, history, sc);
+  assert.equal(before.baseCompletion.pax, "ets");
+
+  // ...then the nightly payload arrives against the SAME history array
+  const doc = { chosen: "snaive", chosen_reason: "t", seasonal12: Array(12).fill(1), mase: 0.5, mape: 5, forecast: [], backtest: [], candidates: { snaive: { mase: 0.5, mape: 5 } } };
+  for (let mm = 3; mm < 12; mm++) doc.forecast.push({ date: `2026-${String(mm + 1).padStart(2, "0")}`, y: 2026, m: mm, v: 5000, lo: 5000, hi: 5000 });
+  win.GP_setAirportForecast(iata, { pax: doc });
+
+  const after = win.GP_longTerm(iata, history, sc);
+  assert.equal(after.baseCompletion.pax, "snaive", "the memo must not outlive the payload landing");
+  assert.equal(after.rows[0].pax, 3 * 1000 + 9 * 5000);
 });
 
 test("longTermForecast: an annual passenger cap constrains the trajectory and reports spill", () => {

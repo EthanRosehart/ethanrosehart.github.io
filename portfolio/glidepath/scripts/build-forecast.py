@@ -1,16 +1,42 @@
 #!/usr/bin/env python3
 # =============================================================================
-# build-forecast.py  —  Glidepath short-term tactical model (Meta Prophet)
+# build-forecast.py  —  Glidepath short-term tactical model (auto-selected)
 #
 # Runs server-side in .github/workflows/refresh-data.yml (never in the browser).
 # Reads the real monthly series committed by the Node fetchers — the airport
 # catalogue in data/activity-index.json plus each airport's own
-# data/series/<IATA>.json — and fits a Meta Prophet model per airport per
-# metric, with country public holidays as regressors. Writes one
-# data/forecasts/<IATA>.json per airport (fetched by the browser only once
-# that gateway is selected) plus a small shared data/forecast-meta.json
-# (generatedAt/model/library/interval/horizon). No forecasting happens
-# client-side — the browser renders these directly.
+# data/series/<IATA>.json — and fits THREE candidate models per airport per
+# metric, scores them on identical rolling-origin folds, and publishes the
+# winner along with every candidate's forecast so the browser can switch
+# between them. Writes one data/forecasts/<IATA>.json per airport (fetched by
+# the browser only once that gateway is selected) plus a small shared
+# data/forecast-meta.json (generatedAt/model/library/interval/horizon).
+#
+# WHY THREE CANDIDATES. Prophet is a good default and a bad universal: fit
+# across the whole catalogue it loses to a seasonal naive on most series, and
+# on short or structurally-broken histories (an airport that lost its traffic,
+# a cargo feed running at single-digit tonnes) it confidently extrapolates the
+# break. Publishing whichever model actually won its own backtest is strictly
+# more honest than publishing Prophet and reporting that it lost. The
+# candidates are deliberately ordered simplest-first:
+#
+#   snaive   every month repeats the most recent observed value for that
+#            calendar month. The benchmark, promoted to a competitor.
+#   ets      Holt-Winters, damped additive trend + multiplicative monthly
+#            seasonality. Damping is the point: where Prophet compounds a
+#            structural break, phi < 1 flattens it out.
+#   prophet  trend + yearly Fourier seasonality + country holidays + COVID
+#            events + a GDP/capita regressor where one exists.
+#
+# WHY MASE, NOT MAPE. MAPE divides by the actual, so it explodes toward
+# infinity as a series approaches zero — ISL scored 22,949% not because the
+# model is that bad but because Ataturk closed to commercial traffic and
+# monthly movements fell from 33,486 to a few hundred. MASE divides by the
+# in-sample seasonal-naive MAE instead: finite at zero, comparable across
+# airports, and MASE < 1 literally reads "beat a seasonal naive". Model
+# selection runs on MASE (falling back to unscaled MAE only on a series with no
+# year-over-year variation to scale by — see choose_model). MAPE is still
+# published because it is what planners recognise, but it never decides.
 #
 # Holidays come from the open-source `holidays` package (vacanza, MIT, 250
 # country codes) — the same source Prophet's add_country_holidays uses. Because
@@ -53,9 +79,36 @@ IMF_WEO = os.path.join(DATA, "imf-weo.json")
 
 HORIZON = 24            # months forecast (UI offers 12 / 24)
 INTERVAL = 0.80         # prediction interval width -> P10..P90 band
+Z_INTERVAL = 1.2816     # two-sided normal quantile for INTERVAL — the two must
+                        # move together (only the closed-form ets/snaive bands
+                        # need it; Prophet samples its own posterior)
 MIN_MONTHS = 36         # need a few seasons before Prophet is meaningful
 BACKTEST_FOLDS = 3      # rolling-origin evaluation: up to N folds...
 BACKTEST_H = 12         # ...each holding out the next 12 months
+
+# Candidate models, ORDERED SIMPLEST-FIRST — the order is load-bearing, see
+# choose_model(): the seasonal naive is the incumbent every fitted model has to
+# unseat, not a footnote it gets compared against.
+CANDIDATES = ("snaive", "ets", "prophet")
+# ...and a more complex candidate must cut MASE by at least this much
+# (relative) to take over. Without the margin, ordinary fold noise flips the
+# published model from night to night and the forecast a visitor saw yesterday
+# silently changes for no real reason.
+SELECT_MARGIN = 0.05
+
+# Bounds on the band calibration factor (see band_scale_of). A few held-out
+# months can throw an extreme quantile, and a 30x-wide band is less useful than
+# an honestly-wrong one.
+BAND_SCALE_MIN, BAND_SCALE_MAX = 0.25, 4.0
+
+# ETS smoothing grid, scored on one-step error. phi is the damping factor;
+# 1.0 is an undamped Holt-Winters, so the grid spans both.
+ETS_GRID = {
+    "alpha": (0.1, 0.2, 0.3, 0.5),
+    "beta": (0.01, 0.05, 0.1),
+    "gamma": (0.05, 0.1, 0.2, 0.3),
+    "phi": (0.85, 0.95, 1.0),
+}
 
 HOLIDAY_PRIOR = 5.0     # regularisation for public holidays (multiplicative)
 # COVID is modelled as an explicit event, not deleted: one dummy per month over
@@ -221,100 +274,417 @@ def fit_predict(df, hol_df, horizon, gdp_levels=None, gdp_growth=None, gdp_futur
     return m, fc
 
 
+def month_span(a, b):
+    """Whole calendar months from month-start `a` to month-start `b`."""
+    return (b.year - a.year) * 12 + (b.month - a.month)
+
+
 def mape_of(preds, actuals):
     """Mean absolute percentage error over pairs with a non-zero actual;
-    None when nothing is scoreable."""
+    None when nothing is scoreable. Published for recognisability only —
+    see the header on why it never drives model selection."""
     pairs = [(float(p), float(a)) for p, a in zip(preds, actuals) if a]
     if not pairs:
         return None
     return sum(abs(p - a) / a for p, a in pairs) / len(pairs) * 100
 
 
-def seasonal_naive_preds(train, test):
-    """The benchmark every model must beat: month t forecast by the observed
-    value 12 months earlier. Returns (preds, actuals) over the test months
-    where the year-ago month exists in train."""
+def quantile(vals, q):
+    """Empirical q-quantile, linearly interpolated. None on an empty list."""
+    if not vals:
+        return None
+    s = sorted(vals)
+    if len(s) == 1:
+        return s[0]
+    pos = q * (len(s) - 1)
+    lo = int(pos)
+    hi = min(lo + 1, len(s) - 1)
+    return s[lo] + (s[hi] - s[lo]) * (pos - lo)
+
+
+def band_scale_of(abs_z):
+    """How much a candidate's own prediction band has to be stretched (or
+    shrunk) for it to actually cover what it claims.
+
+    Each held-out month contributes |actual − forecast| divided by that month's
+    own one-sided band half-width, so `abs_z` is in units of "claimed bands".
+    The INTERVAL-th quantile of that is the factor which would have put exactly
+    INTERVAL of the held-out months inside the band. > 1 widens a band that was
+    too narrow, < 1 tightens one that was too wide.
+
+    This is needed because the three candidates derive their bands three
+    incompatible ways — Prophet samples a posterior, ETS grows from in-sample
+    residuals, the seasonal naive uses a seasonal-random-walk sigma — and
+    measured coverage of a nominal 80% band ran at a median 39% for Prophet and
+    100% for the naive. A published "80% interval" that covers 39% (or 100%) of
+    held-out months is simply mislabelled, whichever direction it errs in.
+
+    Clamped: a handful of held-out months can produce an absurd quantile, and a
+    30x band is less useful than an honestly-wrong one. None when nothing
+    scoreable."""
+    scale = quantile([z for z in abs_z if z is not None], INTERVAL)
+    if scale is None or scale <= 0:
+        return None
+    return round(min(BAND_SCALE_MAX, max(BAND_SCALE_MIN, scale)), 3)
+
+
+def apply_band_scale(v, lo, hi, scale):
+    """Stretch a band around its own point forecast, keeping any asymmetry
+    (Prophet's posterior is not symmetric, and a naive band clamps at zero)."""
+    if not scale:
+        return v, lo, hi
+    return v, v - (v - lo) * scale, v + (hi - v) * scale
+
+
+def mae_of(preds, actuals):
+    """Plain mean absolute error, in the series' own units. Only used to rank
+    candidates when MASE is undefined for all of them — see choose_model()."""
+    pairs = [(float(p), float(a)) for p, a in zip(preds, actuals)]
+    if not pairs:
+        return None
+    return sum(abs(p - a) for p, a in pairs) / len(pairs)
+
+
+def mase_of(preds, actuals, scale):
+    """Mean absolute SCALED error: MAE over the held-out months divided by
+    `scale`, the in-sample seasonal-naive MAE. Every pair counts — unlike MAPE
+    there is no division by the actual, so a month that came in at zero is
+    scored rather than skipped, and a series hovering near zero doesn't blow
+    the metric up. 1.0 means "no better than a seasonal naive was on its own
+    training data"; below 1 is a genuine win.
+
+    None when `scale` is zero or missing, which is not a failure but a real
+    case: a series with no year-over-year movement at all (a flat feed, or one
+    that repeats exactly) has nothing to scale by, because the seasonal naive
+    already reproduces its training data perfectly. choose_model() ranks on
+    plain MAE there rather than inventing a scaled number."""
+    if not scale or scale <= 0:
+        return None
+    mae = mae_of(preds, actuals)
+    return None if mae is None else mae / scale
+
+
+def seasonal_naive_errors(train):
+    """y_t − y_{t−12} over the training months that have a year-ago
+    counterpart. The raw material for both MASE's scale (their mean absolute
+    value) and the seasonal-naive prediction band (their sd). Computed on the
+    TRAINING rows only, never the holdout, so the scale can't leak the answer
+    into the score it normalises."""
     by_ds = {ds: float(y) for ds, y in zip(train["ds"], train["y"])}
-    preds, actuals = [], []
-    for ds, y in zip(test["ds"], test["y"]):
+    out = []
+    for ds, y in by_ds.items():
         prev = ds - pd.DateOffset(years=1)
         if prev in by_ds:
-            preds.append(by_ds[prev])
-            actuals.append(float(y))
-    return preds, actuals
+            out.append(y - by_ds[prev])
+    return out
+
+
+def seasonal_naive_scale(train):
+    """MASE's denominator: mean |y_t − y_{t−12}| over the training months.
+    None when no month has a year-ago counterpart (nothing to scale by)."""
+    errs = seasonal_naive_errors(train)
+    return (sum(abs(e) for e in errs) / len(errs)) if errs else None
+
+
+def snaive_path(train, target_ds):
+    """Candidate 1 — seasonal naive. Each target month takes the most recent
+    observed value for that same calendar month, stepping back a whole year at
+    a time; for horizons within 12 months that is the textbook seasonal naive,
+    and beyond it the last observed seasonal cycle simply repeats.
+
+    The band is the seasonal random walk's: sigma × sqrt(k) where sigma is the
+    sd of the in-sample year-over-year steps and k counts the whole seasonal
+    cycles the horizon spans. An honest closed form, not a posterior.
+
+    Returns {ds: (v, lo, hi)}, skipping any target with no year-ago anchor."""
+    by_ds = {ds: float(y) for ds, y in zip(train["ds"], train["y"])}
+    if not by_ds:
+        return {}
+    first, last = min(by_ds), max(by_ds)
+    errs = seasonal_naive_errors(train)
+    sigma = (sum(e * e for e in errs) / len(errs)) ** 0.5 if errs else 0.0
+    out = {}
+    for ds in target_ds:
+        probe, v = ds - pd.DateOffset(years=1), None
+        while probe >= first:
+            if probe in by_ds:
+                v = by_ds[probe]
+                break
+            probe -= pd.DateOffset(years=1)
+        if v is None:
+            continue
+        cycles = max(1, (max(0, month_span(last, ds)) - 1) // 12 + 1)
+        w = Z_INTERVAL * sigma * (cycles ** 0.5)
+        out[ds] = (v, max(0.0, v - w), v + w)
+    return out
+
+
+def contiguous_tail(df):
+    """The longest gap-free monthly run ending at the latest observation. ETS
+    carries state forward one month at a time, so a hole mid-series would be
+    silently treated as a single step — the tail is what it can honestly fit."""
+    ds = list(df["ds"])
+    start = len(ds) - 1
+    while start > 0 and month_span(ds[start - 1], ds[start]) == 1:
+        start -= 1
+    return df.iloc[start:]
+
+
+def ets_fit(df, alpha, beta, gamma, phi, P=12):
+    """Holt-Winters with an additive DAMPED trend and multiplicative monthly
+    seasonality, over a gap-free frame. Seasonal slots are indexed by real
+    calendar month, so the fit doesn't assume the series starts in January.
+    Returns the end state, the one-step relative residuals (the band's raw
+    material) and the mean squared error the grid search ranks on. None when
+    there aren't two full seasons to initialise from."""
+    ys = [float(v) for v in df["y"]]
+    ms = [int(d.month) - 1 for d in df["ds"]]
+    n = len(ys)
+    if n < 2 * P:
+        return None
+    overall = (sum(ys[:2 * P]) / (2 * P)) or 1.0
+    sums, counts = [0.0] * P, [0] * P
+    for i in range(2 * P):
+        sums[ms[i]] += ys[i] / overall
+        counts[ms[i]] += 1
+    seas = [(sums[i] / counts[i]) if counts[i] else 1.0 for i in range(P)]
+    mean_seas = (sum(seas) / P) or 1.0
+    seas = [s / mean_seas for s in seas]
+    y1, y2 = sum(ys[:P]) / P, sum(ys[P:2 * P]) / P
+    level, trend = y1, (y2 - y1) / P
+    # A MULTIPLICATIVE seasonal model has no meaning at or below zero. On a
+    # collapsing series the level crosses zero, y/level flips sign, and the
+    # seasonal index goes negative — BMA fitted September at -9.428, which made
+    # the point forecast negative and inverted every band derived from it
+    # (v=0, lo=17217, hi=0 after clamping). validate-data is a HARD GATE in the
+    # nightly, so one such series fails the run and freezes last-good forecasts
+    # for the whole catalogue. Floor both states at a hair above zero, scaled to
+    # the series so it stays numerically harmless.
+    floor = max(1e-9, 1e-6 * (sum(ys) / n))
+    resid, sse, scored = [], 0.0, 0
+    for t in range(n):
+        mi = ms[t]
+        f = (level + phi * trend) * (seas[mi] or 1.0)
+        if t >= P:                       # first season initialised the state
+            sse += (ys[t] - f) ** 2
+            scored += 1
+            if f > 0:
+                resid.append(ys[t] / f - 1)
+        prev = level
+        level = max(floor, alpha * (ys[t] / (seas[mi] or floor)) + (1 - alpha) * (level + phi * trend))
+        trend = beta * (level - prev) + (1 - beta) * phi * trend
+        seas[mi] = max(floor, gamma * (ys[t] / (level or floor)) + (1 - gamma) * seas[mi])
+    return {"level": level, "trend": trend, "phi": phi, "seas": seas,
+            "resid": resid, "mse": (sse / scored) if scored else float("inf")}
+
+
+def ets_best_fit(df):
+    """Coarse grid search over the smoothing constants and the damping factor,
+    ranked on in-sample one-step MSE."""
+    best = None
+    for alpha in ETS_GRID["alpha"]:
+        for beta in ETS_GRID["beta"]:
+            for gamma in ETS_GRID["gamma"]:
+                for phi in ETS_GRID["phi"]:
+                    f = ets_fit(df, alpha, beta, gamma, phi)
+                    if f and (best is None or f["mse"] < best["mse"]):
+                        best = f
+    return best
+
+
+def ets_path(train, target_ds):
+    """Candidate 2 — damped Holt-Winters. The trend contributes
+    phi + phi^2 + ... + phi^h, so phi < 1 flattens the projection instead of
+    compounding whatever slope the last few months happened to show; that is
+    exactly the failure mode on a short or broken series. The band grows from
+    the relative one-step residuals — an approximation, disclosed on the model
+    card. Returns {ds: (v, lo, hi)}."""
+    if not len(target_ds):
+        return {}
+    tail = contiguous_tail(train)
+    fit = ets_best_fit(tail)
+    if not fit:
+        return {}
+    last = tail["ds"].iloc[-1]
+    horizon = month_span(last, max(target_ds))
+    if horizon < 1:
+        return {}
+    rr = fit["resid"][-36:]
+    sd = (sum(x * x for x in rr) / len(rr)) ** 0.5 if rr else 0.08
+    out, damp = {}, 0.0
+    for h in range(1, horizon + 1):
+        damp += fit["phi"] ** h
+        ds = last + pd.DateOffset(months=h)
+        # clamp the product, not the level: a negative seasonal factor would
+        # otherwise turn a clamped-positive level into a negative forecast
+        v = max(0.0, (fit["level"] + damp * fit["trend"]) * (fit["seas"][ds.month - 1] or 1.0))
+        w = Z_INTERVAL * sd * (h ** 0.5)
+        out[ds] = (v, max(0.0, v * (1 - w)), max(0.0, v * (1 + w)))
+    return {ds: out[ds] for ds in target_ds if ds in out}
+
+
+def prophet_path(train, hol_df, target_ds, gdp_levels=None, gdp_growth=None,
+                 gdp_future_rates=None):
+    """Candidate 3 — Prophet, through the same fit_predict() the final forecast
+    uses. Sized by CALENDAR distance to the last target, not by the number of
+    held-out rows: Prophet predicts contiguous months, so on a gappy series a
+    row count would leave the tail of the window unpredicted. Returns
+    {ds: (v, lo, hi)}, empty if the fit raises (a candidate that can't fit is
+    simply out of the running rather than taking the whole metric down)."""
+    if not len(target_ds):
+        return {}
+    horizon = month_span(train["ds"].iloc[-1], max(target_ds))
+    if horizon < 1:
+        return {}
+    try:
+        _, fc = fit_predict(train, hol_df, horizon, gdp_levels, gdp_growth, gdp_future_rates)
+    except Exception:
+        return {}
+    return path_from_prophet(fc, target_ds)
+
+
+def path_from_prophet(fc, target_ds):
+    """{ds: (yhat, lower, upper)} for the requested months of a Prophet
+    prediction frame, dropping any month it didn't predict."""
+    fx = fc.set_index("ds")
+    out = {}
+    for ds in target_ds:
+        if ds in fx.index:
+            out[ds] = (float(fx.at[ds, "yhat"]),
+                       float(fx.at[ds, "yhat_lower"]),
+                       float(fx.at[ds, "yhat_upper"]))
+    return out
+
+
+def choose_model(scores):
+    """Which candidate to publish. Walks the candidates simplest-first and lets
+    a more complex one take over only when it cuts the error by at least
+    SELECT_MARGIN — so ties, and near-ties, go to the simpler model.
+
+    Ranks on MASE. When MASE is undefined for every candidate — a series with no
+    year-over-year movement to scale by — it ranks on plain MAE instead. That
+    case must not fall through to a default: the series where the scale
+    degenerates is precisely the series the seasonal naive fits perfectly, so
+    defaulting to the most complex model would get it exactly backwards.
+
+    Returns (name, reason); name is None only when nothing scored at all."""
+    for key, label in (("mase", "MASE"), ("mae", "MAE")):
+        ranked = [(n, scores[n]) for n in CANDIDATES
+                  if n in scores and scores[n].get(key) is not None]
+        if not ranked:
+            continue
+        best, best_score = ranked[0][0], ranked[0][1][key]
+        for name, s in ranked[1:]:
+            if s[key] < best_score * (1 - SELECT_MARGIN):
+                best, best_score = name, s[key]
+        detail = ", ".join(f"{n} {s[key]}" for n, s in ranked)
+        note = ("" if key == "mase" else
+                " — ranked on unscaled MAE because the series has no "
+                "year-over-year variation for MASE to scale by")
+        return best, (f"lowest backtest {label} with a {round(SELECT_MARGIN * 100)}% "
+                      f"simplicity margin ({detail}){note}")
+    return None, "no candidate could be scored"
 
 
 def rolling_backtest(df, hol_df, folds=BACKTEST_FOLDS, holdout=BACKTEST_H,
                      gdp_levels=None, gdp_growth=None, gdp_future_rates=None):
-    """Rolling-origin evaluation: up to `folds` refits, each trained on the
-    series truncated a further `holdout` months back and scored on the next
-    `holdout` months it never saw. Reports:
-      mape        mean across folds (the headline the UI shows)
-      mape_folds  per-fold values, so a lucky single holdout can't hide
-      naive_mape  seasonal-naïve benchmark over the same held-out months
-      skill       1 - mape/naive_mape (positive = beats the benchmark)
-      coverage    % of held-out months inside the claimed 80% interval
+    """Rolling-origin evaluation of EVERY candidate on IDENTICAL folds: up to
+    `folds` refits, each trained on the series truncated a further `holdout`
+    months back and scored on the next `holdout` months no candidate saw. Every
+    model faces the same training data and the same held-out months, which is
+    the only way the MASE comparison that picks the winner means anything.
+
+    Returns name -> {
+      mase        mean across folds — the number model selection runs on
+      mase_folds  per-fold values, so a lucky single holdout can't hide
+      mape        mean across folds (published for recognisability)
+      mape_folds  per-fold values
+      coverage    % of held-out months inside that candidate's claimed band
       backtest    the most recent fold's month-by-month predicted-vs-actual,
                   shipped so the UI can show what the model got wrong
-    None when even one fold can't be formed (needs 24 training months)."""
-    fold_mapes, naive_p, naive_a = [], [], []
-    hits = n_int = 0
-    detail = None
+    }, omitting any candidate that never scored. None when even one fold can't
+    be formed (needs 24 training months)."""
+    acc = {n: {"mase": [], "mape": [], "mae": [], "abs_z": [], "hits": 0, "n_int": 0, "detail": None}
+           for n in CANDIDATES}
+    scored_any = False
     for i in range(1, folds + 1):
         cut = len(df) - holdout * i
         if cut < 24:
             break
         train, test = df.iloc[:cut], df.iloc[cut:cut + holdout]
-        # `holdout` is a count of OBSERVED rows, but Prophet forecasts
-        # CONTIGUOUS months — so on a series with gaps the held-out rows span
-        # more calendar months than that, and the tail of the window falls
-        # past what was predicted. Size the horizon by the calendar distance
-        # instead, or those months raise a KeyError below and take the whole
-        # metric's forecast down with them (main() catches per metric, so the
-        # airport silently ships with no short-term view at all).
-        last_train, last_test = train["ds"].iloc[-1], test["ds"].iloc[-1]
-        span = (last_test.year - last_train.year) * 12 + (last_test.month - last_train.month)
-        try:
-            _, fc = fit_predict(train, hol_df, max(holdout, span), gdp_levels, gdp_growth, gdp_future_rates)
-        except Exception:
-            continue
-        # reindex, not .loc: belt-and-braces so an unpredicted month drops out
-        # of the fold rather than throwing
-        fx = fc.set_index("ds").reindex(test["ds"])
-        scoreable = fx["yhat"].notna().to_numpy()
-        if not scoreable.any():
-            continue
-        fx, test = fx[scoreable], test[scoreable]
-        m = mape_of(fx["yhat"], test["y"])
-        if m is None:
-            continue
-        fold_mapes.append(m)
-        for lo, hi, a in zip(fx["yhat_lower"], fx["yhat_upper"], test["y"]):
-            n_int += 1
-            if lo <= a <= hi:
-                hits += 1
-        p, a = seasonal_naive_preds(train, test)
-        naive_p += p
-        naive_a += a
-        if i == 1:
-            detail = [
-                {"date": f"{ds.year}-{ds.month:02d}",
-                 "v": max(0, round(float(v))), "lo": max(0, round(float(lo))),
-                 "hi": max(0, round(float(hi))), "actual": round(float(act))}
-                for ds, v, lo, hi, act in zip(test["ds"], fx["yhat"], fx["yhat_lower"], fx["yhat_upper"], test["y"])
-            ]
-    if not fold_mapes:
+        target = list(test["ds"])
+        actual = {ds: float(y) for ds, y in zip(test["ds"], test["y"])}
+        scale = seasonal_naive_scale(train)
+        paths = {
+            "snaive": snaive_path(train, target),
+            "ets": ets_path(train, target),
+            "prophet": prophet_path(train, hol_df, target, gdp_levels, gdp_growth, gdp_future_rates),
+        }
+        for name in CANDIDATES:
+            path = paths.get(name) or {}
+            months = [ds for ds in target if ds in path]
+            if not months:
+                continue
+            preds = [path[ds][0] for ds in months]
+            acts = [actual[ds] for ds in months]
+            a = acc[name]
+            mase = mase_of(preds, acts, scale)
+            mape = mape_of(preds, acts)
+            mae = mae_of(preds, acts)
+            if mase is not None:
+                a["mase"].append(mase)
+            if mape is not None:
+                a["mape"].append(mape)
+            if mae is not None:
+                a["mae"].append(mae)
+            if mase is None and mape is None and mae is None:
+                continue
+            scored_any = True
+            for ds in months:
+                v, lo, hi = path[ds]
+                a["n_int"] += 1
+                if lo <= actual[ds] <= hi:
+                    a["hits"] += 1
+                # distance to the actual in units of this month's own band, on
+                # the side the error actually fell — the raw material for the
+                # band calibration below
+                half = (hi - v) if actual[ds] > v else (v - lo)
+                if half > 0:
+                    a["abs_z"].append(abs(actual[ds] - v) / half)
+            if i == 1:
+                a["detail"] = [
+                    {"date": f"{ds.year}-{ds.month:02d}",
+                     "v": max(0, round(path[ds][0])),
+                     "lo": max(0, round(path[ds][1])),
+                     "hi": max(0, round(path[ds][2])),
+                     "actual": round(actual[ds])}
+                    for ds in months
+                ]
+    if not scored_any:
         return None
-    naive = mape_of(naive_p, naive_a)
-    mape = round(sum(fold_mapes) / len(fold_mapes), 1)
-    return {
-        "mape": mape,
-        "mape_folds": [round(m, 1) for m in fold_mapes],
-        "naive_mape": round(naive, 1) if naive is not None else None,
-        "skill": round(1 - mape / naive, 2) if naive else None,
-        "coverage": round(hits / n_int * 100) if n_int else None,
-        "backtest": detail or [],
-    }
+    out = {}
+    for name in CANDIDATES:
+        a = acc[name]
+        if not a["mase"] and not a["mape"] and not a["mae"]:
+            continue
+        scale = band_scale_of(a["abs_z"])
+        out[name] = {
+            "mase": round(sum(a["mase"]) / len(a["mase"]), 3) if a["mase"] else None,
+            "mase_folds": [round(m, 3) for m in a["mase"]],
+            "mape": round(sum(a["mape"]) / len(a["mape"]), 1) if a["mape"] else None,
+            "mape_folds": [round(m, 1) for m in a["mape"]],
+            # only load-bearing when MASE degenerates (see choose_model)
+            "mae": round(sum(a["mae"]) / len(a["mae"]), 1) if a["mae"] else None,
+            # coverage of the model's RAW band, measured out-of-sample. Stays
+            # the honest headline number; the calibration below is fitted on
+            # these same months, so its coverage can't claim to be out-of-sample.
+            "coverage": round(a["hits"] / a["n_int"] * 100) if a["n_int"] else None,
+            "band_scale": scale,
+            "coverage_cal": (round(sum(1 for z in a["abs_z"] if z <= scale) / len(a["abs_z"]) * 100)
+                             if (scale and a["abs_z"]) else None),
+            "backtest": a["detail"] or [],
+        }
+    return out or None
 
 
 def seasonal12(df):
@@ -344,6 +714,34 @@ def top_holidays(fc, names, k=5):
     return [c for c, _ in scored[:k]]
 
 
+def forecast_rows(path, target_ds, band_scale=None):
+    """{ds: (v, lo, hi)} -> the row shape the browser reads, with the band
+    stretched by this candidate's measured calibration factor (see
+    band_scale_of). Rounding is monotonic and clamped the same way for all
+    three, so lo <= v <= hi and lo >= 0 survive — validate-data.mjs gates on
+    exactly that."""
+    rows = []
+    for ds in target_ds:
+        if ds not in path:
+            continue
+        v, lo, hi = apply_band_scale(*path[ds], band_scale)
+        # Last-resort ordering guarantee. validate-data rejects lo > hi as a hard
+        # gate, which would keep last-good for EVERY airport, so a single
+        # pathological series must not be able to freeze the refresh. Ordering is
+        # restored rather than the row dropped, so the failure stays visible in
+        # the numbers instead of becoming a silent gap.
+        lo, hi = min(lo, v, hi), max(lo, v, hi)
+        rows.append({
+            "date": f"{ds.year}-{ds.month:02d}",
+            "y": int(ds.year),
+            "m": int(ds.month) - 1,
+            "v": max(0, round(v)),
+            "lo": max(0, round(lo)),
+            "hi": max(0, round(hi)),
+        })
+    return rows
+
+
 def forecast_metric(iso2, monthly, horizon, gdp_levels=None, gdp_growth=None, gdp_future_rates=None):
     df = series_frame(monthly)
     if df is None or len(df) < MIN_MONTHS:
@@ -359,27 +757,76 @@ def forecast_metric(iso2, monthly, horizon, gdp_levels=None, gdp_growth=None, gd
     fit_holidays = pd.concat(frames, ignore_index=True) if frames else hol_df
 
     _, fc = fit_predict(df, fit_holidays, horizon, gdp_levels=gdp_levels, gdp_growth=gdp_growth, gdp_future_rates=gdp_future_rates)
-    bt = rolling_backtest(df, fit_holidays, gdp_levels=gdp_levels, gdp_growth=gdp_growth, gdp_future_rates=gdp_future_rates)
+    scores = rolling_backtest(df, fit_holidays, gdp_levels=gdp_levels, gdp_growth=gdp_growth, gdp_future_rates=gdp_future_rates) or {}
 
-    fut = fc.tail(horizon)
-    out = []
-    for _, r in fut.iterrows():
-        ds = r["ds"]
-        out.append({
-            "date": f"{ds.year}-{ds.month:02d}",
-            "y": int(ds.year),
-            "m": int(ds.month) - 1,
-            "v": max(0, round(float(r["yhat"]))),
-            "lo": max(0, round(float(r["yhat_lower"]))),
-            "hi": max(0, round(float(r["yhat_upper"]))),
-        })
+    # every candidate's forward forecast, over the same months. Prophet reuses
+    # the fit above (it also feeds seasonal12/top_holidays); the other two are
+    # cheap closed forms over the full series.
+    last_ds = df["ds"].max()
+    target = [last_ds + pd.DateOffset(months=h) for h in range(1, horizon + 1)]
+    paths = {
+        "snaive": snaive_path(df, target),
+        "ets": ets_path(df, target),
+        "prophet": path_from_prophet(fc, target),
+    }
+    candidates = {}
+    for name in CANDIDATES:
+        c = dict(scores.get(name) or {})
+        # the published forward band is calibrated; the backtest rows shipped
+        # for the accountability chart deliberately are NOT, because the
+        # calibration was fitted on exactly those months — showing them
+        # widened would flatter the model on its own training data
+        rows = forecast_rows(paths.get(name) or {}, target, c.get("band_scale"))
+        if not rows:
+            continue
+        c["forecast"] = rows
+        candidates[name] = c
+    if not candidates:
+        return None
+
+    chosen, reason = choose_model(candidates)
+    if chosen not in candidates:
+        # No fold could be scored at all. Fall back to the SIMPLEST candidate
+        # available, not the most capable: with no evidence either way, the
+        # burden of proof stays on the complex model. Say so, rather than
+        # implying a backtest picked it.
+        chosen = next((n for n in CANDIDATES if n in candidates), None)
+        reason = f"{reason}; defaulted to the simplest candidate ({chosen})"
+    top = candidates[chosen]
+
+    # the chosen candidate's arrays live at the TOP LEVEL (unchanged shape, so
+    # an older client and the validator still read it); `candidates` carries
+    # every candidate's scores plus the ALTERNATIVES' arrays, which is what the
+    # browser's model toggle switches to. The winner's arrays are deliberately
+    # not duplicated inside `candidates` — it's ~2.5 KB a metric across 446
+    # airports, committed nightly.
+    published = {}
+    for name, c in candidates.items():
+        entry = {k: c.get(k) for k in ("mase", "mase_folds", "mape", "mape_folds", "mae",
+                                       "coverage", "band_scale", "coverage_cal")}
+        if name != chosen:
+            entry["forecast"] = c["forecast"]
+            entry["backtest"] = c.get("backtest") or []
+        published[name] = entry
+
+    naive_mape = (candidates.get("snaive") or {}).get("mape")
+    mape = top.get("mape")
     return {
-        "mape": bt["mape"] if bt else None,
-        "mape_folds": bt["mape_folds"] if bt else [],
-        "naive_mape": bt["naive_mape"] if bt else None,
-        "skill": bt["skill"] if bt else None,
-        "coverage": bt["coverage"] if bt else None,
-        "backtest": bt["backtest"] if bt else [],
+        "chosen": chosen,
+        "chosen_reason": reason,
+        "candidates": published,
+        "mase": top.get("mase"),
+        "mase_folds": top.get("mase_folds") or [],
+        "mape": mape,
+        "mape_folds": top.get("mape_folds") or [],
+        "naive_mape": naive_mape,
+        "naive_mase": (candidates.get("snaive") or {}).get("mase"),
+        "skill": (round(1 - mape / naive_mape, 2)
+                  if (mape is not None and naive_mape) else None),
+        "coverage": top.get("coverage"),
+        "band_scale": top.get("band_scale"),
+        "coverage_cal": top.get("coverage_cal"),
+        "backtest": top.get("backtest") or [],
         "months_history": int(len(df)),
         "latest": f"{df['ds'].max().year}-{df['ds'].max().month:02d}",
         "seasonal12": seasonal12(df),
@@ -387,7 +834,7 @@ def forecast_metric(iso2, monthly, horizon, gdp_levels=None, gdp_growth=None, gd
         "holidays_total": len(names),
         "gdpRegressor": bool(gdp_levels),
         "gdpForecast": bool(gdp_future_rates),
-        "forecast": out,
+        "forecast": top["forecast"],
     }
 
 
@@ -472,6 +919,7 @@ def main():
 
     airports_written = []
     n_series = 0
+    chosen_counts = {}
     for iata, a in airports_in.items():
         if only and iata not in only:
             continue
@@ -496,9 +944,12 @@ def main():
             if res:
                 metrics[metric] = res
                 n_series += 1
-                print(f"  {iata}/{metric}: {res['months_history']}mo  MAPE "
-                      f"{res['mape']}%  holidays[{res['holidays_total']}] "
-                      f"top={res['holidays'][:3]}")
+                chosen_counts[res["chosen"]] = chosen_counts.get(res["chosen"], 0) + 1
+                alts = "  ".join(
+                    f"{n}{'*' if n == res['chosen'] else ''} MASE {c.get('mase')}"
+                    for n, c in res["candidates"].items())
+                print(f"  {iata}/{metric}: {res['months_history']}mo  {alts}"
+                      f"  MAPE {res['mape']}%  holidays[{res['holidays_total']}]")
         if metrics:
             with open(os.path.join(FORECASTS_DIR, f"{iata}.json"), "w", encoding="utf-8") as f:
                 json.dump(metrics, f, separators=(",", ":"))
@@ -510,20 +961,43 @@ def main():
 
     meta = {
         "generatedAt": datetime.now(timezone.utc).isoformat(),
-        "model": "Meta Prophet (additive trend + multiplicative yearly + country holidays + COVID 2020-21 events + GDP/capita regressor where available)",
+        "model": "auto-selected per series by backtest MASE",
+        "models": {
+            "snaive": "Seasonal naive — each month repeats the most recent observed value for that calendar month",
+            "ets": "Holt-Winters — damped additive trend + multiplicative monthly seasonality, smoothing grid-searched on one-step error",
+            "prophet": "Meta Prophet — additive trend + multiplicative yearly + country holidays + COVID 2020-21 events + GDP/capita regressor where available",
+        },
+        "selection": (f"lowest mean MASE over the backtest folds, candidates tried simplest-first "
+                      f"(seasonal naive, then damped ETS, then Prophet) with a {round(SELECT_MARGIN * 100)}% "
+                      f"relative margin required to unseat a simpler model. MASE scales by the in-sample "
+                      f"seasonal-naive MAE, so it stays finite on series that approach zero — which MAPE "
+                      f"does not, and why MAPE is published but never decides."),
+        "chosenCounts": chosen_counts,
         "library": f"prophet {__import__('prophet').__version__}, holidays {holidays_pkg.__version__}",
         "interval": INTERVAL,
         "horizon": HORIZON,
-        "backtest": f"rolling-origin, up to {BACKTEST_FOLDS} folds x {BACKTEST_H}mo holdouts, scored against a seasonal-naive benchmark; 80% interval coverage measured on the same held-out months",
+        "backtest": f"rolling-origin, up to {BACKTEST_FOLDS} folds x {BACKTEST_H}mo holdouts; every candidate scored on identical folds; {round(INTERVAL * 100)}% interval coverage measured on the same held-out months",
+        "bands": (f"each candidate's raw interval is rescaled by the {round(INTERVAL * 100)}th percentile of its "
+                  f"held-out error measured in units of its own band half-width, clamped to "
+                  f"[{BAND_SCALE_MIN}, {BAND_SCALE_MAX}]. Raw coverage of a nominal {round(INTERVAL * 100)}% band ran "
+                  f"at a median 39% for Prophet and 100% for the seasonal naive, so the label was wrong in both "
+                  f"directions. `coverage` stays the raw out-of-sample number; `coverage_cal` is the scaled band on "
+                  f"the same months and is therefore in-sample. Applied to the forward forecast only - the shipped "
+                  f"backtest rows keep the band the model actually claimed."),
         "note": ("Short-term forecasts. Fit nightly by .github/workflows/refresh-data.yml "
                  "on the real observed series. Per-airport output lives in "
                  "data/forecasts/<IATA>.json, fetched by the browser once that gateway "
-                 "is selected; this file only carries the shared model metadata."),
+                 "is selected; each metric carries the chosen model at the top level plus "
+                 "every candidate's scores (and the alternatives' forecasts) under "
+                 "`candidates`, which is what the model toggle in the UI switches between. "
+                 "This file only carries the shared model metadata."),
     }
     with open(META_OUT, "w", encoding="utf-8") as f:
         json.dump(meta, f, separators=(",", ":"))
         f.write("\n")
-    print(f"Wrote {FORECASTS_DIR}/ — {len(airports_written)} airports, {n_series} series. Wrote {META_OUT}.")
+    picks = "  ".join(f"{n}={chosen_counts.get(n, 0)}" for n in CANDIDATES)
+    print(f"Wrote {FORECASTS_DIR}/ — {len(airports_written)} airports, {n_series} series "
+          f"(chosen: {picks}). Wrote {META_OUT}.")
 
 
 if __name__ == "__main__":

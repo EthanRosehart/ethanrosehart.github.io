@@ -191,19 +191,294 @@ def test_mape_of_scores_pairs_and_skips_zero_actuals(bf):
     assert bf.mape_of([5], [0]) is None
 
 
-def test_seasonal_naive_preds_uses_the_year_ago_month(bf):
+# ---- MASE + the two closed-form candidates -----------------------------------
+
+def test_mase_of_scales_by_the_in_sample_seasonal_naive_error(bf):
+    # MAE of 10 against a scale of 20 -> 0.5: the model made half the error a
+    # seasonal naive made on its own training data.
+    assert bf.mase_of([110, 90], [100, 100], 20.0) == pytest.approx(0.5)
+    assert bf.mase_of([100], [100], 20.0) == pytest.approx(0.0)
+    # no usable scale means no score, never a division by zero
+    assert bf.mase_of([110], [100], 0.0) is None
+    assert bf.mase_of([110], [100], None) is None
+    assert bf.mase_of([], [], 20.0) is None
+
+
+def test_mase_scores_a_zero_actual_that_mape_has_to_throw_away(bf):
+    # THE reason MASE drives selection. A month that came in at zero is real
+    # information (a closed airport, a month with no freighter rotations) — MAPE
+    # cannot score it at all, MASE scores it like any other month.
+    assert bf.mape_of([50], [0]) is None
+    assert bf.mase_of([50], [0], 100.0) == pytest.approx(0.5)
+
+
+def test_seasonal_naive_scale_uses_training_months_only(bf):
+    # a series with a known constant year-over-year step scales by that step
+    stepped = bf.series_frame({**{f"2023-{m:02d}": 100 for m in range(1, 13)},
+                               **{f"2024-{m:02d}": 130 for m in range(1, 13)}})
+    assert bf.seasonal_naive_scale(stepped) == pytest.approx(30.0)
+    # nothing with a year-ago counterpart at all
+    assert bf.seasonal_naive_scale(bf.series_frame({"2024-01": 100})) is None
+    # a flat series HAS year-ago counterparts, they're just all identical -> 0.
+    # That's the honest answer from this function; mase_of() is what refuses to
+    # divide by it, and choose_model() ranks on MAE instead.
+    flat = bf.series_frame({f"{y}-{m:02d}": 100 for y in (2023, 2024) for m in range(1, 13)})
+    assert bf.seasonal_naive_scale(flat) == pytest.approx(0.0)
+    assert bf.mase_of([110], [100], bf.seasonal_naive_scale(flat)) is None
+
+
+def test_snaive_path_repeats_the_year_ago_month_and_widens_by_cycle(bf):
     train = bf.series_frame({f"2023-{m:02d}": 100 + m for m in range(1, 13)})
-    test = bf.series_frame({f"2024-{m:02d}": 200 + m for m in range(1, 4)})
-    preds, actuals = bf.seasonal_naive_preds(train, test)
-    assert preds == [101.0, 102.0, 103.0]   # Jan-Mar 2023 values
-    assert actuals == [201.0, 202.0, 203.0]
+    target = [pd.Timestamp(2024, 1, 1), pd.Timestamp(2024, 6, 1)]
+    path = bf.snaive_path(train, target)
+    assert path[target[0]][0] == pytest.approx(101.0)   # Jan 2023
+    assert path[target[1]][0] == pytest.approx(106.0)   # Jun 2023
+    lo, hi = path[target[0]][1], path[target[0]][2]
+    assert lo <= 101.0 <= hi
 
 
-def test_seasonal_naive_preds_skips_months_without_a_year_ago_anchor(bf):
+def test_snaive_path_repeats_the_last_cycle_past_twelve_months(bf):
+    # beyond one year there is no "12 months ago" inside the training data, so
+    # the last observed seasonal cycle has to repeat rather than the month
+    # dropping out of the forecast entirely. Two training years, so the band's
+    # sigma (the sd of the year-over-year steps) is actually defined.
+    train = bf.series_frame({**{f"2022-{m:02d}": 50 + m for m in range(1, 13)},
+                             **{f"2023-{m:02d}": 100 + m for m in range(1, 13)}})
+    far = pd.Timestamp(2025, 3, 1)                       # 24 months past 2023-03
+    path = bf.snaive_path(train, [far])
+    assert path[far][0] == pytest.approx(103.0), "must take the MOST RECENT March, not the older one"
+    # ...and its band is wider than the first cycle's, since it is two cycles out
+    near = pd.Timestamp(2024, 3, 1)
+    near_path = bf.snaive_path(train, [near])
+    assert (path[far][2] - path[far][1]) > (near_path[near][2] - near_path[near][1])
+
+
+def test_snaive_path_skips_a_month_with_no_anchor_at_all(bf):
     train = bf.series_frame({"2023-06": 100})
-    test = bf.series_frame({"2024-01": 50})
-    preds, actuals = bf.seasonal_naive_preds(train, test)
-    assert preds == [] and actuals == []
+    assert bf.snaive_path(train, [pd.Timestamp(2024, 1, 1)]) == {}
+
+
+def test_contiguous_tail_cuts_at_the_last_gap(bf):
+    monthly = {f"2023-{m:02d}": 100 for m in range(1, 13)}
+    monthly.update({f"2024-{m:02d}": 100 for m in range(4, 13)})   # 2024-01..03 missing
+    tail = bf.contiguous_tail(bf.series_frame(monthly))
+    assert len(tail) == 9
+    assert tail["ds"].iloc[0] == pd.Timestamp(2024, 4, 1)
+
+
+def test_ets_damping_flattens_a_trend_the_undamped_fit_compounds(bf):
+    # the failure mode damping exists for: a series whose recent slope is steep.
+    # Projected far out, phi < 1 must land BELOW the undamped projection.
+    df = bf.series_frame({f"{2020 + i // 12}-{i % 12 + 1:02d}": 1000 + 50 * i for i in range(48)})
+    undamped = bf.ets_fit(df, 0.3, 0.1, 0.1, 1.0)
+    damped = bf.ets_fit(df, 0.3, 0.1, 0.1, 0.85)
+    assert undamped and damped
+    target = [df["ds"].max() + pd.DateOffset(months=24)]
+
+    def project(fit):
+        damp = 0.0
+        for h in range(1, 25):
+            damp += fit["phi"] ** h
+        return fit["level"] + damp * fit["trend"]
+
+    assert project(damped) < project(undamped)
+
+
+def test_ets_fit_needs_two_seasons_and_indexes_by_real_calendar_month(bf):
+    assert bf.ets_fit(bf.series_frame({f"2024-{m:02d}": 100 for m in range(1, 13)}),
+                      0.3, 0.05, 0.1, 1.0) is None, "one season can't initialise the seasonal state"
+    # a series STARTING IN JULY with a known December spike must put that spike
+    # in the December slot, not in slot 5 (which a t % 12 index would do)
+    monthly = {}
+    for i in range(36):
+        y, m = 2022 + (6 + i) // 12, (6 + i) % 12 + 1
+        monthly[f"{y}-{m:02d}"] = 300 if m == 12 else 100
+    fit = bf.ets_fit(bf.series_frame(monthly), 0.3, 0.05, 0.1, 1.0)
+    assert fit["seas"].index(max(fit["seas"])) == 11, "December is slot 11"
+
+
+def test_ets_keeps_a_collapsing_series_from_inverting_its_band(bf):
+    """BMA: passengers collapse, the multiplicative level crosses zero, y/level
+    flips sign and the September seasonal index fits at -9.4. That made the point
+    forecast negative and inverted the band around it (v=0, lo=17217, hi=0 once
+    each field was clamped independently). validate-data rejects lo > hi as a
+    HARD GATE, so this one series would have failed the nightly and frozen
+    last-good forecasts for all 446 airports."""
+    # a steep collapse to near-zero with one erratic spike month — the shape that
+    # drives the level negative under a multiplicative seasonal fit
+    monthly = {}
+    for i in range(60):
+        y, m = 2021 + i // 12, i % 12 + 1
+        base = max(5.0, 40000 * (0.90 ** i))
+        monthly[f"{y}-{m:02d}"] = round(base * (14 if m == 9 else 1))
+    df = bf.series_frame(monthly)
+    fit = bf.ets_best_fit(bf.contiguous_tail(df))
+    assert fit is not None
+    assert all(v >= 0 for v in fit["seas"]), f"multiplicative seasonal indices must stay >= 0, got {fit['seas']}"
+    assert fit["level"] >= 0, "the level of a multiplicative model must not go negative"
+
+    target = [df["ds"].max() + pd.DateOffset(months=h) for h in range(1, 25)]
+    for ds, (v, lo, hi) in bf.ets_path(df, target).items():
+        assert 0 <= lo <= v <= hi, f"{ds}: inverted band v={v} lo={lo} hi={hi}"
+
+
+def test_forecast_rows_restores_ordering_rather_than_freezing_the_nightly(bf):
+    # Last-resort invariant. Whatever a band source does, a row must never ship
+    # with lo > hi: validate-data is a hard gate, so one bad row keeps last-good
+    # for the entire catalogue rather than just that series.
+    ds = pd.Timestamp(2026, 9, 1)
+    rows = bf.forecast_rows({ds: (0.0, 17217.0, 0.0)}, [ds])
+    assert len(rows) == 1
+    r = rows[0]
+    assert 0 <= r["lo"] <= r["v"] <= r["hi"], f"ordering not restored: {r}"
+
+
+def test_ets_path_produces_a_coherent_band_for_every_requested_month(bf):
+    monthly = {}
+    for i in range(48):
+        y, m = 2021 + i // 12, i % 12 + 1
+        monthly[f"{y}-{m:02d}"] = round(100000 * (1.003 ** i) * (1.3 if m in (7, 8) else 1.0))
+    df = bf.series_frame(monthly)
+    target = [df["ds"].max() + pd.DateOffset(months=h) for h in range(1, 13)]
+    path = bf.ets_path(df, target)
+    assert len(path) == 12
+    for ds in target:
+        v, lo, hi = path[ds]
+        assert 0 <= lo <= v <= hi
+    # the seasonal shape survives into the projection
+    july = next(ds for ds in target if ds.month == 7)
+    april = next(ds for ds in target if ds.month == 4)
+    assert path[july][0] > path[april][0]
+
+
+# ---- model selection ---------------------------------------------------------
+
+def test_choose_model_prefers_the_simpler_candidate_on_a_near_tie(bf):
+    # prophet is only 3% better than the seasonal naive — inside the 5% margin,
+    # so the naive keeps it. This is the AMS case (snaive 0.284, prophet 0.296).
+    chosen, reason = bf.choose_model({"snaive": {"mase": 1.00}, "prophet": {"mase": 0.97}})
+    assert chosen == "snaive"
+    assert "simplicity margin" in reason
+
+
+def test_choose_model_switches_when_a_complex_candidate_clearly_wins(bf):
+    chosen, _ = bf.choose_model({"snaive": {"mase": 1.00}, "prophet": {"mase": 0.50}})
+    assert chosen == "prophet"
+
+
+def test_choose_model_walks_candidates_simplest_first(bf):
+    # ets beats snaive by enough to take over; prophet then has to beat ETS's
+    # 0.50 by 5%, and 0.49 doesn't — so the middle candidate holds.
+    chosen, _ = bf.choose_model({"snaive": {"mase": 1.00}, "ets": {"mase": 0.50}, "prophet": {"mase": 0.49}})
+    assert chosen == "ets"
+
+
+def test_choose_model_ignores_unscored_candidates_and_reports_when_none_scored(bf):
+    chosen, _ = bf.choose_model({"snaive": {"mase": None}, "prophet": {"mase": 0.8}})
+    assert chosen == "prophet"
+    chosen, reason = bf.choose_model({"snaive": {"mase": None}, "prophet": {"mase": None}})
+    assert chosen is None and "no candidate" in reason
+
+
+def test_choose_model_falls_back_to_mae_when_the_mase_scale_degenerates(bf):
+    # A series with no year-over-year movement gives MASE a zero denominator, so
+    # no candidate can be scaled. Ranking must NOT fall through to a default:
+    # that series is exactly the one the seasonal naive nails, so a default to
+    # the most complex candidate would be backwards. Rank on raw MAE instead.
+    chosen, reason = bf.choose_model({
+        "snaive": {"mase": None, "mae": 0.0},
+        "ets": {"mase": None, "mae": 0.0},
+        "prophet": {"mase": None, "mae": 187.2},
+    })
+    assert chosen == "snaive"
+    assert "MAE" in reason and "no year-over-year variation" in reason
+    # MASE still wins when it's available for anyone at all
+    chosen, reason = bf.choose_model({
+        "snaive": {"mase": 1.0, "mae": 500.0},
+        "prophet": {"mase": 0.4, "mae": 900.0},
+    })
+    assert chosen == "prophet" and "MASE" in reason
+
+
+# ---- band calibration -------------------------------------------------------
+
+def test_quantile_interpolates_and_handles_degenerate_inputs(bf):
+    assert bf.quantile([1, 2, 3, 4, 5], 0.0) == pytest.approx(1.0)
+    assert bf.quantile([1, 2, 3, 4, 5], 1.0) == pytest.approx(5.0)
+    assert bf.quantile([1, 2, 3, 4, 5], 0.5) == pytest.approx(3.0)
+    assert bf.quantile([0, 10], 0.8) == pytest.approx(8.0)     # interpolated
+    assert bf.quantile([7], 0.8) == pytest.approx(7.0)
+    assert bf.quantile([], 0.8) is None
+
+
+def test_band_scale_widens_a_band_that_was_too_narrow(bf):
+    # every held-out month landed ~2x outside its own band -> the band needs
+    # roughly doubling to cover what it claims
+    assert bf.band_scale_of([2.0] * 20) == pytest.approx(2.0)
+
+
+def test_band_scale_tightens_a_band_that_was_too_wide(bf):
+    # errors all well inside the band (a nominal 80% covering 100%) -> tighten
+    scale = bf.band_scale_of([0.3] * 20)
+    assert scale is not None and scale < 1.0
+
+
+def test_band_scale_is_clamped_at_both_ends(bf):
+    # a handful of held-out months can throw an extreme quantile; a 30x band is
+    # less useful than an honestly-wrong one
+    assert bf.band_scale_of([50.0] * 20) == pytest.approx(bf.BAND_SCALE_MAX)
+    assert bf.band_scale_of([0.0001] * 20) == pytest.approx(bf.BAND_SCALE_MIN)
+    assert bf.band_scale_of([]) is None
+    assert bf.band_scale_of([0.0, 0.0]) is None, "a perfect fit gives no scale to apply"
+
+
+def test_apply_band_scale_preserves_asymmetry_and_the_point_forecast(bf):
+    # Prophet's posterior isn't symmetric around yhat and a naive band clamps at
+    # zero, so scaling must stretch each side about v independently
+    v, lo, hi = bf.apply_band_scale(100.0, 90.0, 130.0, 2.0)
+    assert v == 100.0, "the point forecast must never move"
+    assert lo == pytest.approx(80.0)    # 10 below -> 20 below
+    assert hi == pytest.approx(160.0)   # 30 above -> 60 above
+    assert bf.apply_band_scale(100.0, 90.0, 130.0, None) == (100.0, 90.0, 130.0)
+
+
+def test_rolling_backtest_reports_a_calibration_that_actually_lands_near_nominal(bf):
+    monthly = {}
+    for i in range(60):
+        y, m = 2020 + i // 12, i % 12 + 1
+        seasonal = 1.0 + 0.3 * (1 if m in (6, 7, 8) else -0.2 if m in (1, 2) else 0)
+        monthly[f"{y}-{m:02d}"] = round(100000 * (1.004 ** i) * seasonal)
+    bt = bf.rolling_backtest(bf.series_frame(monthly), pd.DataFrame(columns=["holiday", "ds"]), folds=1)
+    for name, c in bt.items():
+        assert c["band_scale"] is None or c["band_scale"] > 0, f"{name}: a non-positive scale would invert the band"
+        if c["coverage_cal"] is not None and c["band_scale"] not in (bf.BAND_SCALE_MIN, bf.BAND_SCALE_MAX):
+            # unclamped, the calibrated band should sit near the nominal interval
+            assert 60 <= c["coverage_cal"] <= 100, f"{name}: calibrated coverage {c['coverage_cal']}%"
+
+
+def test_forecast_metric_calibrates_the_forward_band_but_not_the_backtest_rows(bf):
+    # The forward band ships calibrated. The held-out rows deliberately keep
+    # their RAW band: the factor was fitted on exactly those months, so widening
+    # them would flatter the model on its own training data.
+    monthly = {}
+    for i in range(72):
+        y, m = 2019 + i // 12, i % 12 + 1
+        seasonal = 1.0 + 0.3 * (1 if m in (6, 7, 8) else -0.2 if m in (1, 2) else 0)
+        monthly[f"{y}-{m:02d}"] = round(100000 * (1.004 ** i) * seasonal)
+    res = bf.forecast_metric("ES", monthly, 24)
+    assert res is not None
+    assert "band_scale" in res and "coverage_cal" in res
+
+    raw = bf.rolling_backtest(bf.series_frame(monthly), pd.DataFrame(columns=["holiday", "ds"]))
+    scale = res["band_scale"]
+    if scale and abs(scale - 1.0) > 0.05:
+        chosen_raw = raw[res["chosen"]]["backtest"]
+        assert res["backtest"] == chosen_raw, "held-out rows must keep the band the model actually claimed"
+        # and the forward rows must reflect the scale
+        widened = [r for r in res["forecast"] if r["hi"] > r["v"]]
+        assert widened, "a scaled band still has to have width"
+    for r in res["forecast"]:
+        assert 0 <= r["lo"] <= r["v"] <= r["hi"], "calibration must not invert or negate a band"
 
 
 def test_rolling_backtest_returns_none_when_history_is_too_short(bf):
@@ -211,12 +486,12 @@ def test_rolling_backtest_returns_none_when_history_is_too_short(bf):
     assert bf.rolling_backtest(df, pd.DataFrame(columns=["holiday", "ds"])) is None
 
 
-def test_rolling_backtest_real_fit_on_a_clean_seasonal_series(bf):
+def test_rolling_backtest_scores_every_candidate_on_the_same_fold(bf):
     # One real (small) Prophet fit so a prophet/pandas version bump that breaks
     # the fitting path fails CI instead of the 03:17 UTC nightly. 60 months of
-    # a clean multiplicative-seasonal series with mild growth: the model should
-    # beat seasonal-naive-level error comfortably, and the fields the UI relies
-    # on must all be present and coherent.
+    # a clean multiplicative-seasonal series with mild growth. Every candidate
+    # must come back scored on the SAME held-out months — the comparison that
+    # picks the published model is worthless otherwise.
     monthly = {}
     for i in range(60):
         y, m = 2020 + i // 12, i % 12 + 1
@@ -225,14 +500,21 @@ def test_rolling_backtest_real_fit_on_a_clean_seasonal_series(bf):
     df = bf.series_frame(monthly)
     bt = bf.rolling_backtest(df, pd.DataFrame(columns=["holiday", "ds"]), folds=1)
     assert bt is not None
-    assert bt["mape"] is not None and bt["mape"] < 10
-    assert len(bt["mape_folds"]) == 1
-    assert bt["naive_mape"] is not None
-    assert bt["coverage"] is None or 0 <= bt["coverage"] <= 100
-    assert len(bt["backtest"]) == 12
-    row = bt["backtest"][0]
-    assert set(row) == {"date", "v", "lo", "hi", "actual"}
-    assert row["lo"] <= row["v"] <= row["hi"]
+    assert set(bt) == set(bf.CANDIDATES), "all three candidates must be scored, not just Prophet"
+    for name, c in bt.items():
+        assert c["mase"] is not None, f"{name} produced no MASE"
+        assert c["mape"] is not None and c["mape"] < 30, f"{name} MAPE implausible on a clean series"
+        assert len(c["mase_folds"]) == 1 and len(c["mape_folds"]) == 1
+        assert c["coverage"] is None or 0 <= c["coverage"] <= 100
+        assert len(c["backtest"]) == 12, f"{name} must report its own held-out detail"
+        row = c["backtest"][0]
+        assert set(row) == {"date", "v", "lo", "hi", "actual"}
+        assert row["lo"] <= row["v"] <= row["hi"]
+    # identical folds: same held-out months, same actuals, for every candidate
+    months = [[r["date"] for r in c["backtest"]] for c in bt.values()]
+    actuals = [[r["actual"] for r in c["backtest"]] for c in bt.values()]
+    assert all(m == months[0] for m in months), "candidates were scored on different months"
+    assert all(a == actuals[0] for a in actuals)
 
 
 def test_forecast_metric_produces_the_payload_the_browser_reads(bf):
@@ -251,9 +533,10 @@ def test_forecast_metric_produces_the_payload_the_browser_reads(bf):
     assert res is not None
 
     # the fields data.jsx's forecastFor() destructures
-    for k in ("mape", "mape_folds", "naive_mape", "skill", "coverage", "backtest",
-              "months_history", "latest", "seasonal12", "holidays", "holidays_total",
-              "gdpRegressor", "gdpForecast", "forecast"):
+    for k in ("chosen", "chosen_reason", "candidates", "mase", "mase_folds",
+              "mape", "mape_folds", "naive_mape", "naive_mase", "skill", "coverage",
+              "backtest", "months_history", "latest", "seasonal12", "holidays",
+              "holidays_total", "gdpRegressor", "gdpForecast", "forecast"):
         assert k in res, f"missing {k} — data.jsx reads it"
 
     assert res["months_history"] == 72
@@ -267,6 +550,46 @@ def test_forecast_metric_produces_the_payload_the_browser_reads(bf):
         assert r["lo"] >= 0 and r["v"] >= 0
     assert res["forecast"][0]["date"] == "2025-01"
     assert res["forecast"][0]["m"] == 0, "month is 0-indexed for MONTHS[] on the client"
+
+    # the candidate block behind the UI's model toggle
+    assert res["chosen"] in bf.CANDIDATES
+    assert res["chosen"] in res["candidates"]
+    assert res["mase"] == res["candidates"][res["chosen"]]["mase"], "top level must mirror the winner"
+    for name, c in res["candidates"].items():
+        assert name in bf.CANDIDATES
+        if name == res["chosen"]:
+            # deliberately NOT duplicated — the winner's rows live at the top
+            # level, and duplicating them triples the nightly commit
+            assert "forecast" not in c
+        else:
+            assert len(c["forecast"]) == 24, f"{name} must ship a switchable forecast"
+            for r in c["forecast"]:
+                assert set(r) == {"date", "y", "m", "v", "lo", "hi"}
+                assert 0 <= r["lo"] <= r["v"] <= r["hi"]
+            assert c["forecast"][0]["date"] == "2025-01", "alternatives must cover the same months"
+
+
+def test_forecast_metric_picks_the_naive_over_prophet_on_a_pure_repeat(bf):
+    # A series that repeats EXACTLY year over year is the seasonal naive's home
+    # turf — it is perfect by construction there. Prophet cannot beat perfect, so
+    # selection must publish the naive. Guards the whole point of the exercise:
+    # 68% of the real catalogue looks more like this than like a clean trend.
+    monthly = {}
+    for i in range(72):
+        y, m = 2019 + i // 12, i % 12 + 1
+        monthly[f"{y}-{m:02d}"] = 100000 + 5000 * m       # identical every year
+    res = bf.forecast_metric("ES", monthly, 24)
+    assert res is not None
+    assert res["chosen"] == "snaive", f"expected the naive to win, got {res['chosen']}"
+    # a perfectly periodic series leaves MASE with a zero denominator, so the
+    # published MASE is honestly null and selection ran on MAE — the reason
+    # string has to say that rather than implying a scaled score
+    assert res["mase"] is None
+    assert "MAE" in res["chosen_reason"]
+    assert res["candidates"]["snaive"]["mae"] == pytest.approx(0.0, abs=1e-6)
+    # and its forecast really is the repeated cycle
+    assert res["forecast"][0]["v"] == 100000 + 5000 * 1   # Jan
+    assert res["forecast"][6]["v"] == 100000 + 5000 * 7   # Jul
 
     # holidays: Spain has them, top_holidays ranks a subset of the names used
     assert res["holidays_total"] > 0

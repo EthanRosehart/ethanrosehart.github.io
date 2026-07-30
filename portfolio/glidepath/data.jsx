@@ -282,33 +282,114 @@ function sourceBadge(src){
 }
 
 /* ============================================================
-   PROPHET FORECASTS, precomputed nightly.
+   SHORT-TERM FORECASTS, precomputed nightly.
    data/forecast-meta.json — shared model metadata (generatedAt, interval,
    horizon), loaded once on mount. data/forecasts/<IATA>.json — one
    airport's forecast per metric, fetched lazily once selected:
-   iata -> metric -> { mape, seasonal12, holidays, forecast[] }
+   iata -> metric -> { chosen, candidates{}, mase, mape, seasonal12,
+                       holidays, forecast[], backtest[] }
+
+   The nightly fits THREE candidates per series (seasonal naive, damped
+   Holt-Winters, Prophet), scores them on identical rolling-origin folds and
+   publishes whichever won on MASE — see scripts/build-forecast.py for why
+   MASE and not MAPE. The winner's arrays sit at the TOP LEVEL of the metric;
+   `candidates` carries every candidate's scores plus the ALTERNATIVES'
+   forecasts, which is what the model toggle on the tactical screen switches
+   to. Nothing is fit in the browser for a catalogue gateway.
    ============================================================ */
+/* the candidate models, ordered simplest-first to match build-forecast.py's
+   CANDIDATES — the toggle renders in this order. `browser` marks the one that
+   can also be fit client-side, for gateways with no nightly output at all. */
+const MODEL_META = {
+  snaive:  { key:"snaive",  label:"Seasonal naive", short:"Naive",   browser:false,
+             blurb:"Each month repeats the most recent observed value for that calendar month." },
+  ets:     { key:"ets",     label:"Holt-Winters",   short:"ETS",     browser:true,
+             blurb:"Exponential smoothing — damped trend plus multiplicative monthly seasonality." },
+  prophet: { key:"prophet", label:"Meta Prophet",   short:"Prophet", browser:false,
+             blurb:"Additive trend, yearly Fourier seasonality, country holidays and COVID events." },
+};
+const MODEL_KEYS = ["snaive", "ets", "prophet"];
+
 const FORECASTS = {};
 let FORECAST_META = null;
+/* bumped whenever a nightly payload lands, so the long-term model's base-year
+   memo (see baseYearFor) can't keep serving a base it built before the forecast
+   for this gateway had arrived */
+let FORECAST_VERSION = 0;
 function setForecastMeta(json){
   FORECAST_META = json;
   window.GP_FORECAST_META = json;
 }
 function setAirportForecast(iata, json){
   FORECASTS[iata] = json || {};
+  FORECAST_VERSION++;
 }
 function hasForecast(iata, key){
   const a = FORECASTS[iata];
   return key ? !!(a && a[key]) : !!(a && Object.keys(a).length);
 }
-function forecastFor(iata, key){
+/* which model the nightly published for this series. A snapshot written before
+   candidate selection existed has no `chosen` — it was Prophet by definition. */
+function chosenModel(m){
+  return (m && m.candidates && m.chosen && m.candidates[m.chosen]) ? m.chosen : "prophet";
+}
+/* every model available for one series, in simplest-first order, with the
+   scores each earned on the SAME folds — the data behind the model toggle.
+   Empty when this gateway has no nightly output (nothing to choose between). */
+function forecastModels(iata, key){
+  const m = FORECASTS[iata] && FORECASTS[iata][key];
+  if (!m) return [];
+  const chosen = chosenModel(m);
+  const cands = m.candidates || { prophet:{ mase:m.mase, mape:m.mape, coverage:m.coverage } };
+  return MODEL_KEYS.filter(k => cands[k]).map(k => ({
+    ...MODEL_META[k],
+    mase: cands[k].mase ?? null,
+    mape: cands[k].mape ?? null,
+    coverage: cands[k].coverage ?? null,
+    chosen: k === chosen,
+  }));
+}
+/* one metric's nightly forecast, as one of the candidate models it published.
+   `prefer` names a model; omitted — or naming one this series doesn't carry —
+   falls back to the model the nightly chose by MASE. */
+function forecastFor(iata, key, prefer){
   const m = FORECASTS[iata] && FORECASTS[iata][key];
   if (!m) return null;
-  const forecast = (m.forecast || []).map(r => ({ ...r, label:`${MONTHS[r.m]} ${String(r.y).slice(2)}` }));
-  return { forecast, method:"prophet",
-    mape:m.mape, mapeFolds:m.mape_folds || [],
-    naiveMape:m.naive_mape ?? null, skill:m.skill ?? null, coverage:m.coverage ?? null,
-    backtest:m.backtest || [],
+  const chosen = chosenModel(m);
+  const cands = m.candidates || null;
+  const want = (prefer && cands && cands[prefer]) ? prefer : chosen;
+  const c = (cands && cands[want]) || {};
+  // the chosen model's arrays live at the top level, never duplicated inside
+  // `candidates` (see build-forecast.py) — so read them from whichever place
+  // the requested model keeps them
+  const isChosen = want === chosen;
+  const src = isChosen ? m : c;                 // where this model's own values live
+  const rows = (isChosen ? m.forecast : c.forecast) || [];
+  const forecast = rows.map(r => ({ ...r, label:`${MONTHS[r.m]} ${String(r.y).slice(2)}` }));
+  const mape = src.mape ?? null;
+  // the seasonal-naive benchmark is a sibling candidate now, so it's scored on
+  // exactly the folds every other model was
+  const naiveMape = (cands && cands.snaive ? cands.snaive.mape : m.naive_mape) ?? null;
+  return { forecast, method:want, source:"nightly",
+    chosen, chosenReason:m.chosen_reason || null,
+    mase:src.mase ?? null, maseFolds:src.mase_folds || [],
+    // unscaled MAE — only meaningful when MASE came back null, which happens on
+    // a series with no year-over-year variation to scale by (the nightly ranks
+    // on MAE there; see build-forecast.py's choose_model)
+    mae:src.mae ?? null,
+    mape, mapeFolds:src.mape_folds || [],
+    naiveMape,
+    naiveMase:(cands && cands.snaive ? cands.snaive.mase : m.naive_mase) ?? null,
+    // recomputed per model rather than read off the payload, so switching the
+    // toggle reports the skill of the model you're actually looking at
+    skill:(mape != null && naiveMape) ? Math.round((1 - mape/naiveMape) * 100) / 100 : null,
+    // `coverage` is the RAW band's measured coverage — honestly out-of-sample.
+    // `bandScale`/`coverageCal` describe the band actually plotted, which was
+    // stretched to hit the nominal interval; that factor was fitted on these
+    // same held-out months, so its coverage is in-sample and says so.
+    coverage:src.coverage ?? null,
+    bandScale:src.band_scale ?? null, coverageCal:src.coverage_cal ?? null,
+    backtest:(isChosen ? m.backtest : c.backtest) || [],
     seasIdx:m.seasonal12 || Array(12).fill(1),
     holidays:m.holidays || [], holidaysTotal:m.holidays_total || 0,
     latest:m.latest, monthsHistory:m.months_history,
@@ -340,14 +421,19 @@ function etsFit(pts, key, alpha, beta, gamma){
   const y1 = pts.slice(0,P).reduce((s,r)=>s+r[key],0) / P;
   const y2 = pts.slice(P,2*P).reduce((s,r)=>s+r[key],0) / P;
   let level = y1, trend = (y2-y1) / P;
+  const floor = Math.max(1e-9, 1e-6 * (pts.reduce((t,r)=>t+r[key],0) / pts.length));
   const resid = []; let sse = 0, n = 0;
   pts.forEach((r,t)=>{
     const mi = r.m, f = (level + trend) * (seas[mi] || 1);
     if (t >= P){ const e = r[key] - f; sse += e*e; n++; if (f > 0) resid.push(r[key]/f - 1); }
     const prev = level;
-    level = alpha * (r[key] / (seas[mi] || 1e-9)) + (1-alpha) * (level + trend);
+    // a multiplicative seasonal model has no meaning at or below zero: on a
+    // collapsing series the level crosses zero, r[key]/level flips sign, and the
+    // seasonal index goes negative — which makes the point forecast negative and
+    // inverts the band around it. Floor both, scaled to the series.
+    level = Math.max(floor, alpha * (r[key] / (seas[mi] || floor)) + (1-alpha) * (level + trend));
     trend = beta * (level - prev) + (1-beta) * trend;
-    seas[mi] = gamma * (r[key] / (level || 1e-9)) + (1-gamma) * seas[mi];
+    seas[mi] = Math.max(floor, gamma * (r[key] / (level || floor)) + (1-gamma) * seas[mi]);
   });
   return { level, trend, seas, resid, mse: n ? sse/n : Infinity };
 }
@@ -370,11 +456,14 @@ function etsProject(fit, lastY, lastM, horizon){
   let y = lastY, m = lastM;
   for (let h=1; h<=horizon; h++){
     m++; if (m>11){ m=0; y++; }
-    const v = Math.max(0, (fit.level + h*fit.trend)) * (fit.seas[m] || 1);
+    // clamp the product, not just the level — a negative seasonal factor would
+    // otherwise turn a clamped-positive level into a negative forecast
+    const v = Math.max(0, (fit.level + h*fit.trend) * (fit.seas[m] || 1));
     const w = Z * sd * Math.sqrt(h);
+    const lo = Math.max(0, Math.round(v*(1-w))), hi = Math.max(0, Math.round(v*(1+w))), vr = Math.max(0, Math.round(v));
     out.push({ date:`${y}-${String(m+1).padStart(2,"0")}`, y, m,
       label:`${MONTHS[m]} ${String(y).slice(2)}`,
-      v:Math.max(0,Math.round(v)), lo:Math.max(0,Math.round(v*(1-w))), hi:Math.max(0,Math.round(v*(1+w))) });
+      v:vr, lo:Math.min(lo, vr, hi), hi:Math.max(lo, vr, hi) });
   }
   return out;
 }
@@ -393,39 +482,82 @@ function etsForecast(history, key, horizon = 24){
   const pts = all.slice(start);
   if (pts.length < 24) return null;
 
-  let mape = null, naiveMape = null, skill = null, coverage = null, backtest = [];
+  let mape = null, mase = null, naiveMape = null, naiveMase = null, skill = null,
+      coverage = null, bandScale = null, coverageCal = null, backtest = [];
   if (pts.length >= 36){
     const H = 12, train = pts.slice(0, -H), test = pts.slice(-H);
     const bf = etsBestFit(train, key), lastT = train[train.length-1];
     const preds = etsProject(bf, lastT.y, lastT.m, H);
     backtest = preds.map((p,i)=>({ date:p.date, v:p.v, lo:p.lo, hi:p.hi, actual:test[i][key] }));
+    const byYM = {}; train.forEach(r => byYM[r.y+"-"+r.m] = r[key]);
+    // MASE's denominator: mean |yₜ − yₜ₋₁₂| over the TRAINING months only, so
+    // the scale can't leak the holdout it normalises. Same definition the
+    // nightly uses (build-forecast.py) — the two have to agree or the numbers
+    // on the model card aren't comparable across gateways.
+    const steps = train.map(r => (byYM[(r.y-1)+"-"+r.m] != null ? Math.abs(r[key] - byYM[(r.y-1)+"-"+r.m]) : null)).filter(v => v != null);
+    const scale = steps.length ? steps.reduce((a,b)=>a+b,0) / steps.length : null;
+    if (backtest.length && scale > 0){
+      mase = Math.round(backtest.reduce((s,r)=>s+Math.abs(r.v-r.actual),0) / backtest.length / scale * 1000) / 1000;
+    }
     const pairs = backtest.filter(r => r.actual);
     if (pairs.length){
       mape = Math.round(pairs.reduce((s,r)=>s+Math.abs(r.v-r.actual)/r.actual,0) / pairs.length * 1000) / 10;
       coverage = Math.round(pairs.filter(r => r.lo <= r.actual && r.actual <= r.hi).length / pairs.length * 100);
     }
-    const byYM = {}; train.forEach(r => byYM[r.y+"-"+r.m] = r[key]);
-    const np = test.map(r => ({ p:byYM[(r.y-1)+"-"+r.m], a:r[key] })).filter(x => x.p != null && x.a);
-    if (np.length){
-      naiveMape = Math.round(np.reduce((s,x)=>s+Math.abs(x.p-x.a)/x.a,0) / np.length * 1000) / 10;
+    const np = test.map(r => ({ p:byYM[(r.y-1)+"-"+r.m], a:r[key] })).filter(x => x.p != null);
+    if (np.length && scale > 0){
+      naiveMase = Math.round(np.reduce((s,x)=>s+Math.abs(x.p-x.a),0) / np.length / scale * 1000) / 1000;
+    }
+    const npNz = np.filter(x => x.a);
+    if (npNz.length){
+      naiveMape = Math.round(npNz.reduce((s,x)=>s+Math.abs(x.p-x.a)/x.a,0) / npNz.length * 1000) / 10;
       if (mape != null && naiveMape > 0) skill = Math.round((1 - mape/naiveMape) * 100) / 100;
+    }
+    /* Band calibration, the same measure the nightly applies (band_scale_of in
+       build-forecast.py): each held-out month's error in units of its own
+       one-sided band, then the 80th percentile of that. The raw ETS band grows
+       from in-sample residuals and systematically over-covers, so an
+       uncalibrated "80% interval" is mislabeled here exactly as it was
+       server-side. One 12-month holdout is a thin sample, hence the same clamp
+       and a floor on how few points will be trusted at all. */
+    const zs = backtest.map(r => {
+      const half = r.actual > r.v ? (r.hi - r.v) : (r.v - r.lo);
+      return half > 0 ? Math.abs(r.actual - r.v) / half : null;
+    }).filter(z => z != null).sort((a,b)=>a-b);
+    if (zs.length >= 8){
+      const pos = 0.8 * (zs.length - 1), i = Math.floor(pos);
+      const q = zs[i] + (zs[Math.min(i+1, zs.length-1)] - zs[i]) * (pos - i);
+      if (q > 0){
+        bandScale = Math.round(Math.min(4, Math.max(0.25, q)) * 1000) / 1000;
+        coverageCal = Math.round(zs.filter(z => z <= bandScale).length / zs.length * 100);
+      }
     }
   }
   const fit = etsBestFit(pts, key);
   const last = pts[pts.length-1];
-  return { method:"ets", forecast:etsProject(fit, last.y, last.m, horizon),
-    mape, mapeFolds:(mape != null ? [mape] : []), naiveMape, skill, coverage, backtest,
+  // the forward band is calibrated; `backtest` above deliberately keeps its raw
+  // band, since the factor was fitted on exactly those months
+  const forecast = etsProject(fit, last.y, last.m, horizon).map(r => bandScale ? {
+    ...r, lo:Math.max(0, Math.round(r.v - (r.v - r.lo) * bandScale)),
+    hi:Math.max(0, Math.round(r.v + (r.hi - r.v) * bandScale)),
+  } : r);
+  return { method:"ets", source:"browser", chosen:"ets", chosenReason:null, forecast,
+    mape, mapeFolds:(mape != null ? [mape] : []),
+    mase, maseFolds:(mase != null ? [mase] : []),
+    naiveMape, naiveMase, skill, coverage, bandScale, coverageCal, backtest,
     seasIdx:fit.seas.map(v => Math.round(v*1e4)/1e4),
     holidays:[], holidaysTotal:0,
     latest:last.date, monthsHistory:pts.length,
     gdpRegressor:false, gdpForecast:false };
 }
 
-/* the one entry point the screens use for a short-term forecast:
-   the nightly Prophet output when this gateway has one, otherwise an
-   ETS model fit right here on the observed history. */
-function tacticalForecast(iata, key, history){
-  const p = forecastFor(iata, key);
+/* the one entry point the screens use for a short-term forecast: the nightly
+   output when this gateway has one — as `model`, or as whichever candidate the
+   nightly chose when `model` is omitted or unavailable — otherwise an ETS model
+   fit right here on the observed history (an uploaded gateway, or a real one
+   the nightly hasn't cleared its history minimum for). */
+function tacticalForecast(iata, key, history, model){
+  const p = forecastFor(iata, key, model);
   if (p) return p;
   if (!availableMetrics(iata).includes(key)) return null;
   return etsForecast(history, key, 24);
@@ -513,21 +645,179 @@ function defaultScenario(iata){
   };
 }
 
-function longTermForecast(iata, history, scenario){
-  const s = scenario;
+/* ---- which year the strategic curve compounds off ----
+   The long-term model raises ONE base year to the power of 25, so the choice of
+   base year moves the endpoint more than any single lever does. Two modes, and
+   the difference is the link between the two forecasts:
+
+     "forecast" (default) — the CURRENT calendar year, its not-yet-observed
+       months filled in by the short-term tactical model. The strategic curve
+       then starts from where the tactical model says this year actually lands,
+       which is the point of fitting a tactical model at all. It also removes a
+       real hazard of the observed-only base: a gateway whose latest complete
+       year was unusual compounds that anomaly for 25 years (AJI's 2025 came in
+       at 64% of its 2024, and every projected year inherited that).
+     "observed" — the last COMPLETE observed calendar year, nothing modeled.
+       What the model did before this was linked, kept as a true revert: a
+       forecast-completed base inherits the tactical model's error into every
+       year downstream, and that trade is the user's to make, not ours.
+
+   Both builders return the same shape, plus a disclosure of which months were
+   modeled and by which model, so every screen can say so. */
+/* Assemble one base year's twelve months for every metric, from a single
+   cascade: the published observation → (forecast mode only) that metric's own
+   tactical forecast → the prior year's same month. A metric that still can't be
+   resolved is dropped, and reported as dropped.
+
+   There is deliberately NO flat-annual-average rung. The observed-mode builder
+   used to fall back to `annualCargo/12` for any base month cargo was missing,
+   taking that level from cargo's *own* last complete year — which needn't be the
+   base year — and flattening the metric's entire seasonal shape, with nothing on
+   screen to say so. Cargo is published monthly; there is no reason to project it
+   off an annual average. Unreachable on today's feeds (0 of 438 cargo gateways),
+   but only by luck of their publishing lag, and silent if it ever fired. */
+function buildBase(iata, history, baseYear, useModel, model){
+  const obs = {}, prior = {};
+  METRIC_KEYS.forEach(k => { obs[k] = {}; prior[k] = {}; });
+  history.forEach(r => {
+    const into = r.y === baseYear ? obs : (r.y === baseYear-1 ? prior : null);
+    if (into) METRIC_KEYS.forEach(k => { if (r[k] != null) into[k][r.m] = r[k]; });
+  });
+
+  const completion = {}, gapsOf = {};
+  const fill = (k) => {
+    const out = { ...obs[k] };
+    if (!Object.keys(out).length) return null;
+    /* THIS metric's own gaps — never passengers'. The feeds don't move in
+       lockstep: YYZ publishes passengers through May but movements only through
+       April, so filling the pax-shaped gap set left movements holed at May and
+       dropped the metric out of the strategic view entirely (8 gateways). */
+    const gaps = [];
+    for (let m=0; m<12; m++) if (out[m] == null) gaps.push(m);
+    gapsOf[k] = gaps;
+    if (!gaps.length) return out;            // already whole — nothing modeled
+    const st = useModel ? tacticalForecast(iata, k, history, model) : null;
+    const byM = {};
+    if (st) st.forecast.forEach(r => { if (r.y === baseYear) byM[r.m] = r.v; });
+    let usedModel = false, usedCarry = false;
+    for (const m of gaps){
+      if (byM[m] != null){ out[m] = byM[m]; usedModel = true; }
+      else if (prior[k][m] != null){ out[m] = prior[k][m]; usedCarry = true; }
+      else return null;                      // this metric can't be completed
+    }
+    completion[k] = usedModel ? ((st ? st.method : "model") + (usedCarry ? "+carry" : "")) : "carry";
+    return out;
+  };
+
+  const basePax = fill("pax");
+  if (!basePax) return null;
+  const baseCargo = fill("cargo");
+
+  /* ---- movements, deliberately NOT completed by their own model ----
+     The long-term model's central assumption is that movements track passengers
+     (gauge=0 ⇒ strictly proportional), so the base year's pax-per-movement ratio
+     has to mean something. It IS `ratioBase` in the capacity block, which sets
+     `ratioCeil` — the up-gauging ceiling the whole coupled constraint pivots on —
+     and it compounds into every projected year.
+
+     Completing passengers and movements from INDEPENDENTLY selected models broke
+     that. BTS came out at 174 passengers per movement against an observed 104
+     (+67%) purely because passengers won on ETS and movements on a seasonal
+     naive: two unrelated model choices, and nothing holding their ratio to
+     anything. A 67% one-year shift in aircraft gauge is not a real operational
+     change, and it would have silently inflated BTS's modelled slot capacity.
+
+     So a missing movements month is derived from that month's passengers —
+     observed or modeled — at the ratio the two metrics actually exhibit where
+     both are published. Movements' own forecast still drives the tactical
+     screen, which is where a pure movements prediction belongs; here, the
+     model's own proportionality is the better estimator and the coherent one. */
+  let baseAtm = null;
+  if (Object.keys(obs.atm).length){
+    const gaps = [];
+    for (let m=0; m<12; m++) if (obs.atm[m] == null) gaps.push(m);
+    gapsOf.atm = gaps;
+    baseAtm = { ...obs.atm };
+    if (gaps.length){
+      const both = history.filter(r => r.pax != null && r.atm != null).slice(-12);
+      const paxSum = both.reduce((t,r)=>t+r.pax, 0), atmSum = both.reduce((t,r)=>t+r.atm, 0);
+      const ratio = (both.length >= 6 && atmSum > 0 && paxSum > 0) ? paxSum/atmSum : null;
+      let usedRatio = false, usedCarry = false;
+      for (const m of gaps){
+        if (ratio && basePax[m] != null){ baseAtm[m] = Math.round(basePax[m] / ratio); usedRatio = true; }
+        else if (prior.atm[m] != null){ baseAtm[m] = prior.atm[m]; usedCarry = true; }
+        else { baseAtm = null; break; }
+      }
+      if (baseAtm) completion.atm = usedRatio ? ("pax-implied" + (usedCarry ? "+carry" : "")) : "carry";
+    }
+  }
+
+  const sum = (o) => Math.round(Object.keys(o).reduce((t,m)=>t+o[m], 0));
+  return { baseYear,
+    // every annual total is now the base year's OWN twelve months, so the base
+    // row can't disagree with the monthly shape it's charted against
+    annualPax: sum(basePax),
+    annualAtm: baseAtm ? sum(baseAtm) : null,
+    annualCargo: baseCargo ? sum(baseCargo) : null,
+    hasAtm: !!baseAtm, hasCargo: !!baseCargo,
+    basePax, baseAtm: baseAtm || {}, baseCargo: baseCargo || {},
+    forecastMonths: gapsOf.pax || [], completion, model: completion.pax || null,
+    // per metric, since the feeds publish at different lags — the disclosure
+    // would otherwise report passengers' count for movements too
+    modeledMonths: { pax:(gapsOf.pax||[]).length,
+      ...(baseAtm ? { atm:(gapsOf.atm||[]).length } : {}),
+      ...(baseCargo ? { cargo:(gapsOf.cargo||[]).length } : {}) },
+    gaps: gapsOf };
+}
+
+function observedBase(history){
   const paxYears = fullYears(history, "pax");
   if (!paxYears.length) return null;
-  const baseYear = paxYears[paxYears.length-1].y;
-  const annualPax = paxYears[paxYears.length-1].v;
-  const baseMonths = history.filter(r => r.y===baseYear && r.pax!=null).sort((a,b)=>a.m-b.m);
-  if (baseMonths.length < 12) return null;
+  // the last COMPLETE pax year, and no model is consulted — so passengers are
+  // never modeled on this path, whatever the other metrics need
+  const base = buildBase(null, history, paxYears[paxYears.length-1].y, false, null);
+  return base ? { ...base, mode:"observed" } : null;
+}
 
-  const atmYears = fullYears(history, "atm");
-  const cargoYears = fullYears(history, "cargo");
-  const annualAtm = atmYears.length ? atmYears[atmYears.length-1].v : null;
-  const annualCargo = cargoYears.length ? cargoYears[cargoYears.length-1].v : null;
-  const hasAtm = annualAtm != null && baseMonths.every(r => r.atm != null);
-  const hasCargo = annualCargo != null;
+function forecastBase(iata, history, model){
+  const paxRows = history.filter(r => r.pax != null);
+  if (!paxRows.length) return null;
+  const baseYear = paxRows[paxRows.length-1].y;
+  // a whole latest year needs no completing — that IS observedBase's job
+  if (history.filter(r => r.y===baseYear && r.pax!=null).length >= 12) return null;
+  const base = buildBase(iata, history, baseYear, true, model);
+  return base ? { ...base, mode:"forecast" } : null;
+}
+
+/* The base year depends on the history, the mode and the chosen model — never on
+   the scenario — but longTermForecast() re-runs on every lever drag. Without a
+   memo an uploaded gateway re-fits its in-browser ETS once per metric on every
+   slider move (measured: 7.7ms a call against 1.3ms for the pure-arithmetic
+   observed path). Keyed on the history array's identity, so the entry drops as
+   soon as app.jsx rebuilds it, plus a counter for a nightly payload landing
+   after the history was built. Nothing downstream mutates the returned object,
+   so sharing one instance across calls is safe. */
+const BASE_CACHE = new WeakMap();
+function baseYearFor(iata, history, mode, model){
+  const build = () => (mode === "observed") ? observedBase(history)
+    : (forecastBase(iata, history, model) || observedBase(history));
+  if (!history || typeof history !== "object") return build();
+  const key = `${iata}|${mode}|${model || ""}|${FORECAST_VERSION}`;
+  let entries = BASE_CACHE.get(history);
+  if (entries && key in entries) return entries[key];
+  const base = build();
+  if (!entries){ entries = {}; BASE_CACHE.set(history, entries); }
+  entries[key] = base;
+  return base;
+}
+
+function longTermForecast(iata, history, scenario, opts){
+  const s = scenario;
+  const o = opts || {};
+  const base = baseYearFor(iata, history, o.baseMode || "forecast", o.model);
+  if (!base) return null;
+  const { baseYear, annualPax, annualAtm, annualCargo, hasAtm, hasCargo,
+    basePax, baseAtm, baseCargo } = base;
 
   const gIncome  = s.gdp * s.elasticity;
   const gPop     = s.pop;
@@ -540,11 +830,6 @@ function longTermForecast(iata, history, scenario){
   // movements track passengers, less an up-gauging drag (bigger/fuller aircraft
   // carry the same passengers in fewer flights). gauge=0 ⇒ proportional to pax.
   const gMovements = gDemand - (s.gauge || 0) / 100;
-
-  const basePax = {}, baseCargo = {}, baseAtm = {};
-  baseMonths.forEach(r => { basePax[r.m] = r.pax; if (r.cargo != null) baseCargo[r.m] = r.cargo; if (r.atm != null) baseAtm[r.m] = r.atm; });
-  const cargoMonthAvg = hasCargo ? annualCargo / 12 : null;
-  const atmMonthAvg   = hasAtm   ? annualAtm / 12   : null;
 
   /* ---- optional passenger segment composition ----
      If the gateway publishes domestic/transborder/international splits with a
@@ -559,22 +844,42 @@ function longTermForecast(iata, history, scenario){
       const ser = segStore[seg.k]; if (!ser) continue;
       const mvals = {}; let ok = true;
       for (let mm=0; mm<12; mm++){
-        const key = `${baseYear}-${String(mm+1).padStart(2,"0")}`;
-        if (ser[key] == null) { ok = false; break; }
-        mvals[mm] = ser[key];
+        const mk = String(mm+1).padStart(2,"0");
+        if (ser[`${baseYear}-${mk}`] != null) { mvals[mm] = ser[`${baseYear}-${mk}`]; continue; }
+        // a base month completed by the tactical model has no published sector
+        // split — carry the prior year's same month as the SHAPE and let the
+        // per-month rescale below reconcile it to the (modeled) total, so a
+        // forecast-completed base year keeps its passenger mix instead of
+        // silently losing the segment view
+        const carry = ser[`${baseYear-1}-${mk}`];
+        if (carry == null) { ok = false; break; }
+        mvals[mm] = carry;
       }
       if (ok) { segKeys.push(seg.k); segBase[seg.k] = mvals; }
     }
     if (segKeys.length < 2) segKeys = [];   // need a real split to be worth it
   }
-  const hasSeg = segKeys.length > 0;
-  if (hasSeg) {
+  if (segKeys.length) {
+    /* A month whose split sums to ZERO can't be scaled to that month's
+       passengers — there's no shape to scale. Left alone, the month's traffic
+       silently disappeared from the sector mix while still counting in the
+       headline, so the donut didn't add up to the total (PED: three such
+       months, 8,937 passengers; WRO likewise). Those months take the shape
+       implied by the months that DO carry a split, and are then rescaled to
+       their own passengers like every other month. */
+    const totals = {};
+    let grand = 0;
+    segKeys.forEach(k => totals[k] = 0);
+    for (let mm=0; mm<12; mm++) segKeys.forEach(k => { const v = segBase[k][mm]||0; totals[k] += v; grand += v; });
+    if (grand <= 0) segKeys = [];        // no split anywhere — don't invent one
     for (let mm=0; mm<12; mm++){
-      const sum = segKeys.reduce((t,k)=>t+(segBase[k][mm]||0),0);
+      let sum = segKeys.reduce((t,k)=>t+(segBase[k][mm]||0),0);
+      if (sum <= 0 && grand > 0){ segKeys.forEach(k => segBase[k][mm] = totals[k]); sum = grand; }
       const factor = (sum>0 && basePax[mm]!=null) ? basePax[mm]/sum : 1;
       segKeys.forEach(k => segBase[k][mm] *= factor);
     }
   }
+  const hasSeg = segKeys.length > 0;
   const gSeg = {};
   segKeys.forEach(k => gSeg[k] = gDemand + (s["seg_"+k] || 0) / 100);
 
@@ -623,8 +928,10 @@ function longTermForecast(iata, history, scenario){
     const rec = { y:yy, m:mm, date:`${yy}-${String(mm+1).padStart(2,"0")}`,
       label:`${MONTHS[mm]} ${String(yy).slice(2)}`, pax:Math.round(pax) };
     if (segRec)   rec.seg   = segRec;
-    if (hasAtm)   rec.atm   = Math.round((baseAtm[mm]   != null ? baseAtm[mm]   : atmMonthAvg)   * Math.pow(1+gMovements, yf));
-    if (hasCargo) rec.cargo = Math.round((baseCargo[mm] != null ? baseCargo[mm] : cargoMonthAvg) * Math.pow(1+gCargo, yf));
+    // buildBase resolves all twelve months for any metric it reports, so these
+    // are always the metric's own real (or disclosed-modeled) month
+    if (hasAtm)   rec.atm   = Math.round(baseAtm[mm]   * Math.pow(1+gMovements, yf));
+    if (hasCargo) rec.cargo = Math.round(baseCargo[mm] * Math.pow(1+gCargo, yf));
     if (events.length){
       let touched = false;
       const paxBefore = rec.pax;   // pre-shock total, drives the movements coupling below
@@ -651,8 +958,29 @@ function longTermForecast(iata, history, scenario){
     months.push(rec);
   }
 
+  /* ---- the base year's own twelve months ----
+     `months` above starts in January of baseYear+1, so on a forecast-completed
+     base year the base year's modeled months exist in the model but appear
+     nowhere: the monthly chart drew the last observed month adjacent to January
+     of the following year, skipping 8-10 months and implying they were
+     consecutive. These are emitted separately rather than prepended to `months`
+     because the event simulator indexes into `months` positionally and the
+     capacity block scales it per year — both would silently shift.
+     `modeled[metric]` is per metric, since the feeds run at different lags. */
+  const baseGaps = base.gaps || {};
+  const baseMonthly = [];
+  for (let mm=0; mm<12; mm++){
+    const rec = { y:baseYear, m:mm, date:`${baseYear}-${String(mm+1).padStart(2,"0")}`,
+      label:`${MONTHS[mm]} ${String(baseYear).slice(2)}`, modeled:{} };
+    if (basePax[mm] != null){ rec.pax = Math.round(basePax[mm]); rec.modeled.pax = (baseGaps.pax||[]).includes(mm); }
+    if (hasAtm && baseAtm[mm] != null){ rec.atm = Math.round(baseAtm[mm]); rec.modeled.atm = (baseGaps.atm||[]).includes(mm); }
+    if (hasCargo && baseCargo[mm] != null){ rec.cargo = Math.round(baseCargo[mm]); rec.modeled.cargo = (baseGaps.cargo||[]).includes(mm); }
+    baseMonthly.push(rec);
+  }
+
   const segAnnual = (ms) => { const o = {}; segKeys.forEach(k => o[k] = ms.reduce((t,r)=>t+((r.seg&&r.seg[k])||0),0)); return o; };
   const rows = [{ y:baseYear, pax:annualPax, base:true,
+    ...(base.forecastMonths.length ? { partial:true } : {}),
     ...(hasAtm?{atm:annualAtm}:{}), ...(hasCargo?{cargo:annualCargo}:{}),
     ...(hasSeg?{seg: (()=>{ const o={}; segKeys.forEach(k=>o[k]=Math.round(Object.values(segBase[k]).reduce((t,v)=>t+v,0))); return o; })()}:{}) }];
   for (let i=1; i<=s.horizon; i++){
@@ -812,7 +1140,14 @@ function longTermForecast(iata, history, scenario){
   }
 
   const cagr = Math.pow(rows[rows.length-1].pax/annualPax, 1/s.horizon) - 1;
-  return { rows, months, baseYear, endYear:baseYear+s.horizon, hasAtm, hasCargo,
+  return { rows, months, baseMonthly, baseYear, endYear:baseYear+s.horizon, hasAtm, hasCargo,
+    /* how the base year was assembled — every screen that shows a base-year
+       number is expected to disclose this, because a modeled base propagates
+       into all 25 projected years */
+    baseMode: base.mode, baseForecastMonths: base.forecastMonths,
+    baseObservedMonths: 12 - base.forecastMonths.length,
+    baseCompletion: base.completion, baseModel: base.model,
+    baseModeledMonths: base.modeledMonths,
     hasCap, paxCap: paxCapBase, atmCap: atmCapBase,
     paxCapEnd: endCaps.paxCap, atmCapEnd: endCaps.atmCap, capSteps, capAssumptions,
     hasSeg, segKeys, segLabels: segKeys.map(k => (PAX_SEGMENTS.find(p=>p.k===k)||{}).label || k),
@@ -983,7 +1318,8 @@ const fmt = {
 };
 
 Object.assign(window, {
-  AIRPORTS, MACRO, MONTHS, METRIC_META,
+  AIRPORTS, MACRO, MONTHS, METRIC_META, MODEL_META, MODEL_KEYS,
+  GP_MODEL_META:MODEL_META, GP_MODEL_KEYS:MODEL_KEYS, GP_forecastModels:forecastModels,
   GP_buildHistory:buildHistory, GP_annualize:annualize, GP_fullYears:fullYears,
   GP_observedSeasonality:observedSeasonality,
   GP_longTerm:longTermForecast, GP_defaultScenario:defaultScenario,

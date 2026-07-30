@@ -9,7 +9,7 @@ monthly activity for it.
 ```
 ┌──────────────────────────┐     nightly cron (03:17 UTC)
 │ GitHub Action runner      │ ── fetch ──▶ OpenFlights · Eurostat · StatCan
-│ scripts/*.mjs + *.py      │ ◀── JSON ──   World Bank · (Prophet, server-side)
+│ scripts/*.mjs + *.py      │ ◀── JSON ──   World Bank · (forecasts, server-side)
              │ git commit data/
              ▼
 ┌──────────────────────────┐
@@ -183,7 +183,7 @@ Pulls three World Bank indicators for every country present in
 |-----------------|------------------------|----------------------------------|------------------------------|
 | `gdp`           | `NY.GDP.MKTP.KD.ZG`    | trailing 5-yr mean               | reference                    |
 | `gdpcap`        | `NY.GDP.PCAP.KD.ZG`    | trailing 5-yr mean                | GDP/capita lever + regressor extrapolation rate |
-| `gdpcapSeries`  | `NY.GDP.PCAP.KD`       | full yearly level series, untouched | Prophet's GDP/capita regressor (`build-forecast.py`) |
+| `gdpcapSeries`  | `NY.GDP.PCAP.KD`       | full yearly level series, untouched | the Prophet candidate's GDP/capita regressor (`build-forecast.py`) |
 | `pop`           | `SP.POP.TOTL`          | latest year-over-year % change   | population lever              |
 
 The loader overlays these over the `MACRO` table in `data.jsx`, creating a
@@ -235,16 +235,50 @@ an error.
 ### Short-term forecasts — `data/forecast-meta.json` + `data/forecasts/<IATA>.json`
 (`scripts/build-forecast.py`)
 
-Meta **Prophet** (additive trend + multiplicative yearly seasonality + country
-public holidays, via the `holidays` package) fit **server-side** per airport per
-metric on the real series in `data/series/<IATA>.json`. `forecast-meta.json`
-holds only the shared model metadata (generatedAt, model, library, interval,
-horizon) — tiny, loaded once. Each airport's actual forecast output lives in
-its own `data/forecasts/<IATA>.json`, fetched by the browser only once that
-gateway is selected (the same lazy pattern as the activity series). The
-browser renders these directly — no forecasting happens client-side. Each
-airport's ISO-2 country (for the holiday calendar) is read from
-`activity-index.json`.
+**Three candidate models** are fit **server-side** per airport per metric on the
+real series in `data/series/<IATA>.json`, scored on identical rolling-origin
+folds, and the winner is published:
+
+| candidate | what it is |
+| --- | --- |
+| `snaive`  | Seasonal naive — each month repeats the most recent observed value for that calendar month. No trend, no holidays. |
+| `ets`     | Holt-Winters — additive **damped** trend + multiplicative monthly seasonality, smoothing constants and the damping factor φ grid-searched on one-step error. |
+| `prophet` | Meta **Prophet** — additive trend + multiplicative yearly seasonality + country public holidays (via the `holidays` package) + COVID events + a GDP/capita regressor where one exists. |
+
+The seasonal naive is a **competitor, not a footnote**: across the whole
+catalogue it beats Prophet on most series, and a fitted model that can't beat it
+isn't earning its complexity. Candidates are tried simplest-first and a more
+complex one only takes over when it cuts the error by ≥5% relative
+(`SELECT_MARGIN`) — ties go to the simpler model, and the margin stops ordinary
+fold noise from flipping the published model from night to night.
+
+Selection runs on **MASE**, not MAPE. MAPE divides by the actual, so it explodes
+as a series approaches zero: `ISL/atm` scored 22,949% not because the model is
+that bad but because Atatürk closed to commercial traffic and monthly movements
+fell from 33,486 to a few hundred. MASE divides by the *in-sample seasonal-naive
+MAE* instead — finite at zero, comparable across airports, and MASE < 1 literally
+reads "beat a seasonal naive". MAPE is still published because planners recognise
+it, but it decides nothing. On a series with no year-over-year variation at all
+(a flat feed, or one that repeats exactly) the MASE denominator degenerates to
+zero; `mase` is then honestly `null` and selection ranks on unscaled `mae`.
+
+`forecast-meta.json` holds only the shared model metadata (generatedAt, models,
+selection rule, `chosenCounts`, library, interval, horizon) — tiny, loaded once.
+Each airport's actual forecast output lives in its own
+`data/forecasts/<IATA>.json`, fetched by the browser only once that gateway is
+selected (the same lazy pattern as the activity series). Each airport's ISO-2
+country (for the holiday calendar) is read from `activity-index.json`.
+
+**Payload layout per metric.** The chosen model's arrays sit at the **top level**
+(`forecast`, `backtest`, and its scores), so an older client and the validator
+read it unchanged. `candidates` carries every candidate's scores plus the
+*alternatives'* `forecast`/`backtest` — that's what the model toggle on the
+Short-term screen switches between. The winner's arrays are deliberately **not**
+duplicated inside `candidates`; that would add ~2.5 KB per metric across 446
+airports to a nightly commit, and `validate-data.mjs` fails the build if a
+regression starts duplicating them. Nothing is fit client-side for a catalogue
+gateway — the browser only fits ETS for an *uploaded* gateway, which has no
+nightly output at all.
 
 The **COVID collapse (2020-03 → 2021-12)** is modeled as one explicit dummy
 event per month rather than fed in as ordinary data — Prophet attributes the
@@ -256,15 +290,98 @@ MAPE from ~16% to ~5%.
 
 **Backtesting is rolling-origin** (`rolling_backtest()` in
 `build-forecast.py`): up to 3 refits per series, each trained with a further
-12 months held out and scored on those unseen months. Each metric's forecast
-JSON carries `mape` (mean across folds), `mape_folds`, `naive_mape` (a
-seasonal-naïve benchmark over the same held-out months), `skill`
-(1 − mape/naive_mape — positive means the model earns its keep), `coverage`
-(% of held-out months inside the claimed 80% interval), and `backtest` (the
-most recent fold's month-by-month predicted-vs-actual, which the Short-term
-screen charts). For a quick local run against a subset of airports:
-`GLIDEPATH_ONLY="AMS,YYZ" python scripts/build-forecast.py` (skips pruning,
-so the other committed forecasts survive).
+12 months held out and scored on those unseen months — and **every candidate is
+scored on the same folds**, which is the only thing that makes the MASE
+comparison meaningful. Each metric's forecast JSON carries `chosen`,
+`chosen_reason`, `mase` (mean across folds — the number selection ran on),
+`mase_folds`, `mape`, `mape_folds`, `mae`, `naive_mape`/`naive_mase` (the
+seasonal-naive candidate's own scores, over those same folds), `skill`
+(1 − mape/naive_mape), `coverage` / `band_scale` / `coverage_cal` (the band
+calibration described below), and `backtest` (the most recent fold's month-by-month
+predicted-vs-actual, which the Short-term screen charts) — plus the same score
+set per candidate under `candidates`. For a quick local run against a subset of
+airports: `GLIDEPATH_ONLY="AMS,YYZ" python scripts/build-forecast.py` (skips
+pruning, so the other committed forecasts survive).
+
+**Bands are calibrated against measured coverage.** The three candidates derive
+their intervals three incompatible ways — Prophet samples a posterior, ETS grows
+one from in-sample residuals, the seasonal naive uses a seasonal-random-walk
+sigma — and none of them delivered the 80% they claimed. Measured on a
+60-airport sample:
+
+| candidate | median coverage of its raw "80%" band |
+| --- | --- |
+| `snaive`  | 100% (far too wide) |
+| `ets`     | 97% (too wide) |
+| `prophet` | 39% (far too narrow) |
+
+So the label was wrong in both directions, differently per model. Each candidate
+now publishes a `band_scale`: the INTERVAL-th quantile of each held-out month's
+error measured *in units of that month's own one-sided band half-width*
+(`band_scale_of`). Above 1 it widens a band that was too narrow, below 1 it
+tightens one that was too wide, and it works uniformly regardless of how the raw
+band was derived. It's clamped to `[0.25, 4.0]` — a handful of held-out months
+can throw an extreme quantile, and a 30x band is less useful than an honestly
+wrong one.
+
+Two coverage numbers are published, and the distinction matters:
+
+- **`coverage`** — the RAW band's coverage, measured out-of-sample. Still the
+  honest headline.
+- **`coverage_cal`** — what the scaled band achieves on those same held-out
+  months. The factor was fitted on exactly those months, so this is **in-sample**
+  and the model card says so.
+
+The scale is applied to the forward `forecast` rows only. The `backtest` rows
+shipped for the accountability chart keep their raw band deliberately: widening
+them would flatter the model on the very months the factor was fitted to. The
+in-browser ETS (uploaded gateways) applies the same formula to its single
+12-month holdout, with a floor of 8 scoreable months before it will calibrate at
+all. Where the clamp binds and coverage is still under 65%, the Short-term screen
+says to read the point forecast rather than the range.
+
+### Which model the long-term forecast compounds off
+The long-term elasticity model raises **one base year** to the power of the
+horizon, so that year moves the endpoint more than any single lever. It is built
+from the *current* calendar year, with its not-yet-observed months filled in by
+the short-term model chosen above (or the one the visitor toggled to) — so the
+strategic curve starts from where the tactical model says this year lands rather
+than from a year that may be well over a year stale. Each metric is completed by
+its own tactical forecast, falling back to the prior year's same month when no
+model can reach it. Each metric resolves its *own* missing months, not
+passengers' — the feeds publish at different lags (YYZ: passengers through May,
+movements through April), and applying one gap set to all of them dropped
+movements out of the strategic view on 8 gateways.
+
+**Movements are the exception: they are derived from passengers, not from their
+own model.** The long-term model's central assumption is that flights track
+passengers (`gauge=0` ⇒ strictly proportional), so the base year's
+pax-per-movement ratio is load-bearing — it *is* `ratioBase` in the capacity
+block, which sets `ratioCeil`, the up-gauging ceiling the coupled constraint
+pivots on, and it compounds into every projected year. Completing passengers and
+movements from *independently selected* models broke that: BTS came out at 174
+passengers per movement against an observed 104 (+67%), purely because passengers
+won on ETS and movements on a seasonal naive. A 67% one-year shift in aircraft
+gauge is not a real operational change, and it would have silently inflated BTS's
+modelled slot capacity. So a missing movements month is derived from that month's
+passengers — observed or modeled — at the ratio the two metrics exhibit where
+both are published (trailing 12 months; a per-calendar-month ratio was tried and
+rejected, since on small airports the monthly ratio swings 5–87 and amplifies
+noise instead of reducing it). Across the catalogue this cut gateways whose base
+ratio sits >10% off recent observed reality from 45 to 7, and the residual 7 are
+genuine level shifts or single-digit-ratio noise, not artifacts. Movements' own
+forecast still drives the tactical screen, where a pure movements prediction is
+what's wanted. There is deliberately no
+flat-annual-average rung: cargo is published monthly, and projecting it off
+`annualCargo/12` erased its seasonal shape and took its level from a year that
+needn't be the base year. `GP_longTerm` returns `baseMode`, `baseObservedMonths`,
+`baseForecastMonths`, `baseModeledMonths` (per metric), `baseCompletion`,
+`baseModel` and `baseMonthly` (the base year's own twelve months, each flagged
+per metric — the monthly chart needs them to stay continuous) so every screen
+showing a base-year number can disclose how it was assembled. The Long-term screen has a
+**Last full year** switch that reverts to the old observed-only base — a modeled
+base year inherits the tactical model's error into every projected year, and that
+trade is the user's to make.
 
 When a **GDP/capita** series is available for the airport's country
 (`gdpcapSeries` above), it rides along as a Prophet `extra_regressor` —
@@ -294,7 +411,7 @@ node scripts/fetch-activity.mjs    # activity-index.json + series/<IATA>.json (E
 node scripts/fetch-data.mjs        # macro.json (World Bank, no key)
 node scripts/fetch-imf.mjs         # imf-weo.json (IMF WEO forward GDP/capita forecast, no key)
 pip install -r scripts/requirements.txt
-python scripts/build-forecast.py   # forecast-meta.json + forecasts/<IATA>.json (Meta Prophet)
+python scripts/build-forecast.py   # forecast-meta.json + forecasts/<IATA>.json (3 candidates, best by MASE)
 ```
 Node 20+. Each rewrites its snapshot under `data/`. Commit the result, or let the
 Action do it.
