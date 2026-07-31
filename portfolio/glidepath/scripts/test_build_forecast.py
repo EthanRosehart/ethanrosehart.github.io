@@ -353,12 +353,19 @@ def test_ets_path_produces_a_coherent_band_for_every_requested_month(bf):
 
 # ---- model selection ---------------------------------------------------------
 
-def test_choose_model_prefers_the_simpler_candidate_on_a_near_tie(bf):
-    # prophet is only 3% better than the seasonal naive — inside the 5% margin,
-    # so the naive keeps it. This is the AMS case (snaive 0.284, prophet 0.296).
+def test_choose_model_takes_the_lowest_score_with_no_handicap(bf):
+    # SELECT_MARGIN is 0: the best score wins outright, even by 3%. (Under the
+    # old 5% margin this case went to the naive.)
     chosen, reason = bf.choose_model({"snaive": {"mase": 1.00}, "prophet": {"mase": 0.97}})
+    assert chosen == "prophet"
+    assert "simplicity margin" not in reason
+
+
+def test_choose_model_gives_an_exact_tie_to_the_simpler_model(bf):
+    # the one residual bias: candidates are walked simplest-first and the
+    # comparison is strictly less-than, so an exact tie never unseats.
+    chosen, _ = bf.choose_model({"snaive": {"mase": 0.50}, "ets": {"mase": 0.50}, "prophet": {"mase": 0.50}})
     assert chosen == "snaive"
-    assert "simplicity margin" in reason
 
 
 def test_choose_model_switches_when_a_complex_candidate_clearly_wins(bf):
@@ -366,11 +373,11 @@ def test_choose_model_switches_when_a_complex_candidate_clearly_wins(bf):
     assert chosen == "prophet"
 
 
-def test_choose_model_walks_candidates_simplest_first(bf):
-    # ets beats snaive by enough to take over; prophet then has to beat ETS's
-    # 0.50 by 5%, and 0.49 doesn't — so the middle candidate holds.
+def test_choose_model_lets_a_marginal_win_take_over(bf):
+    # with no margin, prophet's 0.49 beats ETS's 0.50 and takes it. Under the old
+    # 5% handicap the middle candidate held.
     chosen, _ = bf.choose_model({"snaive": {"mase": 1.00}, "ets": {"mase": 0.50}, "prophet": {"mase": 0.49}})
-    assert chosen == "ets"
+    assert chosen == "prophet"
 
 
 def test_choose_model_ignores_unscored_candidates_and_reports_when_none_scored(bf):
@@ -452,8 +459,12 @@ def test_rolling_backtest_reports_a_calibration_that_actually_lands_near_nominal
     for name, c in bt.items():
         assert c["band_scale"] is None or c["band_scale"] > 0, f"{name}: a non-positive scale would invert the band"
         if c["coverage_cal"] is not None and c["band_scale"] not in (bf.BAND_SCALE_MIN, bf.BAND_SCALE_MAX):
-            # unclamped, the calibrated band should sit near the nominal interval
-            assert 60 <= c["coverage_cal"] <= 100, f"{name}: calibrated coverage {c['coverage_cal']}%"
+            # unclamped, the calibrated band should sit near the nominal interval.
+            # Expressed RELATIVE to INTERVAL so retargeting the band (0.80 -> 0.50)
+            # doesn't silently invalidate the assertion.
+            target = bf.INTERVAL * 100
+            assert target - 20 <= c["coverage_cal"] <= 100, \
+                f"{name}: calibrated coverage {c['coverage_cal']}% against a {target:.0f}% target"
 
 
 def test_forecast_metric_calibrates_the_forward_band_but_not_the_backtest_rows(bf):

@@ -25,8 +25,9 @@
 #   ets      Holt-Winters, damped additive trend + multiplicative monthly
 #            seasonality. Damping is the point: where Prophet compounds a
 #            structural break, phi < 1 flattens it out.
-#   prophet  trend + yearly Fourier seasonality + country holidays + COVID
-#            events + a GDP/capita regressor where one exists.
+#   prophet  trend + annual Fourier seasonality (order 2 — tuned, see
+#            fit_predict) + country holidays + COVID events + a GDP/capita
+#            regressor where one exists.
 #
 # WHY MASE, NOT MAPE. MAPE divides by the actual, so it explodes toward
 # infinity as a series approaches zero — ISL scored 22,949% not because the
@@ -78,8 +79,14 @@ MACRO = os.path.join(DATA, "macro.json")
 IMF_WEO = os.path.join(DATA, "imf-weo.json")
 
 HORIZON = 24            # months forecast (UI offers 12 / 24)
-INTERVAL = 0.80         # prediction interval width -> P10..P90 band
-Z_INTERVAL = 1.2816     # two-sided normal quantile for INTERVAL — the two must
+# Prediction interval width. A 50% band says "half the months land in here" —
+# deliberately NARROW. A wider band is not a safer one: the raw uncalibrated
+# bands covered a median 97% of held-out months, which is the weather forecast
+# that says "between -40 and +50" and is never wrong and never useful. A tight
+# band that misses often but stays close is the more decision-useful object, and
+# the measured coverage published next to it is what keeps it honest.
+INTERVAL = 0.50
+Z_INTERVAL = 0.6745     # two-sided normal quantile for INTERVAL — the two must
                         # move together (only the closed-form ets/snaive bands
                         # need it; Prophet samples its own posterior)
 MIN_MONTHS = 36         # need a few seasons before Prophet is meaningful
@@ -90,24 +97,34 @@ BACKTEST_H = 12         # ...each holding out the next 12 months
 # choose_model(): the seasonal naive is the incumbent every fitted model has to
 # unseat, not a footnote it gets compared against.
 CANDIDATES = ("snaive", "ets", "prophet")
-# ...and a more complex candidate must cut MASE by at least this much
-# (relative) to take over. Without the margin, ordinary fold noise flips the
-# published model from night to night and the forecast a visitor saw yesterday
-# silently changes for no real reason.
-SELECT_MARGIN = 0.05
+# Relative margin a more complex candidate must beat the incumbent by to take
+# over. Set to 0: the best-scoring model wins outright, no handicap. Candidates
+# are still walked simplest-first and the comparison is strictly less-than, so an
+# exact tie still goes to the simpler model — but nothing else does. The cost of
+# 0 is churn: the published model can now flip between nightly runs on ordinary
+# fold noise, so a forecast can change without the underlying data changing.
+SELECT_MARGIN = 0.0
 
 # Bounds on the band calibration factor (see band_scale_of). A few held-out
 # months can throw an extreme quantile, and a 30x-wide band is less useful than
 # an honestly-wrong one.
 BAND_SCALE_MIN, BAND_SCALE_MAX = 0.25, 4.0
 
-# ETS smoothing grid, scored on one-step error. phi is the damping factor;
-# 1.0 is an undamped Holt-Winters, so the grid spans both.
+# ETS grid, scored on in-sample one-step error. This spans the three Holt-Winters
+# trend types rather than assuming one:
+#   trend=False           no trend at all (Holt-Winters "N") — the right model for
+#                         a flat series, where fitting a slope is pure variance
+#   trend=True,  phi=1.0  undamped additive trend ("A")
+#   trend=True,  phi<1.0  damped additive trend ("Ad")
+# When trend is off, beta and phi are meaningless, so those combinations are
+# skipped instead of refitting the same model 9 times: 16 + 144 = 160 fits per
+# call, ~11% more than the previous 144 and still ~50ms.
 ETS_GRID = {
     "alpha": (0.1, 0.2, 0.3, 0.5),
     "beta": (0.01, 0.05, 0.1),
     "gamma": (0.05, 0.1, 0.2, 0.3),
     "phi": (0.85, 0.95, 1.0),
+    "trend": (True, False),
 }
 
 HOLIDAY_PRIOR = 5.0     # regularisation for public holidays (multiplicative)
@@ -252,7 +269,17 @@ def fit_predict(df, hol_df, horizon, gdp_levels=None, gdp_growth=None, gdp_futur
     covers instead of the flat trailing-rate extrapolation."""
     m = Prophet(
         growth="linear",
-        yearly_seasonality=6,
+        # Fourier order for the annual cycle. NOT "predict yearly" — the period
+        # is one year and the data is monthly, so this IS the month-to-month
+        # seasonal shape; 2 harmonics describe it with 4 parameters instead of
+        # 12. Measured head-to-head on 164 series (fourier 2 vs 6, identical
+        # folds): median MASE 0.857 -> 0.809, mean 1.710 -> 1.402, and p90
+        # 3.501 -> 2.100 with catastrophic fits (MASE > 2) down from 27 to 19.
+        # The gain is almost entirely in the TAIL, which is the signature of
+        # overfitting: 6 harmonics has enough freedom to interpolate a 12-point
+        # annual cycle, so it fits noise on the short histories this catalogue
+        # is full of.
+        yearly_seasonality=2,
         weekly_seasonality=False,
         daily_seasonality=False,
         seasonality_mode="multiplicative",
@@ -430,7 +457,7 @@ def contiguous_tail(df):
     return df.iloc[start:]
 
 
-def ets_fit(df, alpha, beta, gamma, phi, P=12):
+def ets_fit(df, alpha, beta, gamma, phi, trend_on=True, P=12):
     """Holt-Winters with an additive DAMPED trend and multiplicative monthly
     seasonality, over a gap-free frame. Seasonal slots are indexed by real
     calendar month, so the fit doesn't assume the series starts in January.
@@ -451,7 +478,9 @@ def ets_fit(df, alpha, beta, gamma, phi, P=12):
     mean_seas = (sum(seas) / P) or 1.0
     seas = [s / mean_seas for s in seas]
     y1, y2 = sum(ys[:P]) / P, sum(ys[P:2 * P]) / P
-    level, trend = y1, (y2 - y1) / P
+    # trend_on=False pins the slope at zero for the whole fit — a level-only
+    # model, which is what a flat or erratic series actually wants
+    level, trend = y1, ((y2 - y1) / P if trend_on else 0.0)
     # A MULTIPLICATIVE seasonal model has no meaning at or below zero. On a
     # collapsing series the level crosses zero, y/level flips sign, and the
     # seasonal index goes negative — BMA fitted September at -9.428, which made
@@ -472,9 +501,10 @@ def ets_fit(df, alpha, beta, gamma, phi, P=12):
                 resid.append(ys[t] / f - 1)
         prev = level
         level = max(floor, alpha * (ys[t] / (seas[mi] or floor)) + (1 - alpha) * (level + phi * trend))
-        trend = beta * (level - prev) + (1 - beta) * phi * trend
+        if trend_on:
+            trend = beta * (level - prev) + (1 - beta) * phi * trend
         seas[mi] = max(floor, gamma * (ys[t] / (level or floor)) + (1 - gamma) * seas[mi])
-    return {"level": level, "trend": trend, "phi": phi, "seas": seas,
+    return {"level": level, "trend": trend, "phi": phi, "trend_on": trend_on, "seas": seas,
             "resid": resid, "mse": (sse / scored) if scored else float("inf")}
 
 
@@ -483,12 +513,16 @@ def ets_best_fit(df):
     ranked on in-sample one-step MSE."""
     best = None
     for alpha in ETS_GRID["alpha"]:
-        for beta in ETS_GRID["beta"]:
-            for gamma in ETS_GRID["gamma"]:
-                for phi in ETS_GRID["phi"]:
-                    f = ets_fit(df, alpha, beta, gamma, phi)
-                    if f and (best is None or f["mse"] < best["mse"]):
-                        best = f
+        for gamma in ETS_GRID["gamma"]:
+            for trend_on in ETS_GRID["trend"]:
+                # beta/phi only exist when there is a trend to smooth and damp
+                betas = ETS_GRID["beta"] if trend_on else (0.0,)
+                phis = ETS_GRID["phi"] if trend_on else (1.0,)
+                for beta in betas:
+                    for phi in phis:
+                        f = ets_fit(df, alpha, beta, gamma, phi, trend_on)
+                        if f and (best is None or f["mse"] < best["mse"]):
+                            best = f
     return best
 
 
@@ -557,9 +591,9 @@ def path_from_prophet(fc, target_ds):
 
 
 def choose_model(scores):
-    """Which candidate to publish. Walks the candidates simplest-first and lets
-    a more complex one take over only when it cuts the error by at least
-    SELECT_MARGIN — so ties, and near-ties, go to the simpler model.
+    """Which candidate to publish: the lowest error, full stop. Candidates are
+    walked simplest-first and the comparison is strictly less-than, so an exact
+    tie goes to the simpler model; SELECT_MARGIN (0) adds no further handicap.
 
     Ranks on MASE. When MASE is undefined for every candidate — a series with no
     year-over-year movement to scale by — it ranks on plain MAE instead. That
@@ -581,8 +615,9 @@ def choose_model(scores):
         note = ("" if key == "mase" else
                 " — ranked on unscaled MAE because the series has no "
                 "year-over-year variation for MASE to scale by")
-        return best, (f"lowest backtest {label} with a {round(SELECT_MARGIN * 100)}% "
-                      f"simplicity margin ({detail}){note}")
+        margin = (f" with a {round(SELECT_MARGIN * 100)}% simplicity margin"
+                  if SELECT_MARGIN else "")
+        return best, f"lowest backtest {label}{margin} ({detail}){note}"
     return None, "no candidate could be scored"
 
 
@@ -967,9 +1002,9 @@ def main():
             "ets": "Holt-Winters — damped additive trend + multiplicative monthly seasonality, smoothing grid-searched on one-step error",
             "prophet": "Meta Prophet — additive trend + multiplicative yearly + country holidays + COVID 2020-21 events + GDP/capita regressor where available",
         },
-        "selection": (f"lowest mean MASE over the backtest folds, candidates tried simplest-first "
-                      f"(seasonal naive, then damped ETS, then Prophet) with a {round(SELECT_MARGIN * 100)}% "
-                      f"relative margin required to unseat a simpler model. MASE scales by the in-sample "
+        "selection": (f"lowest mean MASE over the backtest folds — the best-scoring model wins outright. "
+                      f"Candidates are tried simplest-first so an exact tie goes to the simpler model; "
+                      f"no other handicap is applied (SELECT_MARGIN={SELECT_MARGIN}). MASE scales by the in-sample "
                       f"seasonal-naive MAE, so it stays finite on series that approach zero — which MAPE "
                       f"does not, and why MAPE is published but never decides."),
         "chosenCounts": chosen_counts,
