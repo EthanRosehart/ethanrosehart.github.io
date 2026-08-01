@@ -105,6 +105,23 @@ CANDIDATES = ("snaive", "ets", "prophet")
 # fold noise, so a forecast can change without the underlying data changing.
 SELECT_MARGIN = 0.0
 
+# Prophet hyperparameters searched per series on the RESERVED TUNING FOLD (see
+# rolling_backtest). Deliberately light — 4 configs, not a sweep:
+#   changepoint_prior_scale   how freely the trend may bend. Lower = stiffer.
+#                             Testing showed 0.01 trades point accuracy for much
+#                             better band coverage, so it is worth having as an
+#                             option per series rather than a global choice.
+#   seasonality_prior_scale   how strongly the seasonal shape is regularised.
+# Fourier order is NOT in the grid: it was settled globally at 2 on a 164-series
+# head-to-head (see fit_predict), and adding it here would multiply the cost of
+# every nightly for a decision the evidence already made.
+PROPHET_GRID = (
+    {"cps": 0.05, "sps": 10.0},   # Prophet's own defaults — the incumbent
+    {"cps": 0.05, "sps": 1.0},
+    {"cps": 0.01, "sps": 10.0},
+    {"cps": 0.01, "sps": 1.0},
+)
+
 # Bounds on the band calibration factor (see band_scale_of). A few held-out
 # months can throw an extreme quantile, and a 30x-wide band is less useful than
 # an honestly-wrong one.
@@ -136,6 +153,25 @@ HOLIDAY_PRIOR = 5.0     # regularisation for public holidays (multiplicative)
 COVID_START = "2020-03"
 COVID_END = "2021-12"
 COVID_PRIOR = 15.0      # let the dip months take large coefficients
+
+# A WIDER window that no candidate is scored on, and that is excluded from the
+# MASE denominator. Deliberately longer than the dummy window above: the rebound
+# is as unforecastable as the collapse, and training through a shutdown to
+# predict a recovery is not a test any model can meaningfully pass or fail.
+#
+# Two distinct harms, both measured across the committed catalogue:
+#   1. A backtest fold whose TEST window lands in here is scoring models on
+#      months nothing could have called. 10 of 1,326 series (1%) — small, but
+#      those are exactly the impossible cases.
+#   2. Far bigger: MASE divides by the mean year-over-year step in training. Span
+#      the collapse and rebound and that denominator is enormous, so every MASE
+#      is deflated and "beats the seasonal naive" becomes far too easy to claim.
+#      1,219 of 1,326 series (92%) were affected, inflating the denominator by a
+#      median 1.45x, more than doubling it on 29% of series, and up to 31x. The
+#      same year-over-year steps also size the seasonal-naive band, which is part
+#      of why that band covered a median 100% of held-out months.
+ANOMALY_START = "2020-03"
+ANOMALY_END = "2022-12"
 
 # The ISO 3166-1 alpha-2 country (for the holidays package / Prophet) now rides
 # on each airport in activity.json ("country"); this map is only a fallback for
@@ -259,7 +295,7 @@ def gdp_monthly_series(annual_levels, trailing_growth_pct, month_starts, future_
     return out
 
 
-def fit_predict(df, hol_df, horizon, gdp_levels=None, gdp_growth=None, gdp_future_rates=None):
+def fit_predict(df, hol_df, horizon, gdp_levels=None, gdp_growth=None, gdp_future_rates=None, cfg=None):
     """Fit Prophet (multiplicative yearly + holidays) and forecast `horizon`.
     When `gdp_levels` (real WB annual GDP/capita) is available for this
     airport's country, GDP/capita rides along as an extra_regressor —
@@ -285,7 +321,8 @@ def fit_predict(df, hol_df, horizon, gdp_levels=None, gdp_growth=None, gdp_futur
         seasonality_mode="multiplicative",
         holidays=hol_df if len(hol_df) else None,
         holidays_prior_scale=HOLIDAY_PRIOR,   # same constant the per-row prior uses
-        changepoint_prior_scale=0.05,
+        seasonality_prior_scale=(cfg or PROPHET_GRID[0])["sps"],
+        changepoint_prior_scale=(cfg or PROPHET_GRID[0])["cps"],
         interval_width=INTERVAL,
     )
     use_gdp = bool(gdp_levels)
@@ -299,6 +336,15 @@ def fit_predict(df, hol_df, horizon, gdp_levels=None, gdp_growth=None, gdp_futur
         future["gdp_percap"] = gdp_monthly_series(gdp_levels, gdp_growth, list(future["ds"]), gdp_future_rates)
     fc = m.predict(future)
     return m, fc
+
+
+def _ts(month_key):
+    return pd.Timestamp(int(month_key[:4]), int(month_key[5:7]), 1)
+
+
+def in_anomaly(ds):
+    """Is this month inside the COVID collapse-and-rebound window?"""
+    return _ts(ANOMALY_START) <= ds <= _ts(ANOMALY_END)
 
 
 def month_span(a, b):
@@ -398,12 +444,18 @@ def seasonal_naive_errors(train):
     TRAINING rows only, never the holdout, so the scale can't leak the answer
     into the score it normalises."""
     by_ds = {ds: float(y) for ds, y in zip(train["ds"], train["y"])}
-    out = []
+    out, anomalous = [], []
     for ds, y in by_ds.items():
         prev = ds - pd.DateOffset(years=1)
-        if prev in by_ds:
-            out.append(y - by_ds[prev])
-    return out
+        if prev not in by_ds:
+            continue
+        step = y - by_ds[prev]
+        # a step with EITHER end inside the anomaly window measures a pandemic,
+        # not this airport's normal year-over-year variation
+        (anomalous if (in_anomaly(ds) or in_anomaly(prev)) else out).append(step)
+    # only fall back to the anomalous steps if excluding them leaves nothing at
+    # all — a distorted scale still beats no scale
+    return out or anomalous
 
 
 def seasonal_naive_scale(train):
@@ -558,7 +610,7 @@ def ets_path(train, target_ds):
 
 
 def prophet_path(train, hol_df, target_ds, gdp_levels=None, gdp_growth=None,
-                 gdp_future_rates=None):
+                 gdp_future_rates=None, cfg=None):
     """Candidate 3 — Prophet, through the same fit_predict() the final forecast
     uses. Sized by CALENDAR distance to the last target, not by the number of
     held-out rows: Prophet predicts contiguous months, so on a gappy series a
@@ -571,7 +623,7 @@ def prophet_path(train, hol_df, target_ds, gdp_levels=None, gdp_growth=None,
     if horizon < 1:
         return {}
     try:
-        _, fc = fit_predict(train, hol_df, horizon, gdp_levels, gdp_growth, gdp_future_rates)
+        _, fc = fit_predict(train, hol_df, horizon, gdp_levels, gdp_growth, gdp_future_rates, cfg)
     except Exception:
         return {}
     return path_from_prophet(fc, target_ds)
@@ -588,6 +640,32 @@ def path_from_prophet(fc, target_ds):
                        float(fx.at[ds, "yhat_lower"]),
                        float(fx.at[ds, "yhat_upper"]))
     return out
+
+
+def tune_prophet(fold, hol_df, gdp_levels=None, gdp_growth=None, gdp_future_rates=None):
+    """Pick Prophet's hyperparameters on ONE reserved fold, by the same MASE the
+    model comparison uses. Returns the winning config, falling back to Prophet's
+    own defaults (PROPHET_GRID[0]) when nothing scores — a config chosen by
+    accident would be worse than the documented default."""
+    train, test = fold
+    target = list(test["ds"])
+    actual = {ds: float(y) for ds, y in zip(test["ds"], test["y"])}
+    scale = seasonal_naive_scale(train)
+    best, best_score = PROPHET_GRID[0], None
+    for cfg in PROPHET_GRID:
+        path = prophet_path(train, hol_df, target, gdp_levels, gdp_growth, gdp_future_rates, cfg)
+        months = [ds for ds in target if ds in path]
+        if not months:
+            continue
+        preds, acts = [path[ds][0] for ds in months], [actual[ds] for ds in months]
+        # MASE where the scale exists, plain MAE where it degenerates — the same
+        # fallback choose_model uses, for the same reason
+        score = mase_of(preds, acts, scale)
+        if score is None:
+            score = mae_of(preds, acts)
+        if score is not None and (best_score is None or score < best_score):
+            best, best_score = cfg, score
+    return best
 
 
 def choose_model(scores):
@@ -623,37 +701,71 @@ def choose_model(scores):
 
 def rolling_backtest(df, hol_df, folds=BACKTEST_FOLDS, holdout=BACKTEST_H,
                      gdp_levels=None, gdp_growth=None, gdp_future_rates=None):
-    """Rolling-origin evaluation of EVERY candidate on IDENTICAL folds: up to
-    `folds` refits, each trained on the series truncated a further `holdout`
-    months back and scored on the next `holdout` months no candidate saw. Every
-    model faces the same training data and the same held-out months, which is
-    the only way the MASE comparison that picks the winner means anything.
+    """Rolling-origin evaluation of every candidate on IDENTICAL folds, with the
+    OLDEST fold held back purely to tune Prophet.
 
-    Returns name -> {
-      mase        mean across folds — the number model selection runs on
+    Why hold one back. Prophet gets PROPHET_GRID attempts and keeps its best;
+    the seasonal naive and ETS get one attempt each. Score all of them on the
+    same folds the config was chosen on and Prophet wins some comparisons purely
+    by having had more tries — a student who sits the exam four times and reports
+    their best is not comparable to one who sat it once. So the tuning fold is
+    spent choosing Prophet's config and is then scored by NOBODY; every candidate
+    is compared only on folds untouched by that choice.
+
+    The OLDEST fold is the one reserved, not the newest. The score is what
+    decides which model ships and what the UI publishes as the accuracy claim, so
+    it belongs on the most recent data — the best available proxy for the period
+    being forecast. A hyperparameter like trend flexibility is a structural
+    property of the series and travels forward from older data perfectly well.
+
+    Cost: PROPHET_GRID configs on the tuning fold + the winner on each scoring
+    fold + one final fit, against 4 fits before. The trade the tuning fold buys
+    is one fewer year of grading for everyone (2 scoring folds where 3 could be
+    formed). A series too short to spare a fold skips tuning and uses the default
+    config, so it is never scored on a fold its own tuning saw.
+
+    Returns (scores, prophet_cfg) where scores is name -> {
+      mase        mean across the SCORING folds — what model selection runs on
       mase_folds  per-fold values, so a lucky single holdout can't hide
-      mape        mean across folds (published for recognisability)
-      mape_folds  per-fold values
+      mape/mape_folds/mae   published alongside; mape never decides
       coverage    % of held-out months inside that candidate's claimed band
-      backtest    the most recent fold's month-by-month predicted-vs-actual,
-                  shipped so the UI can show what the model got wrong
-    }, omitting any candidate that never scored. None when even one fold can't
-    be formed (needs 24 training months)."""
-    acc = {n: {"mase": [], "mape": [], "mae": [], "abs_z": [], "hits": 0, "n_int": 0, "detail": None}
-           for n in CANDIDATES}
-    scored_any = False
+      band_scale/coverage_cal   the band calibration (see band_scale_of)
+      backtest    the most recent scoring fold's month-by-month
+                  predicted-vs-actual, shipped so the UI can show what the model
+                  got wrong
+    }, omitting any candidate that never scored. (None, cfg) when no scoring
+    fold can be formed (needs 24 training months)."""
+    # build the folds first — newest (i=1) to oldest — so one can be reserved
+    all_folds = []
     for i in range(1, folds + 1):
         cut = len(df) - holdout * i
         if cut < 24:
             break
         train, test = df.iloc[:cut], df.iloc[cut:cut + holdout]
+        # never grade a model on the collapse or the rebound. Training THROUGH
+        # COVID is fine and intended (Prophet models it explicitly); being asked
+        # to predict it is not a fair test of anything.
+        if any(in_anomaly(d) for d in test["ds"]):
+            continue
+        all_folds.append((train, test))
+
+    # spare the oldest for tuning only when there is one to spare
+    tune_fold = all_folds[-1] if len(all_folds) >= 2 else None
+    score_folds = all_folds[:-1] if tune_fold else all_folds
+    prophet_cfg = (tune_prophet(tune_fold, hol_df, gdp_levels, gdp_growth, gdp_future_rates)
+                   if tune_fold else PROPHET_GRID[0])
+
+    acc = {n: {"mase": [], "mape": [], "mae": [], "abs_z": [], "hits": 0, "n_int": 0, "detail": None}
+           for n in CANDIDATES}
+    scored_any = False
+    for i, (train, test) in enumerate(score_folds, start=1):
         target = list(test["ds"])
         actual = {ds: float(y) for ds, y in zip(test["ds"], test["y"])}
         scale = seasonal_naive_scale(train)
         paths = {
             "snaive": snaive_path(train, target),
             "ets": ets_path(train, target),
-            "prophet": prophet_path(train, hol_df, target, gdp_levels, gdp_growth, gdp_future_rates),
+            "prophet": prophet_path(train, hol_df, target, gdp_levels, gdp_growth, gdp_future_rates, prophet_cfg),
         }
         for name in CANDIDATES:
             path = paths.get(name) or {}
@@ -696,7 +808,7 @@ def rolling_backtest(df, hol_df, folds=BACKTEST_FOLDS, holdout=BACKTEST_H,
                     for ds in months
                 ]
     if not scored_any:
-        return None
+        return None, prophet_cfg
     out = {}
     for name in CANDIDATES:
         a = acc[name]
@@ -719,7 +831,7 @@ def rolling_backtest(df, hol_df, folds=BACKTEST_FOLDS, holdout=BACKTEST_H,
                              if (scale and a["abs_z"]) else None),
             "backtest": a["detail"] or [],
         }
-    return out or None
+    return (out or None), prophet_cfg
 
 
 def seasonal12(df):
@@ -791,8 +903,13 @@ def forecast_metric(iso2, monthly, horizon, gdp_levels=None, gdp_growth=None, gd
     frames = [f for f in (hol_df, cov_df) if len(f)]
     fit_holidays = pd.concat(frames, ignore_index=True) if frames else hol_df
 
-    _, fc = fit_predict(df, fit_holidays, horizon, gdp_levels=gdp_levels, gdp_growth=gdp_growth, gdp_future_rates=gdp_future_rates)
-    scores = rolling_backtest(df, fit_holidays, gdp_levels=gdp_levels, gdp_growth=gdp_growth, gdp_future_rates=gdp_future_rates) or {}
+    # backtest FIRST: it picks Prophet's hyperparameters on the reserved tuning
+    # fold, and the published forecast must be fit with the config that won
+    scores, prophet_cfg = rolling_backtest(df, fit_holidays, gdp_levels=gdp_levels,
+                                           gdp_growth=gdp_growth, gdp_future_rates=gdp_future_rates)
+    scores = scores or {}
+    _, fc = fit_predict(df, fit_holidays, horizon, gdp_levels=gdp_levels, gdp_growth=gdp_growth,
+                        gdp_future_rates=gdp_future_rates, cfg=prophet_cfg)
 
     # every candidate's forward forecast, over the same months. Prophet reuses
     # the fit above (it also feeds seasonal12/top_holidays); the other two are
@@ -862,6 +979,7 @@ def forecast_metric(iso2, monthly, horizon, gdp_levels=None, gdp_growth=None, gd
         "band_scale": top.get("band_scale"),
         "coverage_cal": top.get("coverage_cal"),
         "backtest": top.get("backtest") or [],
+        "prophet_cfg": prophet_cfg,
         "months_history": int(len(df)),
         "latest": f"{df['ds'].max().year}-{df['ds'].max().month:02d}",
         "seasonal12": seasonal12(df),
@@ -1011,7 +1129,21 @@ def main():
         "library": f"prophet {__import__('prophet').__version__}, holidays {holidays_pkg.__version__}",
         "interval": INTERVAL,
         "horizon": HORIZON,
-        "backtest": f"rolling-origin, up to {BACKTEST_FOLDS} folds x {BACKTEST_H}mo holdouts; every candidate scored on identical folds; {round(INTERVAL * 100)}% interval coverage measured on the same held-out months",
+        "backtest": (f"rolling-origin, up to {BACKTEST_FOLDS} folds x {BACKTEST_H}mo holdouts. The OLDEST fold is "
+                     f"reserved to tune Prophet's hyperparameters and is scored by nobody, so no candidate is "
+                     f"compared on a fold that chose its own settings — Prophet gets {len(PROPHET_GRID)} attempts "
+                     f"and the other candidates one, and grading that on the same months would favour it. Every "
+                     f"remaining fold scores every candidate identically. No fold whose test window falls in "
+                     f"{ANOMALY_START}..{ANOMALY_END} is scored at all, and year-over-year steps touching that "
+                     f"window are excluded from the MASE denominator: training through a shutdown to predict the "
+                     f"rebound is not a test any model can pass, and leaving the collapse in the denominator "
+                     f"deflated every MASE (92% of series affected, median 1.45x inflation). "
+                     f"{round(INTERVAL * 100)}% interval coverage measured on the same held-out months"),
+        "tuning": (f"Prophet's changepoint_prior_scale and seasonality_prior_scale are searched per series over "
+                   f"{len(PROPHET_GRID)} configs on the reserved fold; the winner is published as prophet_cfg. "
+                   f"Fourier order is fixed at 2 globally (settled on a 164-series head-to-head). Holt-Winters "
+                   f"searches level-only / additive / damped-additive trend plus its smoothing constants on "
+                   f"in-sample one-step error."),
         "bands": (f"each candidate's raw interval is rescaled by the {round(INTERVAL * 100)}th percentile of its "
                   f"held-out error measured in units of its own band half-width, clamped to "
                   f"[{BAND_SCALE_MIN}, {BAND_SCALE_MAX}]. Raw coverage of a nominal {round(INTERVAL * 100)}% band ran "

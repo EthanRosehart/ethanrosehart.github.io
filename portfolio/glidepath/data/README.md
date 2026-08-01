@@ -310,7 +310,42 @@ MAPE from ~16% to ~5%.
 `build-forecast.py`): up to 3 refits per series, each trained with a further
 12 months held out and scored on those unseen months — and **every candidate is
 scored on the same folds**, which is the only thing that makes the MASE
-comparison meaningful. Each metric's forecast JSON carries `chosen`,
+comparison meaningful.
+
+**The oldest fold is reserved for tuning and scored by nobody.** Prophet gets
+`PROPHET_GRID` attempts (4 configs over `changepoint_prior_scale` and
+`seasonality_prior_scale`) and keeps its best; the seasonal naive and ETS get one
+attempt each. Grade all three on the folds that chose Prophet's config and
+Prophet wins some comparisons purely by having had more tries — a student who
+sits the exam four times and reports their best is not comparable to one who sat
+it once. So one fold is spent choosing, and the comparison happens only on folds
+untouched by that choice. The **oldest** fold is the one given up, not the
+newest: the score decides which model ships and is published as the accuracy
+claim, so it belongs on the most recent data, while a hyperparameter is a
+structural property of the series that travels forward fine. The cost is one
+fewer year of grading for everyone (2 scoring folds where 3 could be formed). A
+series too short to spare a fold skips tuning and uses Prophet's documented
+defaults, so it is never scored on a fold its own tuning saw.
+
+**Nothing is scored on COVID, and COVID is out of the MASE denominator.**
+`ANOMALY_START`..`ANOMALY_END` (2020-03 → 2022-12) is deliberately wider than the
+Prophet dummy window, because the rebound is as unforecastable as the collapse.
+Two distinct harms, both measured on the committed catalogue:
+
+- A fold whose **test window** lands inside it grades models on months nothing
+  could have called — 10 of 1,326 series (1%). Those folds are now skipped.
+- Far bigger: MASE divides by the mean year-over-year step in training. Span the
+  collapse and rebound and that denominator is enormous, so every MASE is
+  deflated and "beats the seasonal naive" becomes far too easy to claim. **1,219
+  of 1,326 series (92%)** were affected, inflating the denominator by a median
+  **1.45×**, more than doubling it on 29% of series, and by up to 31×. Steps with
+  either end inside the window are now excluded (falling back to them only if
+  nothing else survives). The same steps also size the seasonal-naive band, which
+  is part of why that band covered a median 100% of held-out months.
+
+Published MASE values are therefore **higher** than before this change and are
+not comparable to earlier snapshots — AMS/pax's seasonal naive went from 0.284 to
+0.747. The earlier numbers were flattered by a pandemic in the denominator. Each metric's forecast JSON carries `chosen`,
 `chosen_reason`, `mase` (mean across folds — the number selection ran on),
 `mase_folds`, `mape`, `mape_folds`, `mae`, `naive_mape`/`naive_mase` (the
 seasonal-naive candidate's own scores, over those same folds), `skill`
