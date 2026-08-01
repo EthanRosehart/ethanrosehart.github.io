@@ -353,12 +353,19 @@ def test_ets_path_produces_a_coherent_band_for_every_requested_month(bf):
 
 # ---- model selection ---------------------------------------------------------
 
-def test_choose_model_prefers_the_simpler_candidate_on_a_near_tie(bf):
-    # prophet is only 3% better than the seasonal naive — inside the 5% margin,
-    # so the naive keeps it. This is the AMS case (snaive 0.284, prophet 0.296).
+def test_choose_model_takes_the_lowest_score_with_no_handicap(bf):
+    # SELECT_MARGIN is 0: the best score wins outright, even by 3%. (Under the
+    # old 5% margin this case went to the naive.)
     chosen, reason = bf.choose_model({"snaive": {"mase": 1.00}, "prophet": {"mase": 0.97}})
+    assert chosen == "prophet"
+    assert "simplicity margin" not in reason
+
+
+def test_choose_model_gives_an_exact_tie_to_the_simpler_model(bf):
+    # the one residual bias: candidates are walked simplest-first and the
+    # comparison is strictly less-than, so an exact tie never unseats.
+    chosen, _ = bf.choose_model({"snaive": {"mase": 0.50}, "ets": {"mase": 0.50}, "prophet": {"mase": 0.50}})
     assert chosen == "snaive"
-    assert "simplicity margin" in reason
 
 
 def test_choose_model_switches_when_a_complex_candidate_clearly_wins(bf):
@@ -366,11 +373,11 @@ def test_choose_model_switches_when_a_complex_candidate_clearly_wins(bf):
     assert chosen == "prophet"
 
 
-def test_choose_model_walks_candidates_simplest_first(bf):
-    # ets beats snaive by enough to take over; prophet then has to beat ETS's
-    # 0.50 by 5%, and 0.49 doesn't — so the middle candidate holds.
+def test_choose_model_lets_a_marginal_win_take_over(bf):
+    # with no margin, prophet's 0.49 beats ETS's 0.50 and takes it. Under the old
+    # 5% handicap the middle candidate held.
     chosen, _ = bf.choose_model({"snaive": {"mase": 1.00}, "ets": {"mase": 0.50}, "prophet": {"mase": 0.49}})
-    assert chosen == "ets"
+    assert chosen == "prophet"
 
 
 def test_choose_model_ignores_unscored_candidates_and_reports_when_none_scored(bf):
@@ -448,12 +455,16 @@ def test_rolling_backtest_reports_a_calibration_that_actually_lands_near_nominal
         y, m = 2020 + i // 12, i % 12 + 1
         seasonal = 1.0 + 0.3 * (1 if m in (6, 7, 8) else -0.2 if m in (1, 2) else 0)
         monthly[f"{y}-{m:02d}"] = round(100000 * (1.004 ** i) * seasonal)
-    bt = bf.rolling_backtest(bf.series_frame(monthly), pd.DataFrame(columns=["holiday", "ds"]), folds=1)
+    bt, _cfg = bf.rolling_backtest(bf.series_frame(monthly), pd.DataFrame(columns=["holiday", "ds"]), folds=1)
     for name, c in bt.items():
         assert c["band_scale"] is None or c["band_scale"] > 0, f"{name}: a non-positive scale would invert the band"
         if c["coverage_cal"] is not None and c["band_scale"] not in (bf.BAND_SCALE_MIN, bf.BAND_SCALE_MAX):
-            # unclamped, the calibrated band should sit near the nominal interval
-            assert 60 <= c["coverage_cal"] <= 100, f"{name}: calibrated coverage {c['coverage_cal']}%"
+            # unclamped, the calibrated band should sit near the nominal interval.
+            # Expressed RELATIVE to INTERVAL so retargeting the band (0.80 -> 0.50)
+            # doesn't silently invalidate the assertion.
+            target = bf.INTERVAL * 100
+            assert target - 20 <= c["coverage_cal"] <= 100, \
+                f"{name}: calibrated coverage {c['coverage_cal']}% against a {target:.0f}% target"
 
 
 def test_forecast_metric_calibrates_the_forward_band_but_not_the_backtest_rows(bf):
@@ -469,7 +480,7 @@ def test_forecast_metric_calibrates_the_forward_band_but_not_the_backtest_rows(b
     assert res is not None
     assert "band_scale" in res and "coverage_cal" in res
 
-    raw = bf.rolling_backtest(bf.series_frame(monthly), pd.DataFrame(columns=["holiday", "ds"]))
+    raw, _cfg = bf.rolling_backtest(bf.series_frame(monthly), pd.DataFrame(columns=["holiday", "ds"]))
     scale = res["band_scale"]
     if scale and abs(scale - 1.0) > 0.05:
         chosen_raw = raw[res["chosen"]]["backtest"]
@@ -481,9 +492,81 @@ def test_forecast_metric_calibrates_the_forward_band_but_not_the_backtest_rows(b
         assert 0 <= r["lo"] <= r["v"] <= r["hi"], "calibration must not invert or negate a band"
 
 
+def test_in_anomaly_covers_the_collapse_and_the_rebound(bf):
+    assert bf.in_anomaly(pd.Timestamp(2020, 3, 1)) and bf.in_anomaly(pd.Timestamp(2021, 6, 1))
+    # deliberately WIDER than the Prophet dummy window: the rebound is as
+    # unforecastable as the collapse
+    assert bf.in_anomaly(pd.Timestamp(2022, 9, 1))
+    assert not bf.in_anomaly(pd.Timestamp(2019, 12, 1))
+    assert not bf.in_anomaly(pd.Timestamp(2023, 1, 1))
+
+
+def test_seasonal_naive_scale_excludes_covid_year_over_year_steps(bf):
+    """MASE divides by the mean year-over-year step. Let the collapse and rebound
+    into that denominator and every MASE is deflated — models look better than
+    they are and 'beats the seasonal naive' becomes far too easy. Measured across
+    the committed catalogue this affected 92% of series, inflating the
+    denominator by a median 1.45x and more than doubling it on 29%."""
+    monthly = {}
+    for y in range(2018, 2026):
+        for m in range(1, 13):
+            # collapse aligned exactly to the anomaly window, so every step it
+            # creates has an end inside that window and must be excluded
+            inside = bf.in_anomaly(pd.Timestamp(y, m, 1))
+            monthly[f"{y}-{m:02d}"] = 50 if inside else 1000
+    df = bf.series_frame(monthly)
+    scale = bf.seasonal_naive_scale(df)
+    # every surviving pair is flat-1000 vs flat-1000, so the honest scale is ~0
+    assert scale == pytest.approx(0.0, abs=1e-9), \
+        f"COVID steps still in the denominator (scale={scale})"
+
+
+def test_seasonal_naive_scale_falls_back_when_only_covid_pairs_exist(bf):
+    # a series living entirely inside the anomaly window has nothing else to
+    # scale by — a distorted scale still beats no scale at all
+    monthly = {f"{y}-{m:02d}": (1000 if y == 2020 else 400)
+               for y in (2020, 2021) for m in range(1, 13)}
+    scale = bf.seasonal_naive_scale(bf.series_frame(monthly))
+    assert scale is not None and scale > 0
+
+
+def test_rolling_backtest_never_scores_a_fold_inside_the_anomaly_window(bf):
+    # a stale series whose recent months ARE the pandemic: training through a
+    # shutdown to predict the recovery is not a test any model can pass
+    monthly = {}
+    for i in range(84):                      # 2016-01 .. 2022-12
+        y, m = 2016 + i // 12, i % 12 + 1
+        monthly[f"{y}-{m:02d}"] = 1000 + 50 * (m % 6)
+    df = bf.series_frame(monthly)
+    scores, _cfg = bf.rolling_backtest(df, pd.DataFrame(columns=["holiday", "ds"]))
+    # every fold's test window lands in 2020-2022, so nothing is scoreable
+    assert scores is None, "folds inside the anomaly window must not be scored"
+
+
+def test_rolling_backtest_reserves_the_oldest_fold_for_tuning(bf):
+    monthly = {}
+    for i in range(72):
+        y, m = 2020 + i // 12, i % 12 + 1     # 2020-01 .. 2025-12
+        seasonal = 1.0 + 0.3 * (1 if m in (6, 7, 8) else -0.2 if m in (1, 2) else 0)
+        monthly[f"{y}-{m:02d}"] = round(100000 * (1.004 ** i) * seasonal)
+    df = bf.series_frame(monthly)
+    scores, cfg = bf.rolling_backtest(df, pd.DataFrame(columns=["holiday", "ds"]))
+    assert scores is not None
+    assert cfg in bf.PROPHET_GRID, "tuning must return a config from the grid"
+    # 3 folds can be formed and are all outside the anomaly window; one is spent
+    # on tuning, so every candidate is graded on the remaining 2
+    for name, c in scores.items():
+        assert len(c["mase_folds"]) <= 2, f"{name} scored on {len(c['mase_folds'])} folds — tuning fold leaked"
+    # and every candidate is graded on the SAME folds
+    counts = {len(c["mase_folds"]) for c in scores.values()}
+    assert len(counts) == 1, f"candidates scored on different fold counts: {counts}"
+
+
 def test_rolling_backtest_returns_none_when_history_is_too_short(bf):
     df = bf.series_frame({f"2024-{m:02d}": 100 for m in range(1, 13)})  # 12 months
-    assert bf.rolling_backtest(df, pd.DataFrame(columns=["holiday", "ds"])) is None
+    scores, cfg = bf.rolling_backtest(df, pd.DataFrame(columns=["holiday", "ds"]))
+    assert scores is None
+    assert cfg == bf.PROPHET_GRID[0], "too short to tune -> Prophet's documented defaults"
 
 
 def test_rolling_backtest_scores_every_candidate_on_the_same_fold(bf):
@@ -498,7 +581,7 @@ def test_rolling_backtest_scores_every_candidate_on_the_same_fold(bf):
         seasonal = 1.0 + 0.3 * (1 if m in (6, 7, 8) else -0.2 if m in (1, 2) else 0)
         monthly[f"{y}-{m:02d}"] = round(100000 * (1.004 ** i) * seasonal)
     df = bf.series_frame(monthly)
-    bt = bf.rolling_backtest(df, pd.DataFrame(columns=["holiday", "ds"]), folds=1)
+    bt, _cfg = bf.rolling_backtest(df, pd.DataFrame(columns=["holiday", "ds"]), folds=1)
     assert bt is not None
     assert set(bt) == set(bf.CANDIDATES), "all three candidates must be scored, not just Prophet"
     for name, c in bt.items():

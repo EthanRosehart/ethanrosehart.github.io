@@ -42,6 +42,11 @@ function ensureMacro(cc, label){
 }
 
 const MONTHS = ["Jan","Feb","Mar","Apr","May","Jun","Jul","Aug","Sep","Oct","Nov","Dec"];
+/* Prediction interval width, and its two-sided normal quantile. These MUST move
+   together with INTERVAL / Z_INTERVAL in scripts/build-forecast.py, or an
+   uploaded gateway's band would be labelled the same as a catalogue gateway's
+   while being a different width. 0.50 -> 0.6745, 0.80 -> 1.2816, 0.95 -> 1.9600. */
+const GP_INTERVAL = 0.50, GP_Z = 0.6745;
 const METRIC_KEYS = ["pax","atm","cargo"];
 
 /* ============================================================
@@ -451,7 +456,7 @@ function etsBestFit(pts, key){
 function etsProject(fit, lastY, lastM, horizon){
   const rr = fit.resid.slice(-36);
   const sd = rr.length ? Math.sqrt(rr.reduce((s,x)=>s+x*x,0) / rr.length) : 0.08;
-  const Z = 1.2816;                        // 80% two-sided
+  const Z = GP_Z;
   const out = [];
   let y = lastY, m = lastM;
   for (let h=1; h<=horizon; h++){
@@ -525,7 +530,7 @@ function etsForecast(history, key, horizon = 24){
       return half > 0 ? Math.abs(r.actual - r.v) / half : null;
     }).filter(z => z != null).sort((a,b)=>a-b);
     if (zs.length >= 8){
-      const pos = 0.8 * (zs.length - 1), i = Math.floor(pos);
+      const pos = GP_INTERVAL * (zs.length - 1), i = Math.floor(pos);
       const q = zs[i] + (zs[Math.min(i+1, zs.length-1)] - zs[i]) * (pos - i);
       if (q > 0){
         bandScale = Math.round(Math.min(4, Math.max(0.25, q)) * 1000) / 1000;
@@ -1327,7 +1332,7 @@ Object.assign(window, {
   GP_availableMetrics:availableMetrics, GP_liveAirports:liveAirports,
   GP_sourceLabel:sourceLabel, GP_sourceBadge:sourceBadge,
   GP_segmentsFor:segmentsFor, GP_PAX_SEGMENTS:PAX_SEGMENTS,
-  GP_fmt:fmt, GP_activityFor:activityFor,
+  GP_fmt:fmt, GP_activityFor:activityFor, GP_INTERVAL, GP_Z,
   GP_setActivityIndex:setActivityIndex, GP_setAirportSeries:setAirportSeries, GP_hasAirportSeries:hasAirportSeries,
   GP_getObservedSeries:getObservedSeries, GP_getActivityMeta:getActivityMeta, GP_getSegments:getSegments,
   GP_setForecastMeta:setForecastMeta, GP_setAirportForecast:setAirportForecast,

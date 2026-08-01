@@ -325,9 +325,9 @@ function ShortTerm({ airport, history, stModel, setStModel }){
             ))}
           </div>
           <div className="method" style={{marginTop:12}}>
-            <b>★ is the nightly's pick —</b> the candidate with the lowest backtest MASE, with a 5% margin
-            required to unseat a simpler model (ties go to the simpler one, and the seasonal naive is the
-            incumbent rather than a footnote). The numbers on the buttons are MASE — or MAPE, where this
+            <b>★ is the nightly's pick —</b> simply the candidate with the lowest backtest MASE — no handicap,
+            best score wins. Candidates are tried simplest-first, so an exact tie goes to the simpler model and
+            the seasonal naive is a real competitor rather than a footnote. The numbers on the buttons are MASE — or MAPE, where this
             series has no year-on-year variation for MASE to scale by. Every candidate was trained on the
             same months and scored on the same holdouts, so they're directly comparable.
             {overrideApplied && <> You&rsquo;re currently overriding it with <b>{meta.label}</b> — the whole page,
@@ -378,7 +378,7 @@ function ShortTerm({ airport, history, stModel, setStModel }){
         return (
           <div className="panel panel-pad" style={{marginBottom:16}}>
             <SectionHead kicker="Held-out backtest" title="What the model predicted vs what happened"
-              right={<span className="air-meta">{inBand}/{bt.length} months inside the 80% band</span>}/>
+              right={<span className="air-meta">{inBand}/{bt.length} months inside the {Math.round((GP_FORECAST_META?.interval ?? GP_INTERVAL)*100)}% band</span>}/>
             <LineChart labels={btLabels} height={220}
               yFmt={metric==="cargo"?(v=>GP_fmt.k(v)):undefined}
               band={{lo:bt.map(r=>r.lo), hi:bt.map(r=>r.hi), color:"var(--violet)"}}
@@ -388,7 +388,7 @@ function ShortTerm({ airport, history, stModel, setStModel }){
               ]}/>
             <div className="method" style={{marginTop:10}}>
               <b>How to read this —</b> the model was refit with these {bt.length} months hidden, then asked to predict
-              them. Solid is what really happened; dashed is the blind prediction with its 80% band. Every accuracy
+              them. Solid is what really happened; dashed is the blind prediction with its {Math.round((GP_FORECAST_META?.interval ?? GP_INTERVAL)*100)}% band. Every accuracy
               figure on this page comes from holdouts like this one — never from data the model trained on.
             </div>
           </div>
@@ -449,7 +449,7 @@ function ShortTerm({ airport, history, stModel, setStModel }){
           </div>
           {d.st.bandScale!=null && <div className="method" style={{marginTop:14}}>
             <b>Band calibration —</b> this model&rsquo;s own band covered {d.st.coverage}% of held-out months
-            against a nominal 80%, so the plotted interval is scaled by <b>&times;{d.st.bandScale.toFixed(2)}</b> —
+            against a nominal {Math.round((GP_FORECAST_META?.interval ?? GP_INTERVAL)*100)}%, so the plotted interval is scaled by <b>&times;{d.st.bandScale.toFixed(2)}</b> —
             {d.st.bandScale < 1 ? " tightened, because the raw band was wider than the errors it needed to cover"
               : " widened, because the raw band was narrower than the errors it needed to cover"}. The factor is
             the 80th percentile of each held-out month&rsquo;s error measured in units of its own band.
@@ -458,7 +458,7 @@ function ShortTerm({ airport, history, stModel, setStModel }){
             {" "}The held-out chart above shows the <em>raw</em> band, which is what the model actually claimed at
             the time.
           </div>}
-          {(d.st.coverageCal ?? d.st.coverage) != null && (d.st.coverageCal ?? d.st.coverage) < 65 && <div className="method" style={{marginTop:14}}>
+          {(d.st.coverageCal ?? d.st.coverage) != null && (d.st.coverageCal ?? d.st.coverage) < Math.round((GP_FORECAST_META?.interval ?? GP_INTERVAL)*100) - 15 && <div className="method" style={{marginTop:14}}>
             <b>Read the band with caution —</b> even after calibration only {d.st.coverageCal ?? d.st.coverage}% of
             held-out months fall inside the interval. The calibration is clamped, so a model whose errors are this
             far outside its own band can&rsquo;t be stretched into honesty — read the point forecast, not the range.
@@ -473,7 +473,7 @@ function ShortTerm({ airport, history, stModel, setStModel }){
             <b>What ETS is —</b> exponential smoothing with an additive <em>damped</em> trend and
             multiplicative monthly seasonality, constants grid-searched on one-step error. Damping is what it
             brings: where an undamped trend compounds whatever slope the last months happened to show,
-            φ&nbsp;&lt;&nbsp;1 flattens it out. The 80% band grows from the in-sample residuals — an
+            φ&nbsp;&lt;&nbsp;1 flattens it out. The {Math.round((GP_FORECAST_META?.interval ?? GP_INTERVAL)*100)}% band grows from the in-sample residuals — an
             approximation, not a posterior.
             {inBrowser && " No holidays, no macro regressor: it's the honest small model for data that lives only in this browser."}
           </div>}

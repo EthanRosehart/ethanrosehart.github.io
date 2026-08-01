@@ -243,14 +243,32 @@ folds, and the winner is published:
 | --- | --- |
 | `snaive`  | Seasonal naive — each month repeats the most recent observed value for that calendar month. No trend, no holidays. |
 | `ets`     | Holt-Winters — additive **damped** trend + multiplicative monthly seasonality, smoothing constants and the damping factor φ grid-searched on one-step error. |
-| `prophet` | Meta **Prophet** — additive trend + multiplicative yearly seasonality + country public holidays (via the `holidays` package) + COVID events + a GDP/capita regressor where one exists. |
+| `prophet` | Meta **Prophet** — additive trend + multiplicative annual seasonality at **Fourier order 2** (tuned; see below) + country public holidays (via the `holidays` package) + COVID events + a GDP/capita regressor where one exists. |
+
+**On Prophet's `yearly_seasonality`:** this sets the Fourier order of the
+*annual cycle*, not the granularity of the data. The series is monthly and the
+seasonal period is one year, so this parameter *is* the month-to-month shape —
+there is no separate "monthly seasonality" to switch to (Prophet's built-ins are
+yearly/weekly/daily *periods*, and weekly/daily are correctly off for monthly
+observations). What was wrong was the *order*: 6 harmonics is 12 parameters
+describing a 12-point cycle, enough freedom to interpolate noise. Measured
+head-to-head on 164 series over identical folds, order 2 beat order 6 on every
+statistic — median MASE 0.857 → 0.809, mean 1.710 → 1.402, and p90 **3.501 →
+2.100**, with catastrophic fits (MASE > 2) down from 27 to 19. The gain sits
+almost entirely in the tail, which is the signature of overfitting rather than
+bias. Two further configurations were tested and **rejected on evidence**:
+dropping country holidays made things clearly worse (median MASE 0.908 → 1.126),
+and stiffening the trend (`changepoint_prior_scale` 0.05 → 0.01) traded accuracy
+for coverage — worse point forecasts, much better bands.
 
 The seasonal naive is a **competitor, not a footnote**: across the whole
 catalogue it beats Prophet on most series, and a fitted model that can't beat it
-isn't earning its complexity. Candidates are tried simplest-first and a more
-complex one only takes over when it cuts the error by ≥5% relative
-(`SELECT_MARGIN`) — ties go to the simpler model, and the margin stops ordinary
-fold noise from flipping the published model from night to night.
+isn't earning its complexity. Candidates are tried simplest-first and the lowest
+score wins outright — `SELECT_MARGIN` is **0**, so no handicap is applied. The
+comparison is strictly less-than, so an exact tie still goes to the simpler
+model, but nothing else favours it. The cost of 0 is churn: the published model
+can flip between nightly runs on ordinary fold noise, so a forecast can change
+without the underlying data changing.
 
 Selection runs on **MASE**, not MAPE. MAPE divides by the actual, so it explodes
 as a series approaches zero: `ISL/atm` scored 22,949% not because the model is
@@ -292,7 +310,42 @@ MAPE from ~16% to ~5%.
 `build-forecast.py`): up to 3 refits per series, each trained with a further
 12 months held out and scored on those unseen months — and **every candidate is
 scored on the same folds**, which is the only thing that makes the MASE
-comparison meaningful. Each metric's forecast JSON carries `chosen`,
+comparison meaningful.
+
+**The oldest fold is reserved for tuning and scored by nobody.** Prophet gets
+`PROPHET_GRID` attempts (4 configs over `changepoint_prior_scale` and
+`seasonality_prior_scale`) and keeps its best; the seasonal naive and ETS get one
+attempt each. Grade all three on the folds that chose Prophet's config and
+Prophet wins some comparisons purely by having had more tries — a student who
+sits the exam four times and reports their best is not comparable to one who sat
+it once. So one fold is spent choosing, and the comparison happens only on folds
+untouched by that choice. The **oldest** fold is the one given up, not the
+newest: the score decides which model ships and is published as the accuracy
+claim, so it belongs on the most recent data, while a hyperparameter is a
+structural property of the series that travels forward fine. The cost is one
+fewer year of grading for everyone (2 scoring folds where 3 could be formed). A
+series too short to spare a fold skips tuning and uses Prophet's documented
+defaults, so it is never scored on a fold its own tuning saw.
+
+**Nothing is scored on COVID, and COVID is out of the MASE denominator.**
+`ANOMALY_START`..`ANOMALY_END` (2020-03 → 2022-12) is deliberately wider than the
+Prophet dummy window, because the rebound is as unforecastable as the collapse.
+Two distinct harms, both measured on the committed catalogue:
+
+- A fold whose **test window** lands inside it grades models on months nothing
+  could have called — 10 of 1,326 series (1%). Those folds are now skipped.
+- Far bigger: MASE divides by the mean year-over-year step in training. Span the
+  collapse and rebound and that denominator is enormous, so every MASE is
+  deflated and "beats the seasonal naive" becomes far too easy to claim. **1,219
+  of 1,326 series (92%)** were affected, inflating the denominator by a median
+  **1.45×**, more than doubling it on 29% of series, and by up to 31×. Steps with
+  either end inside the window are now excluded (falling back to them only if
+  nothing else survives). The same steps also size the seasonal-naive band, which
+  is part of why that band covered a median 100% of held-out months.
+
+Published MASE values are therefore **higher** than before this change and are
+not comparable to earlier snapshots — AMS/pax's seasonal naive went from 0.284 to
+0.747. The earlier numbers were flattered by a pandemic in the denominator. Each metric's forecast JSON carries `chosen`,
 `chosen_reason`, `mase` (mean across folds — the number selection ran on),
 `mase_folds`, `mape`, `mape_folds`, `mae`, `naive_mape`/`naive_mase` (the
 seasonal-naive candidate's own scores, over those same folds), `skill`
@@ -303,13 +356,23 @@ set per candidate under `candidates`. For a quick local run against a subset of
 airports: `GLIDEPATH_ONLY="AMS,YYZ" python scripts/build-forecast.py` (skips
 pruning, so the other committed forecasts survive).
 
+**The band is deliberately NARROW — `INTERVAL` is 0.50.** A 50% band says "half
+the months land in here". A wider band is not a safer one: the raw uncalibrated
+bands covered a median 97% of held-out months, which is the weather forecast that
+reads "tomorrow: between −40° and +50°" — never wrong, never useful. A tight band
+that misses often but stays close is the more decision-useful object, and the
+measured coverage published beside it is what keeps it honest. `INTERVAL` and
+`Z_INTERVAL` in `build-forecast.py` (and `GP_INTERVAL` / `GP_Z` in `data.jsx`,
+which mirror them for uploaded gateways) must move together: 0.50 → 0.6745,
+0.80 → 1.2816, 0.95 → 1.9600.
+
 **Bands are calibrated against measured coverage.** The three candidates derive
 their intervals three incompatible ways — Prophet samples a posterior, ETS grows
 one from in-sample residuals, the seasonal naive uses a seasonal-random-walk
 sigma — and none of them delivered the 80% they claimed. Measured on a
 60-airport sample:
 
-| candidate | median coverage of its raw "80%" band |
+| candidate | median coverage of its raw band (when nominal was 80%) |
 | --- | --- |
 | `snaive`  | 100% (far too wide) |
 | `ets`     | 97% (too wide) |
