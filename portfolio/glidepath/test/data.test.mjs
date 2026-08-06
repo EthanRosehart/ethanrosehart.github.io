@@ -357,14 +357,6 @@ test("GP_csvCell: escapes quotes/commas and neutralizes spreadsheet formula inje
   assert.equal(win.GP_csvCell(42), "42");
 });
 
-test("GP_escapeHtml: entity-escapes everything the DOCX brief interpolates", () => {
-  const win = loadDataModule();
-  assert.equal(win.GP_escapeHtml(`<script>alert("x")</script>`), "&lt;script&gt;alert(&quot;x&quot;)&lt;/script&gt;");
-  assert.equal(win.GP_escapeHtml("Tom & Jerry's"), "Tom &amp; Jerry&#39;s");
-  assert.equal(win.GP_escapeHtml(null), "");
-  assert.equal(win.GP_escapeHtml("plain text"), "plain text");
-});
-
 test("GP_forecastFor: passes gdpForecast through — the model card can't tell a real IMF forecast from mere extrapolation without it", () => {
   const win = loadDataModule();
   win.GP_setAirportForecast("IMF", { pax: { mape: 3.1, forecast: [], gdpRegressor: true, gdpForecast: true } });

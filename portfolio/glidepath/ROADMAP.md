@@ -59,9 +59,8 @@ an end-to-end browser smoke run:
   trajectories and spill for every metric (UI + CSV); the design-day /
   peak-hour panel; shareable scenario URLs (sanitized on decode); and the
   assumptions panel reorganized into collapsible lever groups. *Deferred:*
-  multi-airport comparison, presets-as-data, and chart images inside
-  PPTX/DOCX — product depth that shouldn't gate the hardening/rigor work
-  landing.
+  multi-airport comparison and presets-as-data — product depth that
+  shouldn't gate the hardening/rigor work landing.
 
 ---
 
@@ -197,9 +196,11 @@ present to their boards".*
 5. **Scenario presets as data**: move the preset library (`PRESETS`) into a
    JSON file so users and contributors can add industry scenarios (fuel
    shock calibrated to 2022, pandemic calibrated to 2020) without code.
-6. **Report polish:** charts rendered into the PPTX/DOCX (as images from the
-   existing SVGs), configurable branding block, and a methodology appendix
-   auto-included from the model cards.
+6. **Report polish:** a configurable branding block and a methodology appendix
+   auto-included from the model cards. (The PPTX deck and Word brief were
+   removed in 2026-08 — generic templates nobody was likely to use, and 477 KB
+   of vendored PptxGenJS to carry for them. The workbook and CSV are what a
+   planner actually takes into their own model.)
 
 **Gate:** a planner can produce a board-ready constrained-demand pack from
 public data in under ten minutes.

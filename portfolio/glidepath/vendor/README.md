@@ -10,7 +10,6 @@ failure (and the supply-chain risk of an un-hashed CDN script).
 |---|---|---|---|
 | `react.production.min.js` | [react](https://www.npmjs.com/package/react) | 18.3.1 | `index.html`, at boot |
 | `react-dom.production.min.js` | [react-dom](https://www.npmjs.com/package/react-dom) | 18.3.1 | `index.html`, at boot |
-| `pptxgen.bundle.js` | [pptxgenjs](https://www.npmjs.com/package/pptxgenjs) | 3.12.0 | lazily, by the PPTX export |
 
 All files are byte-identical to the builds inside the published npm
 tarballs (MIT licensed, header comments retained).
@@ -25,13 +24,11 @@ vendor from. It stays lazily CDN-loaded, with its host pinned in
 ## Updating
 
 ```sh
-npm pack react@<version> react-dom@<version> pptxgenjs@<version>
+npm pack react@<version> react-dom@<version>
 tar xzf react-<version>.tgz  package/umd/react.production.min.js
 mv package/umd/react.production.min.js vendor/
 tar xzf react-dom-<version>.tgz  package/umd/react-dom.production.min.js
 mv package/umd/react-dom.production.min.js vendor/
-tar xzf pptxgenjs-<version>.tgz  package/dist/pptxgen.bundle.js
-mv package/dist/pptxgen.bundle.js vendor/
 ```
 
 Keep the two versions in lockstep, and note that React 19 dropped UMD

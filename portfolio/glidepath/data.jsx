@@ -1284,12 +1284,14 @@ function dataAgeDays(iso, now){
   return ((now != null ? now : Date.now()) - t) / 86400000;
 }
 
-/* ---- export sanitizers ----
+/* ---- export sanitizer ----
    Strings that end up inside a generated file can come from outside the
    app's own code: an uploaded gateway name, an event label typed by the
    visitor (or read back from an imported session file), or an airport
    name from the OpenFlights feed. React escapes them on screen, but the
-   export generators build raw CSV / HTML, so they escape here. */
+   CSV generator builds raw text, so it escapes here. (The HTML escaper
+   that sat alongside this went with the Word brief — it had no other
+   caller, and a sanitizer nothing sanitizes is a trap, not a safety net.) */
 
 /* one CSV cell: quote/escape when needed, and neutralize spreadsheet
    formula injection (a leading =, +, -, @ or tab would otherwise execute
@@ -1300,11 +1302,6 @@ function csvCell(v){
   return /[",\n\r]/.test(s) ? '"' + s.replace(/"/g, '""') + '"' : s;
 }
 
-/* minimal HTML entity escape for the DOCX (HTML) brief generator. */
-function escapeHtml(v){
-  return String(v == null ? "" : v).replace(/[&<>"']/g,
-    c => ({ "&":"&amp;", "<":"&lt;", ">":"&gt;", '"':"&quot;", "'":"&#39;" }[c]));
-}
 
 const fmt = {
   int:  n => Math.round(n).toLocaleString("en-US"),
@@ -1339,7 +1336,7 @@ Object.assign(window, {
   GP_setReference:setReference, GP_rebuildAirports:rebuildAirports, GP_ensureMacro:ensureMacro,
   GP_registerCustomAirport:registerCustomAirport, GP_removeCustomAirport:removeCustomAirport, GP_parseMonthKey:parseMonthKey,
   GP_guessColumnRole:guessColumnRole, GP_guessColumnRoles:guessColumnRoles,
-  GP_csvCell:csvCell, GP_escapeHtml:escapeHtml,
+  GP_csvCell:csvCell,
   GP_tacticalForecast:tacticalForecast, GP_etsForecast:etsForecast,
   GP_designDay:designDay, GP_dataAgeDays:dataAgeDays,
   GP_encodeShare:encodeShare, GP_decodeShare:decodeShare,

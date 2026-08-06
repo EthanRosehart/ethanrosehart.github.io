@@ -5,7 +5,7 @@ Uploaded data never leaves the visitor's browser, and the nightly pipeline
 runs with a repo-scoped GitHub token only. That keeps the attack surface
 small, but not zero — the areas worth scrutiny are:
 
-- the generated export files (CSV/XLSX/PPTX/DOCX) — free-text fields are
+- the generated export files (CSV/XLSX) — free-text fields are
   escaped against CSV formula injection and HTML injection
   (`GP_csvCell` / `GP_escapeHtml` in `data.jsx`);
 - the session-import and share-link paths, which parse

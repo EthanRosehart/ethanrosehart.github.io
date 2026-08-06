@@ -822,7 +822,7 @@ function ExportView({ airport, history, scenario, ltOpts, stModel }){
     const st = GP_tacticalForecast(airport.iata, "pax", history, stModel);
     return { lt, st };
   },[airport, history, scenario, ltOpts, stModel]);
-  const [fmtSel, setFmt] = React.useState("pptx");
+  const [fmtSel, setFmt] = React.useState("xlsx");
   const [busy, setBusy] = React.useState(null);     // id currently generating
   const [note, setNote] = React.useState(null);     // {ok, msg}
   if (!d.lt) return <div className="content fade-in"><div className="panel panel-pad"><div className="air-meta">Not enough complete years of data to export a forecast yet.</div></div></div>;
@@ -986,188 +986,6 @@ function ExportView({ airport, history, scenario, ltOpts, stModel }){
     XLSX.writeFile(wb, fileBase+"_workbook.xlsx");
   };
 
-  /* ---- PPTX: real editable deck via PptxGenJS (self-hosted, see vendor/) ---- */
-  const genPPTX = async ()=>{
-    await GP_loadScript("vendor/pptxgen.bundle.js");
-    const Ctor = window.PptxGenJS;
-    const pptx = new Ctor();
-    pptx.layout = "LAYOUT_WIDE";        // 13.33 × 7.5 in
-    const PINK="FF3EA5", DARK="0E1015", PANEL="14171F", INK="F3F4F7", DIM="9AA0AD", CYAN="38E1FF";
-    const W = 13.33;
-
-    // 1 — title
-    let s = pptx.addSlide(); s.background = { color: DARK };
-    s.addText("G L I D E P A T H", { x:0.6, y:2.0, w:8, fontSize:13, color:PINK, bold:true });
-    s.addText(airport.name, { x:0.6, y:2.5, w:11, fontSize:40, bold:true, color:INK });
-    const subtitle = airport.custom
-      ? "Aero demand forecast · "+airport.iata+" · "+airport.country
-      : "Aero demand forecast · "+airport.iata+" / "+airport.icao+" · "+airport.city+", "+airport.country;
-    s.addText(subtitle, { x:0.6, y:3.7, w:11, fontSize:18, color:DIM });
-    s.addText("Generated "+stamp+"  ·  Sources: "+provenanceShort,
-      { x:0.6, y:6.7, w:12, fontSize:11, color:DIM });
-
-    // 2 — headline KPIs. Under a binding capacity cap the headline numbers
-    // are SERVED traffic — a slide claiming demand the airport physically
-    // can't handle is the kind of figure that gets a forecast thrown out.
-    s = pptx.addSlide(); s.background = { color: DARK };
-    s.addText("Forecast headlines", { x:0.6, y:0.4, fontSize:24, bold:true, color:INK });
-    const cappedPax = d.lt.hasCap && end.paxC != null && end.paxC < end.pax;
-    const cappedAtm = d.lt.hasCap && hasAtm && end.atmC != null && end.atmC < end.atm;
-    const kpis = [
-      [end.y+" passengers"+(cappedPax?" (at capacity)":""), GP_fmt.k1(cappedPax?end.paxC:end.pax)],
-      [(end.y-base.y)+"-yr demand CAGR", GP_fmt.pct(d.lt.cagr)],
-      ...(hasAtm?[[end.y+" movements"+(cappedAtm?" (at capacity)":""), GP_fmt.k(cappedAtm?end.atmC:end.atm)]]:[]),
-      ["Annual demand growth", GP_fmt.pct(d.lt.gDemand)],
-      ...(cappedPax
-        ? [["Unserved demand (spill) "+end.y, GP_fmt.k1(end.spill||0)]]
-        : [["Base year ("+base.y+") PAX", GP_fmt.k1(base.pax)]]),
-      ...(d.st&&d.st.mape!=null?[["Next-12mo confidence", "±"+d.st.mape+"%"]]:[]),
-      ...(stModelName?[["Short-term model", stModelName+(d.st.mase!=null?` · MASE ${d.st.mase.toFixed(2)}`:"")]]:[]),
-      ["Base year", baseNote],
-    ];
-    kpis.forEach((k,i)=>{
-      const col = i%3, row = Math.floor(i/3);
-      const x = 0.6 + col*4.1, y = 1.4 + row*2.4;
-      s.addShape(pptx.ShapeType.roundRect, { x, y, w:3.8, h:2.0, fill:{color:PANEL}, line:{color:PINK,width:0.5}, rectRadius:0.08 });
-      s.addText(k[0], { x:x+0.2, y:y+0.2, w:3.4, fontSize:12, color:DIM });
-      s.addText(k[1], { x:x+0.2, y:y+0.7, w:3.4, fontSize:30, bold:true, color:PINK });
-    });
-
-    // 3 — long-term trajectory table
-    s = pptx.addSlide(); s.background = { color: DARK };
-    s.addText((end.y-base.y)+"-year trajectory to "+end.y, { x:0.6, y:0.4, fontSize:24, bold:true, color:INK });
-    const headCells = ["Year","Passengers", ...(hasAtm?["Movements"]:[]), ...(hasCargo?["Cargo (t)"]:[]),
-      ...(d.lt.hasCap?["PAX (served)","Spill", ...(hasAtm?["Mov (served)"]:[])]:[])];
-    const head = headCells.map(t=>({ text:t, options:{ bold:true, color:DARK, fill:{color:PINK}, fontSize:11 } }));
-    const body = d.lt.rows.map(r=>[
-      { text:String(r.y), options:{ color:INK } },
-      { text:GP_fmt.int(r.pax), options:{ color:INK } },
-      ...(hasAtm?[{ text:GP_fmt.int(r.atm), options:{ color:INK } }]:[]),
-      ...(hasCargo?[{ text:GP_fmt.int(r.cargo), options:{ color:INK } }]:[]),
-      ...(d.lt.hasCap?[
-        { text:r.paxC!=null?GP_fmt.int(r.paxC):"—", options:{ color:INK } },
-        { text:GP_fmt.int(r.spill!=null?r.spill:(r.paxC!=null?r.pax-r.paxC:0)), options:{ color:INK } },
-        ...(hasAtm?[{ text:r.atmC!=null?GP_fmt.int(r.atmC):"—", options:{ color:INK } }]:[]),
-      ]:[]),
-    ]);
-    s.addTable([head,...body], { x:0.6, y:1.3, w:12.1, fontSize:10, border:{type:"solid",color:"333744",pt:0.5}, fill:{color:PANEL}, align:"right", valign:"middle" });
-
-    // 3.5 — passenger mix by segment (only when the gateway publishes a segment split)
-    if (d.lt.hasSeg){
-      s = pptx.addSlide(); s.background = { color: DARK };
-      s.addText("Passenger mix by segment", { x:0.6, y:0.4, fontSize:24, bold:true, color:INK });
-      const segHead = ["Year", ...d.lt.segLabels].map(t=>({ text:t, options:{ bold:true, color:DARK, fill:{color:PINK}, fontSize:11 } }));
-      const segBody = d.lt.rows.map(r=>[
-        { text:String(r.y), options:{ color:INK } },
-        ...d.lt.segKeys.map(k=>({ text:GP_fmt.int((r.seg&&r.seg[k])||0), options:{ color:INK } })),
-      ]);
-      s.addTable([segHead,...segBody], { x:0.6, y:1.3, w:12.1, fontSize:10, border:{type:"solid",color:"333744",pt:0.5}, fill:{color:PANEL}, align:"right", valign:"middle" });
-    }
-
-    // 4 — scenario assumptions
-    s = pptx.addSlide(); s.background = { color: DARK };
-    s.addText("Scenario assumptions", { x:0.6, y:0.4, fontSize:24, bold:true, color:INK });
-    const aHead = ["Driver","Value"].map(t=>({ text:t, options:{ bold:true, color:DARK, fill:{color:CYAN}, fontSize:12 } }));
-    const aBody = assumptions.map(a=>[
-      { text:a.name, options:{ color:INK } },
-      { text:(a.value>0?"+":"")+a.value+" "+a.unit, options:{ color:CYAN, align:"right" } },
-    ]);
-    s.addTable([aHead,...aBody], { x:0.6, y:1.3, w:9, fontSize:13, rowH:0.45, border:{type:"solid",color:"333744",pt:0.5}, fill:{color:PANEL}, valign:"middle", colW:[6,3] });
-    s.addText("Model:  g = GDPpc·ε + pop + 0.5·tourism + lcc − 0.18·fuel", { x:0.6, y:6.6, w:12, fontSize:12, color:DIM, italic:true });
-
-    // 5 — shock events (only when at least one is configured)
-    if (events.length){
-      s = pptx.addSlide(); s.background = { color: DARK };
-      s.addText("Shock events", { x:0.6, y:0.4, fontSize:24, bold:true, color:INK });
-      const evHead = ["Event","Starts","Affects","Peak","Length","Recovery"].map(t=>({ text:t, options:{ bold:true, color:DARK, fill:{color:CYAN}, fontSize:11 } }));
-      const evBody = events.map(ev=>[
-        { text:ev.label, options:{ color:INK } },
-        { text:String(ev.start), options:{ color:INK, align:"right" } },
-        { text:segLabelOf(ev.target||"all"), options:{ color:INK, align:"right" } },
-        { text:(ev.peak>0?"+":"")+(ev.peak??0)+"%", options:{ color:CYAN, align:"right" } },
-        { text:(ev.length??ev.hold??0)+" mo", options:{ color:INK, align:"right" } },
-        { text: ev.permanent?"Permanent":((ev.recovery??0)+" mo"), options:{ color:INK, align:"right" } },
-      ]);
-      s.addTable([evHead,...evBody], { x:0.6, y:1.3, w:12.1, fontSize:11, rowH:0.42, border:{type:"solid",color:"333744",pt:0.5}, fill:{color:PANEL}, valign:"middle" });
-    }
-
-    await pptx.writeFile({ fileName: fileBase+"_deck.pptx" });
-  };
-
-  /* ---- DOCX: a Word-openable executive brief (HTML/.doc) ----
-     This generator concatenates raw HTML, so every free-text field —
-     the gateway name/city/country (uploaded or from the OpenFlights
-     feed), event labels (typed, or read back from an imported session
-     file) — goes through GP_escapeHtml before interpolation. */
-  const genDOC = ()=>{
-    const esc = GP_escapeHtml;
-    const capCells = (r)=> d.lt.hasCap
-      ? `<td>${r.paxC!=null?GP_fmt.int(r.paxC):"—"}</td><td>${GP_fmt.int(r.spill!=null?r.spill:(r.paxC!=null?r.pax-r.paxC:0))}</td>${hasAtm?`<td>${r.atmC!=null?GP_fmt.int(r.atmC):"—"}</td>`:""}`
-      : "";
-    const rows = d.lt.rows.map(r=>
-      `<tr><td>${r.y}</td><td>${GP_fmt.int(r.pax)}</td>${hasAtm?`<td>${GP_fmt.int(r.atm)}</td>`:""}${hasCargo?`<td>${GP_fmt.int(r.cargo)}</td>`:""}${capCells(r)}</tr>`
-    ).join("");
-    const asRows = assumptions.map(a=>`<tr><td>${esc(a.name)}</td><td>${(a.value>0?"+":"")+a.value} ${esc(a.unit)}</td></tr>`).join("");
-    const segRows = d.lt.hasSeg ? d.lt.rows.map(r=>
-      `<tr><td>${r.y}</td>${d.lt.segKeys.map(k=>`<td>${GP_fmt.int((r.seg&&r.seg[k])||0)}</td>`).join("")}</tr>`
-    ).join("") : "";
-    const evRows = events.map(ev=>
-      `<tr><td>${esc(ev.label)}</td><td>${esc(ev.start)}</td><td>${esc(segLabelOf(ev.target||"all"))}</td><td>${(ev.peak>0?"+":"")+(ev.peak??0)}%</td><td>${ev.length??ev.hold??0} mo</td><td>${ev.permanent?"Permanent":((ev.recovery??0)+" mo")}</td></tr>`
-    ).join("");
-    const html = `<!DOCTYPE html><html xmlns:o='urn:schemas-microsoft-com:office:office' xmlns:w='urn:schemas-microsoft-com:office:word' xmlns='http://www.w3.org/TR/REC-html40'>
-<head><meta charset='utf-8'><title>Glidepath ${esc(airport.iata)} brief</title>
-<style>
-  body{font-family:Calibri,Arial,sans-serif;color:#1a1a1a;font-size:11pt;line-height:1.5;}
-  h1{font-size:22pt;color:#c4196f;margin:0 0 2pt;} h2{font-size:14pt;color:#c4196f;border-bottom:1px solid #ddd;padding-bottom:3pt;margin-top:18pt;}
-  .sub{color:#666;font-size:10pt;margin-bottom:14pt;}
-  table{border-collapse:collapse;width:100%;font-size:10pt;margin-top:6pt;}
-  th{background:#c4196f;color:#fff;text-align:right;padding:5pt 7pt;} th:first-child{text-align:left;}
-  td{border-bottom:1px solid #e2e2e2;padding:4pt 7pt;text-align:right;} td:first-child{text-align:left;}
-  .kpis td{font-size:11pt;border:none;text-align:left;} .kpis td:nth-child(2){font-weight:bold;color:#c4196f;text-align:right;}
-</style></head><body>
-<h1>${esc(airport.name)}</h1>
-<div class='sub'>Aero demand forecast &middot; ${esc(airport.iata)} / ${esc(airport.icao)} &middot; ${esc(airport.city)}, ${esc(airport.country)} &middot; generated ${stamp}</div>
-
-<h2>Executive summary</h2>
-<p>This brief sets out the long-term passenger demand outlook for <b>${esc(airport.name)}</b> (${esc(airport.iata)}).
-Under the current scenario, annual passengers grow from <b>${GP_fmt.int(base.pax)}</b> in ${base.y} to
-<b>${GP_fmt.int(end.pax)}</b> by ${end.y} — a compound annual growth rate of <b>${GP_fmt.pct(d.lt.cagr)}</b>,
-driven by blended income, population and tourism dynamics totalling <b>${GP_fmt.pct(d.lt.gDemand)}</b> annual demand growth. Projections compound off the ${GP_escapeHtml(baseNote)}.${d.st&&d.st.mape!=null?` The short-term ${GP_escapeHtml(stModelName)} model &mdash; selected because it won this series' own rolling-origin backtest${d.st.mase!=null?` (MASE ${d.st.mase.toFixed(2)}, where 1.00 is a seasonal naive)`:""} &mdash; carries a backtested confidence band of <b>&plusmn;${d.st.mape}%</b> over the next twelve months${d.st.coverage!=null?` (its raw ${Math.round((GP_FORECAST_META?.interval ?? GP_INTERVAL)*100)}% interval covered ${d.st.coverage}% of held-out months${d.st.bandScale!=null?`, so the exported low/high columns are rescaled by &times;${d.st.bandScale.toFixed(2)} to hit the nominal interval`:""})`:""}.`:""}${d.lt.hasCap?` Demand is assessed against ${[
-  d.lt.paxCap?`an annual terminal capacity of <b>${GP_fmt.int(d.lt.paxCap)}</b> passengers`:null,
-  d.lt.atmCap?`a slot capacity of <b>${GP_fmt.int(d.lt.atmCap)}</b> movements`:null,
-].filter(Boolean).join(" and ") || "phased capacity limits"}; unserved demand (spill) reaches <b>${GP_fmt.int(end.spill||0)}</b> by ${end.y}.`:""}</p>
-
-<table class='kpis'>
-  <tr><td>Base year (${base.y}) passengers</td><td>${GP_fmt.int(base.pax)}</td></tr>
-  <tr><td>${end.y} passengers</td><td>${GP_fmt.int(end.pax)}</td></tr>
-  <tr><td>${end.y-base.y}-yr PAX CAGR</td><td>${GP_fmt.pct(d.lt.cagr)}</td></tr>
-  ${hasAtm?`<tr><td>${end.y} movements</td><td>${GP_fmt.int(end.atm)}</td></tr>`:""}
-  ${d.lt.hasCap?`<tr><td>${end.y} passengers (served, capacity-constrained)</td><td>${GP_fmt.int(end.paxC ?? end.pax)}</td></tr>${hasAtm?`<tr><td>${end.y} movements (served, capacity-constrained)</td><td>${GP_fmt.int(end.atmC ?? end.atm)}</td></tr>`:""}<tr><td>${end.y} unserved demand (spill)</td><td>${GP_fmt.int(end.spill||0)}</td></tr>`:""}
-  <tr><td>Annual demand growth</td><td>${GP_fmt.pct(d.lt.gDemand)}</td></tr>
-</table>
-
-<h2>Long-term trajectory</h2>
-<table><tr><th>Year</th><th>Passengers</th>${hasAtm?"<th>Movements</th>":""}${hasCargo?"<th>Cargo (t)</th>":""}${d.lt.hasCap?`<th>PAX (served)</th><th>Spill</th>${hasAtm?"<th>Movements (served)</th>":""}`:""}</tr>${rows}</table>
-
-<h2>Scenario assumptions</h2>
-<table><tr><th>Driver</th><th>Value</th></tr>${asRows}</table>
-<p style='margin-top:6pt;color:#666;font-size:9.5pt;'>Model: g = GDPpc&middot;&epsilon; + pop + 0.5&middot;tourism + lcc &minus; 0.18&middot;fuel.
-Passengers compound on the observed base-year seasonal shape${hasAtm?"; movements are held proportional to passengers at the latest observed ratio":""}.</p>
-
-${d.lt.hasSeg?`<h2>Passenger mix by segment</h2>
-<table><tr><th>Year</th>${d.lt.segLabels.map(l=>`<th>${esc(l)}</th>`).join("")}</tr>${segRows}</table>`:""}
-
-${events.length?`<h2>Shock events</h2>
-<table><tr><th>Event</th><th>Starts</th><th>Affects</th><th>Peak</th><th>Length</th><th>Recovery</th></tr>${evRows}</table>`:""}
-
-<h2>Provenance</h2>
-<p style='font-size:9.5pt;color:#444;'>${airport.custom
-  ? "This forecast runs on the monthly passenger figures uploaded by the report's author, not a public feed, plus World Bank population &amp; GDP/capita for the macro drivers. The short-term tactical forecast, where present, is a Holt-Winters (ETS) model fit in the author's browser &mdash; the nightly server-side model selection runs only for the committed public data sources."
-  : "OpenFlights reference &middot; World Bank (GDP per capita &amp; population) &middot; Eurostat / StatCan / US BTS (monthly passengers, movements, cargo) &middot; short-term forecast auto-selected per series from a seasonal naive, a damped Holt-Winters and Meta Prophet on backtest MASE. Every figure traces to a public source."}</p>
-</body></html>`;
-    GP_saveBlob(new Blob(["﻿"+html], {type:"application/msword"}), fileBase+"_brief.doc");
-  };
-
   /* ---- Session: a lossless JSON round-trip, not a report ----
      Meant for Setup ▸ Import session, not for reading — every lever, every
      event, and (for an uploaded gateway) the meta+series itself, so the
@@ -1198,7 +1016,7 @@ ${events.length?`<h2>Shock events</h2>
     await navigator.clipboard.writeText(url);
   };
 
-  const GEN = { csv:genCSV, xlsx:genXLSX, pptx:genPPTX, docx:genDOC, session:genSession, share:genShare };
+  const GEN = { csv:genCSV, xlsx:genXLSX, session:genSession, share:genShare };
 
   const run = async (id)=>{
     if (busy) return;
@@ -1214,9 +1032,7 @@ ${events.length?`<h2>Shock events</h2>
   };
 
   const deliverables = [
-    { id:"pptx", name:"Stakeholder deck", desc:"Editable PowerPoint: title, headline KPIs, long-term trajectory table, scenario assumptions, plus segment mix and shock events when set.", tag:"PPTX" },
     { id:"xlsx", name:"Model workbook", desc:"Real Excel workbook — summary, long-term annual + monthly (with segment columns when set), short-term monthly, full history, assumptions and an events sheet.", tag:"XLSX" },
-    { id:"docx", name:"Executive brief", desc:"Word-openable narrative: summary, KPIs, trajectory table, assumptions, segment mix, events and provenance.", tag:"DOCX" },
     { id:"csv", name:"Forecast data extract", desc:"Flat annual + monthly tables (with segment columns when set), assumptions and events for your BI stack or master-plan model.", tag:"CSV" },
     { id:"session", name:"Save session", desc:"A JSON file that reopens exactly where you left off — gateway, every lever, every event, and (if uploaded) your own data — via Import session on Select airport.", tag:"JSON" },
     ...(!airport.custom ? [{ id:"share", name:"Share link", desc:"Copies a URL carrying this exact scenario — levers, capacity caps and events. The recipient's browser pulls the same live public data; only your assumptions travel.", tag:"LINK" }] : []),
