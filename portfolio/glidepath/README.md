@@ -24,7 +24,7 @@ same catalogue and forecasting machinery.
 | **Long-term** | 10/15/25-year strategic trajectory from the elasticity model, with a growth-driver decomposition, a **capacity-constrained overlay + spill** when a cap is set, and a **design-day / peak-hour panel** derived from the seasonal shape (assumptions disclosed). |
 | **Baseline assumptions** | Lever panel organized into collapsible groups — demand drivers (GDP, elasticity, population, tourism, fuel/yield, LCC), fleet & freight, passenger segments (where published), and **capacity & constraints** (annual pax/movement caps plus the constraint-response levers: up-gauging rate, its ceiling, bellyhold cargo share) — with live scenario-vs-baseline impact. |
 | **Event simulator** | Add time-bound shocks (a pandemic, a route collapse, a trade dispute) that dent or lift demand — full recovery or permanent re-baseline — and see them ride on top of the scenario. |
-| **Export** | Generates a real PPTX deck, XLSX workbook, Word-openable DOCX brief, or a dependency-free CSV extract — including the scenario assumptions, the segment breakdown, any shock events, and (when a cap is set) the constrained trajectory + spill. Also offers **Save session** (JSON round-trip for the Select-airport import) and, for catalogue gateways, a **Share link** that carries the whole scenario in the URL. |
+| **Export** | Generates a real XLSX workbook or a dependency-free CSV extract — including the scenario assumptions, the segment breakdown, any shock events, and (when a cap is set) the constrained trajectory + spill. Also offers **Save session** (JSON round-trip for the Select-airport import) and, for catalogue gateways, a **Share link** that carries the whole scenario in the URL. |
 
 ## Forecasting methodology
 
