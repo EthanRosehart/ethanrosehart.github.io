@@ -50,10 +50,13 @@ function Onboarding({ onSelect, selected, onUpload, onImportSession }){
         </p>
       </div>
 
-      <div className="panel panel-pad" style={{marginBottom:22, display:"flex", alignItems:"center", gap:16, flexWrap:"wrap"}}>
-        <button className="btn btn-lg" style={{flex:"1 1 220px",justifyContent:"center"}} onClick={onUpload}>{Ico.upload} Upload your own data</button>
-        <span className="air-meta" style={{flex:"none", fontFamily:"var(--mono)", letterSpacing:".1em"}}>OR</span>
-        <button className="btn btn-lg" style={{flex:"1 1 220px",justifyContent:"center"}} onClick={()=>searchRef.current?.focus()}>{Ico.search} Connect to open-source data</button>
+      {/* layout lives in .choice-row (styles.css) rather than inline, so the
+          mobile breakpoint can restack it — an inline style can't be overridden
+          by a media query, and wrapping stranded the OR beside the first button */}
+      <div className="panel panel-pad choice-row" style={{marginBottom:22}}>
+        <button className="btn btn-lg" onClick={onUpload}>{Ico.upload} Upload your own data</button>
+        <span className="air-meta choice-or">OR</span>
+        <button className="btn btn-lg" onClick={()=>searchRef.current?.focus()}>{Ico.search} Connect to open-source data</button>
       </div>
 
       <div className="search" style={{marginBottom:18}}>
@@ -387,7 +390,7 @@ function UploadData({ onDone, onCancel }){
                       </td>
                     ))}
                     <td style={{width:30}}>
-                      <button className="icon-btn" title="Remove row" onClick={()=>removeRow(i)} style={{width:26,height:26}}>
+                      <button className="icon-btn icon-btn-tight" title="Remove row" onClick={()=>removeRow(i)}>
                         <span style={{width:12,height:12,display:"inline-block"}}>{Ico.close}</span>
                       </button>
                     </td>

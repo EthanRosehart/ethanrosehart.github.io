@@ -520,7 +520,7 @@ function Scenario({ airport, history, scenario, setScenario, ltOpts }){
                             onChange={e=>{ const v=parseFloat(e.target.value); setStep(i,{atmCap: v>0?Math.round(v*1e3):null}); }}
                             style={{width:"100%",background:"var(--bg-2)",border:"1px solid var(--line-2)",borderRadius:"var(--r-sm)",color:"var(--text)",fontFamily:"var(--mono)",fontSize:13,padding:"8px 10px",outline:"none"}}/>
                         </label>}
-                        <button className="icon-btn" title="Remove step" onClick={()=>rmStep(i)} style={{width:28,height:28,flex:"none",marginBottom:2}}>
+                        <button className="icon-btn icon-btn-tight" title="Remove step" onClick={()=>rmStep(i)} style={{flex:"none",marginBottom:2}}>
                           <svg viewBox="0 0 24 24" width="13" height="13" fill="none" stroke="currentColor" strokeWidth="2"><path d="M6 6l12 12M18 6L6 18"/></svg>
                         </button>
                       </div>
@@ -750,7 +750,7 @@ function EventSim({ airport, history, scenario, setScenario, ltOpts }){
                       <span className="air-meta">starts</span>
                       <select value={em} onChange={e=>updEvent(ev.id,{start:`${ey}-${String(+e.target.value).padStart(2,"0")}`})} className="seg-select">{MONTHS.map((mo,mi)=><option key={mi} value={mi+1}>{mo}</option>)}</select>
                       <select value={ey} onChange={e=>updEvent(ev.id,{start:`${+e.target.value}-${String(em).padStart(2,"0")}`})} className="seg-select">{yearOpts.map(y=><option key={y} value={y}>{y}</option>)}</select>
-                      <button className="icon-btn" title="Remove event" onClick={()=>rmEvent(ev.id)} style={{width:28,height:28,flex:"none"}}><svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" strokeWidth="2"><path d="M6 6l12 12M18 6L6 18"/></svg></button>
+                      <button className="icon-btn icon-btn-tight" title="Remove event" onClick={()=>rmEvent(ev.id)} style={{flex:"none"}}><svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" strokeWidth="2"><path d="M6 6l12 12M18 6L6 18"/></svg></button>
                     </div>
                     <div style={{display:"flex",gap:18,alignItems:"center",flexWrap:"wrap",marginBottom:12}}>
                       <div style={{display:"flex",alignItems:"center",gap:8}}>

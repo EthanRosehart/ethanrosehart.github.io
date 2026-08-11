@@ -67,7 +67,13 @@ body {
   overflow: hidden;
 }
 
-#root { height: 100vh; }
+/* 100dvh, not 100vh. On mobile browsers 100vh is the height with the URL bar
+   HIDDEN, so a 100vh shell is taller than what you can actually see while the
+   bar is showing — the document itself starts scrolling and takes the sticky
+   topbar up with it, which is why the header looked cut off on a phone but was
+   fine in every desktop resize. dvh tracks the live visible height. The vh line
+   stays first as the fallback for anything that predates dvh. */
+#root { height: 100vh; height: 100dvh; }
 
 /* ambient texture */
 body::before {
@@ -126,11 +132,22 @@ h1,h2,h3 { font-weight: 600; letter-spacing: -0.02em; line-height: 1.08; }
 .btn svg { width: 16px; height: 16px; }
 
 .icon-btn {
-  width: 36px; height: 36px; display: grid; place-items: center;
+  /* justify/align explicitly rather than relying on place-items: the
+     .mobile-only utility below re-declares `display: inline-flex` at the same
+     specificity and later in the file, so this button is FLEX on mobile — and
+     place-items' justify half does nothing in flexbox. The glyph packed to
+     flex-start and sat 8px left of centre on every phone. */
+  width: 36px; height: 36px; display: grid;
+  place-items: center; justify-content: center; align-items: center;
   border-radius: var(--r-sm); border: 1px solid var(--line);
   background: var(--bg-2); color: var(--dim); cursor: pointer; transition: all .15s;
 }
 .icon-btn:hover { color: var(--text); border-color: var(--line-2); }
+/* compact variant for inline row actions (remove a mapping row, a capacity step,
+   an event). Sized by class rather than an inline style so the mobile
+   breakpoint can grow it — several of these are destructive, and a 26px target
+   is the wrong thing to mis-tap on a phone. */
+.icon-btn-tight { width: 28px; height: 28px; }
 
 /* chips / tags */
 .chip {
@@ -204,7 +221,7 @@ h1,h2,h3 { font-weight: 600; letter-spacing: -0.02em; line-height: 1.08; }
 /* ============================================================
    APP SHELL
    ============================================================ */
-.app { display: grid; grid-template-columns: var(--nav-w) 1fr; height: 100vh; position: relative; z-index: 1; }
+.app { display: grid; grid-template-columns: var(--nav-w) 1fr; height: 100vh; height: 100dvh; position: relative; z-index: 1; }
 
 .nav {
   background: var(--bg-1); border-right: 1px solid var(--line);
@@ -259,7 +276,7 @@ h1,h2,h3 { font-weight: 600; letter-spacing: -0.02em; line-height: 1.08; }
 /* main column */
 /* min-width:0 lets this grid item shrink below the intrinsic width of its
    content (e.g. a chart SVG mid-resize), preventing horizontal blowout. */
-.main { overflow-y: auto; overflow-x: hidden; height: 100vh; min-width: 0; }
+.main { overflow-y: auto; overflow-x: hidden; height: 100vh; height: 100dvh; min-width: 0; }
 .topbar {
   position: sticky; top: 0; z-index: 20;
   display: flex; align-items: center; justify-content: space-between;
@@ -435,6 +452,10 @@ hr.sep { border: none; border-top: 1px solid var(--line); margin: 0; }
   .topbar { padding: 12px 14px; gap: 10px; }
   .topbar-chips { display: none !important; }
   .topbar-title { gap: 8px; min-width: 0; }
+  /* the group name ("Forecast", "Setup") is already the heading of the nav
+     section you came from — on a phone it only steals room from the screen
+     title, which was truncating to "Short-ter…" */
+  .topbar-title .eyebrow { display: none; }
   .topbar-title h2 { font-size: 16px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
   .topbar .btn-sm { padding: 7px 10px; }
 
@@ -464,15 +485,90 @@ hr.sep { border: none; border-top: 1px solid var(--line); margin: 0; }
   /* wide tables scroll horizontally instead of bursting the panel */
   .tbl { display: block; overflow-x: auto; white-space: nowrap; -webkit-overflow-scrolling: touch; }
 
+  /* ---- touch targets ----
+     Measured on a 412px viewport: the segmented toggles (model picker, 12/24mo
+     horizon, metric switcher) came out 29px tall, the topbar Reset/Export 31px,
+     the drawer's back link 26px. All above the 24px WCAG 2.5.8 AA floor but well
+     under the ~44px Apple/Android guidance — and the seg toggles in particular
+     are tapped repeatedly. Heights are set as minimums so nothing reflows on
+     desktop, where a pointer makes the smaller target fine. */
+  .seg { padding: 2px; }
+  .seg button { min-height: 40px; padding-left: 14px; padding-right: 14px; }
+  /* every .btn-sm, not just the topbar's — the event simulator's "+ Pandemic" /
+     "+ Sector shock" / "+ Event" buttons are the same 31px control */
+  .btn-sm { min-height: 38px; }
+  .icon-btn, .icon-btn-tight { width: 40px; height: 40px; }
+
+  /* the lever sliders: the TRACK is 4px, so only the 17px thumb was grabbable.
+     Growing the thumb and giving the input a transparent 36px-tall box widens
+     the drag target without changing how the track looks. */
+  input[type=range] { height: 36px; background: transparent; }
+  input[type=range]::-webkit-slider-runnable-track {
+    height: 4px; border-radius: 4px; background: var(--bg-3);
+  }
+  input[type=range]::-moz-range-track { height: 4px; border-radius: 4px; background: var(--bg-3); }
+  input[type=range]::-webkit-slider-thumb { width: 22px; height: 22px; margin-top: -9px; }
+  input[type=range]::-moz-range-thumb { width: 19px; height: 19px; }
+
+  /* the search box looks like one big control but only its 19px inner input
+     accepted a tap — stretch it so the whole box is the target */
+  .search input { align-self: stretch; min-height: 32px; }
+  .nav-back { min-height: 40px; }
+  .nav-item { padding: 11px; min-height: 44px; }
+  .seg-select { min-height: 40px; }
+
   /* typography */
   h1 { font-size: 27px !important; }
   .kpi-value { font-size: 25px; }
 }
 
-@media (max-width: 460px) {
+@media (max-width: 560px) {
   .content .grid.g-4 { grid-template-columns: 1fr !important; }
   .stat-strip { flex-wrap: wrap; }
   .stat-strip > div { flex: 1 0 50%; }
+
+  /* KPI cards go HORIZONTAL below the 2-up breakpoint.
+     Stacked (label / big value / sub) each card ran 121-159px, so the four on
+     the tactical screen filled most of a phone before any chart appeared. The
+     value moves into its own right-hand column spanning both rows, which uses
+     the width the stacked layout was wasting and cuts each card to roughly:
+
+        [ LABEL            ] [ VALUE ]
+        [ delta + sub      ] [       ]
+
+     Explicit grid placement rather than reordering the markup, so the DOM order
+     (and therefore the reading order for a screen reader) is untouched. */
+  .kpi {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) auto;
+    column-gap: 14px;
+    align-items: center;
+    padding: 13px 15px;
+  }
+  .kpi-label { grid-column: 1; grid-row: 1; min-width: 0; }
+  .kpi-value {
+    grid-column: 2; grid-row: 1 / span 2;
+    margin-top: 0; font-size: 23px; align-self: center; text-align: right;
+  }
+  /* the delta + sub + sparkline row the KPI component renders last */
+  .kpi > div:last-child { grid-column: 1; grid-row: 2; margin-top: 5px !important; }
+  /* let the delta and the explanatory text stack instead of squeezing into two
+     narrow columns — "beats seasonal-naïve" was wrapping to three lines beside
+     the sub text and driving the card back up to ~100px */
+  .kpi-sub { margin-top: 0; font-size: 12px; line-height: 1.35; flex-wrap: wrap; }
+  .kpi-sub > span:last-child { min-width: 0; }
+}
+
+/* ---- upload-or-connect chooser (Select airport) ---- */
+.choice-row { display: flex; align-items: center; gap: 16px; flex-wrap: wrap; }
+.choice-row .btn-lg { flex: 1 1 220px; justify-content: center; }
+.choice-or { flex: none; font-family: var(--mono); letter-spacing: .1em; }
+@media (max-width: 560px) {
+  /* stack it: wrapping left the OR beside the first button rather than between
+     the two, which read as a layout break */
+  .choice-row { flex-direction: column; align-items: stretch; gap: 10px; }
+  .choice-row .btn-lg { flex: none; width: 100%; }
+  .choice-or { text-align: center; }
 }
 
 /* ---- collapsible lever groups (Baseline assumptions panel) ----

@@ -415,7 +415,7 @@ function App(){
                 <div style={{fontSize:12,whiteSpace:"nowrap",overflow:"hidden",textOverflow:"ellipsis",color:"var(--dim)"}}>{airport.city || airport.country}</div>
                 <div className="air-meta" style={{fontSize:10}}>{connected?<span style={{color:"var(--ok)"}}>● data live</span>:"not connected"}</div>
               </div>
-              <button className="icon-btn" title="Change airport" onClick={()=>{ setScreen("select"); setNavOpen(false); }} style={{width:30,height:30}}>
+              <button className="icon-btn icon-btn-tight" title="Change airport" onClick={()=>{ setScreen("select"); setNavOpen(false); }}>
                 <svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" strokeWidth="2"><path d="M3 12h18M3 6h18M3 18h18"/></svg>
               </button>
             </div>
