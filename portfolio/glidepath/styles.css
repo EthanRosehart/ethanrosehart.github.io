@@ -300,7 +300,21 @@ h1,h2,h3 { font-weight: 600; letter-spacing: -0.02em; line-height: 1.08; }
 
 /* tables */
 .tbl { width: 100%; border-collapse: collapse; font-size: 13.5px; }
-.tbl th { font-family: var(--mono); font-size: 11px; letter-spacing: .1em; text-transform: uppercase; color: var(--faint); text-align: right; padding: 10px 14px; border-bottom: 1px solid var(--line-2); font-weight: 400; }
+/* Every scrolling table lives in a .tbl-wrap, which is the scrollport the
+   sticky header anchors to. The sticky lives on <th> rather than <thead>,
+   which is the form with the widest browser support. */
+.tbl-wrap { overflow: auto; overscroll-behavior: contain; }
+/* fills a stretched wrapper when the table is the shorter of two side-by-side
+   panels; a table can't shrink under its content, so it still scrolls when
+   it's the taller one */
+.tbl-fill { height: 100%; }
+.tbl th { font-family: var(--mono); font-size: 11px; letter-spacing: .1em; text-transform: uppercase; color: var(--faint); text-align: right; padding: 10px 14px; font-weight: 400;
+  position: sticky; top: 0; z-index: 2; background: var(--bg-1);
+  /* border-collapse: collapse drops a sticky cell's own border as it detaches,
+     so the header rule is drawn as an inset shadow instead. Keeping the
+     collapsed model also keeps <tr> borders working — the long-term monthly
+     table draws its year separators that way. */
+  box-shadow: inset 0 -1px 0 var(--line-2); }
 .tbl th:first-child { text-align: left; }
 .tbl td { padding: 11px 14px; border-bottom: 1px solid var(--line); text-align: right; font-family: var(--mono); font-variant-numeric: tabular-nums; }
 .tbl td:first-child { text-align: left; font-family: var(--sans); color: var(--dim); }
@@ -461,8 +475,11 @@ hr.sep { border: none; border-top: 1px solid var(--line); margin: 0; }
   .confirm-bar { flex-direction: column; align-items: stretch !important; }
   .confirm-bar .btn { width: 100%; justify-content: center; }
 
-  /* wide tables scroll horizontally instead of bursting the panel */
-  .tbl { display: block; overflow-x: auto; white-space: nowrap; -webkit-overflow-scrolling: touch; }
+  /* Wide tables scroll horizontally instead of bursting the panel. The scroll
+     lives on the wrapper, not on the table: `display:block` on the table made
+     it its own scroll container, which orphaned the sticky header. */
+  .tbl-wrap { overflow-x: auto; -webkit-overflow-scrolling: touch; }
+  .tbl { white-space: nowrap; }
 
   /* typography */
   h1 { font-size: 27px !important; }
