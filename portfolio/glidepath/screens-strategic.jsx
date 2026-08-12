@@ -85,14 +85,11 @@ function LongTerm({ airport, history, scenario, ltOpts, baseMode, setBaseMode, g
           </div>}/>
         <div className="method">
           {modeled ? <>
-            <b>{lt.baseObservedMonths} observed + {lt.baseForecastMonths.length} modeled —</b> {lt.baseYear} isn&rsquo;t over,
-            so its remaining months ({lt.baseForecastMonths.map(mm=>MONTHS[mm]).join(", ")}) come from the short-term
-            tactical model{lt.baseModel && GP_MODEL_META[String(lt.baseModel).replace("+carry","")]
-              ? <> ({GP_MODEL_META[String(lt.baseModel).replace("+carry","")].label}
-                  {String(lt.baseModel).endsWith("+carry") ? ", with any month it couldn't reach carried from a year earlier" : ""})</>
-              : null}, picked on the short-term screen. That links the two forecasts: the {lt.endYear} figure starts
-            from where the tactical model says {lt.baseYear} actually lands, not from a year that may be well over a
-            year stale.
+            <b>{lt.baseObservedMonths} observed + {lt.baseForecastMonths.length} modeled —</b> {lt.baseYear} isn&rsquo;t
+            over, so {MONTHS[lt.baseForecastMonths[0]]}–{MONTHS[lt.baseForecastMonths[lt.baseForecastMonths.length-1]]} come
+            from the short-term model{lt.baseModel && GP_MODEL_META[String(lt.baseModel).replace("+carry","")]
+              ? <> ({GP_MODEL_META[String(lt.baseModel).replace("+carry","")].label})</> : null}, so {lt.endYear}
+            starts from where {lt.baseYear} actually lands rather than a stale full year.
             {(lt.hasAtm || lt.hasCargo) && (()=>{
               // the feeds publish at different lags, so each metric has its own
               // count of modeled months — reporting passengers' for all of them
@@ -104,20 +101,17 @@ function LongTerm({ airport, history, scenario, ltOpts, baseMode, setBaseMode, g
               const implied = String(lt.baseCompletion.atm || "").startsWith("pax-implied");
               const ratio = (lt.rows[0].atm > 0) ? lt.rows[0].pax / lt.rows[0].atm : null;
               return (<>
-                {differing.length ? <> {differing.map(k=>`${label[k]} run${lt.baseModeledMonths[k]===1?"s":""} a different lag (${lt.baseModeledMonths[k]} modeled month${lt.baseModeledMonths[k]===1?"":"s"})`).join(", ")}.</> : null}
-                {implied ? <> Movements aren&rsquo;t taken from their own forecast: this model holds flights
-                    proportional to passengers, so a missing movements month is derived from that month&rsquo;s
-                    passengers at the ratio the two actually show where both are published
-                    {ratio ? <> — about {ratio.toFixed(0)} passengers per movement here</> : null}. Letting two
-                    independently-picked models set that ratio drifted it as far as +67% on one gateway, which
-                    would quietly reshape the capacity headroom.</> : null}
-                {carried.length ? <> {carried.join(" and ")} {carried.length>1?"have":"has"} no tactical forecast for those months, so
-                    {carried.length>1?" they carry":" it carries"} the prior year&rsquo;s same month instead.</> : null}
+                {differing.length ? <> {differing.map(k=>`${label[k]} lags (${lt.baseModeledMonths[k]} modeled)`).join(", ")}.</> : null}
+                {implied ? <> Movements follow passengers at the observed ratio
+                    {ratio ? <> (~{ratio.toFixed(0)} per flight)</> : null}, not their own forecast.</> : null}
+                {carried.length ? <> {carried.join(" and ")} carr{carried.length>1?"y":"ies"} the prior year&rsquo;s
+                    same month.</> : null}
               </>);
             })()}
             <br/><br/>
-            <b>The trade —</b> a modeled base year inherits the tactical model&rsquo;s error into all {lt.endYear-lt.baseYear} projected
-            years. <em>Last full year</em> removes that at the cost of compounding a base that may be stale, or unusual.
+            <b>The trade —</b> a modeled base year carries the tactical model&rsquo;s error into all
+            {" "}{lt.endYear-lt.baseYear} projected years; <em>Last full year</em> avoids that but compounds a
+            possibly-stale base.
           </> : (()=>{
             /* "nothing is modeled" is a claim about PASSENGERS. A metric that
                publishes on a lag can still have been carried from the prior year
@@ -127,12 +121,12 @@ function LongTerm({ airport, history, scenario, ltOpts, baseMode, setBaseMode, g
             const label = { atm:"movements", cargo:"cargo" };
             const carried = ["atm","cargo"].filter(k => lt.baseModeledMonths[k] > 0).map(k=>label[k]);
             return (<>
-              <b>{carried.length ? "Observed passengers" : "Fully observed"} —</b> {lt.baseYear} is complete for
-              passengers, so the headline compounds off twelve real filings and the actual annual total.
-              {carried.length ? <> {carried.join(" and ")}, however, {carried.length>1?"publish":"publishes"} on a
-                lag, so {carried.length>1?"their":"its"} missing months carry the prior year&rsquo;s same month.</> : null}
-              {baseMode === "observed" && <> This gateway also has no later partial year to complete, so
-                <em> Forecast-completed</em> would resolve to the same year.</>}</>);
+              <b>{carried.length ? "Observed passengers" : "Fully observed"} —</b> {lt.baseYear} is complete, so
+              the projection compounds off twelve real filings.
+              {carried.length ? <> {carried.join(" and ")} publish on a lag and carry the prior year&rsquo;s
+                same month.</> : null}
+              {baseMode === "observed" && <> No later partial year exists, so <em>Forecast-completed</em> resolves
+                to the same year.</>}</>);
           })()}
         </div>
       </div>
@@ -193,7 +187,7 @@ function LongTerm({ airport, history, scenario, ltOpts, baseMode, setBaseMode, g
       <div className="panel panel-pad">
         <SectionHead kicker={"Monthly table · "+macro.label+" macro baseline"} title="Month-by-month forecast"
           right={<span className="air-meta">{lt.months.length} months · {macro.label} baseline{capped?" · capacity-constrained":""}</span>}/>
-        <div style={{maxHeight:360,overflowY:"auto"}}>
+        <div className="tbl-wrap" style={{maxHeight:360}}>
           <table className="tbl">
             <thead><tr><th>Month</th><th>Passengers</th>{lt.hasAtm&&<th>Movements</th>}{lt.hasCargo&&<th>Cargo (t)</th>}</tr></thead>
             <tbody>
@@ -236,24 +230,24 @@ function LongTerm({ airport, history, scenario, ltOpts, baseMode, setBaseMode, g
           <div className="panel panel-pad" style={{marginTop:16}}>
             <SectionHead kicker="Design day · peak hour" title="What the terminal has to handle"
               right={<span className="air-meta">passengers, from the observed seasonal shape</span>}/>
-            <table className="tbl">
-              <thead><tr><th style={{textAlign:"left"}}>Measure</th><th>{lt.baseYear} {modeled?"(part modeled)":"(observed)"}</th><th>{lt.endYear} (scenario{lt.hasCap?", constrained":""})</th></tr></thead>
-              <tbody>
-                {rows.map((r,i)=>(
-                  <tr key={i}>
-                    <td style={{textAlign:"left",color:"var(--dim)"}}>{r[0]}</td>
-                    <td style={{color:"var(--text)",fontWeight:600}}>{r[1]}</td>
-                    <td style={{color:"var(--pink-2)",fontWeight:700}}>{r[2]}</td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
+            <div className="tbl-wrap">
+              <table className="tbl">
+                <thead><tr><th style={{textAlign:"left"}}>Measure</th><th>{lt.baseYear} {modeled?"(part modeled)":"(observed)"}</th><th>{lt.endYear} (scenario{lt.hasCap?", constrained":""})</th></tr></thead>
+                <tbody>
+                  {rows.map((r,i)=>(
+                    <tr key={i}>
+                      <td style={{textAlign:"left",color:"var(--dim)"}}>{r[0]}</td>
+                      <td style={{color:"var(--text)",fontWeight:600}}>{r[1]}</td>
+                      <td style={{color:"var(--pink-2)",fontWeight:700}}>{r[2]}</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
             <div className="method" style={{marginTop:12}}>
-              <b>Assumptions, all disclosed —</b> busy day = average day of the peak month × 1.10 (a stand-in for the
-              ~90th-percentile day; monthly data can't see individual days). Peak hour takes {Math.round(ddEnd.peakHourShare*100)}%
-              of the busy day — the share shrinks as airports grow because traffic spreads across the day
-              (12% under 1M annual passengers, 10% to 10M, 8% above). Replace these with measured design-day
-              factors when you have daily/hourly data.
+              <b>Assumptions —</b> busy day = peak-month average day × 1.10; peak hour takes
+              {" "}{Math.round(ddEnd.peakHourShare*100)}% of it (12% under 1M annual pax, 10% to 10M, 8% above).
+              Derived from monthly data — replace with measured factors if you have daily/hourly.
             </div>
           </div>
         );

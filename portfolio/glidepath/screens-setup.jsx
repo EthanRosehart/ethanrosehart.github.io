@@ -370,7 +370,7 @@ function UploadData({ onDone, onCancel }){
             const activeSegs = SEG_FIELDS.filter(f => roles.includes(f.k) || rows.some(r => r[f.k] != null && r[f.k] !== ""));
             const fields = ["pax","atm","cargo",...activeSegs.map(f=>f.k)];
             return (
-          <div style={{maxHeight:320, overflowY:"auto", overflowX:"auto"}}>
+          <div className="tbl-wrap" style={{maxHeight:320}}>
             <table className="tbl">
               <thead><tr><th>Month</th><th>Passengers</th><th>Movements</th><th>Cargo (t)</th>{activeSegs.map(f=><th key={f.k}>{f.head}</th>)}<th></th></tr></thead>
               <tbody>

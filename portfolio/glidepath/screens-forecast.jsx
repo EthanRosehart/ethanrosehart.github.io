@@ -325,11 +325,9 @@ function ShortTerm({ airport, history, stModel, setStModel }){
             ))}
           </div>
           <div className="method" style={{marginTop:12}}>
-            <b>★ is the nightly's pick —</b> simply the candidate with the lowest backtest MASE — no handicap,
-            best score wins. Candidates are tried simplest-first, so an exact tie goes to the simpler model and
-            the seasonal naive is a real competitor rather than a footnote. The numbers on the buttons are MASE — or MAPE, where this
-            series has no year-on-year variation for MASE to scale by. Every candidate was trained on the
-            same months and scored on the same holdouts, so they're directly comparable.
+            <b>★ is the nightly's pick —</b> lowest backtest MASE wins, no handicap; an exact tie goes to the
+            simpler model. Button figures are MASE, or MAPE where this series has no year-on-year variation to
+            scale by.
             {overrideApplied && <> You&rsquo;re currently overriding it with <b>{meta.label}</b> — the whole page,
             including the long-term base year, follows this choice.</>}
             {overridden && !overrideApplied && <> You&rsquo;ve forced <b>{(GP_MODEL_META[stModel]||{}).label}</b>, but
@@ -396,9 +394,13 @@ function ShortTerm({ airport, history, stModel, setStModel }){
       })()}
 
       <div className="grid" style={{gridTemplateColumns:"1fr 1.4fr"}}>
-        <div className="panel panel-pad">
+        {/* Both panels in this row are flex columns so whichever one is
+            shorter absorbs the leftover height instead of ending in a band of
+            empty panel — the spec rows spread, the forecast table shows all
+            twelve months. */}
+        <div className="panel panel-pad" style={{display:"flex",flexDirection:"column"}}>
           <SectionHead kicker="Under the hood" title="Model card"/>
-          <div style={{display:"flex",flexDirection:"column",gap:0}}>
+          <div style={{display:"flex",flexDirection:"column",gap:0,flex:"1 1 auto"}}>
             {[
               ["Model", meta.label + (overrideApplied ? " · your override" : (!inBrowser && d.st.chosen===d.st.method) ? " · auto-picked" : "")],
               ...(d.st.method==="snaive" ? [
@@ -432,62 +434,18 @@ function ShortTerm({ airport, history, stModel, setStModel }){
             ].map((r,i,arr)=>{
               const mono = r[0]==="Backtest"||r[0]==="Accuracy"||r[0]==="MAPE";
               return (
-                <div key={i} style={{display:"flex",justifyContent:"space-between",gap:16,padding:"10px 0",borderBottom:i<arr.length-1?"1px solid var(--line)":"none"}}>
+                <div key={i} style={{display:"flex",alignItems:"center",justifyContent:"space-between",gap:16,padding:"10px 0",flex:"1 1 auto",borderBottom:i<arr.length-1?"1px solid var(--line)":"none"}}>
                   <span style={{color:"var(--faint)",fontSize:13}}>{r[0]}</span>
                   <span style={{fontSize:13,textAlign:"right",fontFamily:mono?"var(--mono)":"var(--sans)",color:mono?"var(--pink-2)":"var(--dim)"}}>{r[1]}</span>
                 </div>
               );
             })}
           </div>
-          <div className="method" style={{marginTop:14}}>
-            <b>Why MASE —</b> mean absolute error over the held-out months divided by the in-sample
-            seasonal-naïve error, so 1.00 means &ldquo;no better than repeating last year&rsquo;s month&rdquo;.
-            Unlike MAPE it never divides by the actual, which is what makes it usable on a series that
-            approaches zero — a gateway that lost its traffic, or cargo measured in single-digit tonnes,
-            where MAPE runs into the thousands of percent and says nothing. Model selection uses MASE alone;
-            MAPE is shown because planners recognise it, but it decides nothing.
-          </div>
-          {d.st.bandScale!=null && <div className="method" style={{marginTop:14}}>
-            <b>Band calibration —</b> this model&rsquo;s own band covered {d.st.coverage}% of held-out months
-            against a nominal {Math.round((GP_FORECAST_META?.interval ?? GP_INTERVAL)*100)}%, so the plotted interval is scaled by <b>&times;{d.st.bandScale.toFixed(2)}</b> —
-            {d.st.bandScale < 1 ? " tightened, because the raw band was wider than the errors it needed to cover"
-              : " widened, because the raw band was narrower than the errors it needed to cover"}. The factor is
-            the 80th percentile of each held-out month&rsquo;s error measured in units of its own band.
-            {d.st.coverageCal!=null && <> On those months the scaled band covers {d.st.coverageCal}% — but the
-            factor was fitted on exactly those months, so treat that as in-sample, not a fresh measurement.</>}
-            {" "}The held-out chart above shows the <em>raw</em> band, which is what the model actually claimed at
-            the time.
-          </div>}
-          {(d.st.coverageCal ?? d.st.coverage) != null && (d.st.coverageCal ?? d.st.coverage) < Math.round((GP_FORECAST_META?.interval ?? GP_INTERVAL)*100) - 15 && <div className="method" style={{marginTop:14}}>
-            <b>Read the band with caution —</b> even after calibration only {d.st.coverageCal ?? d.st.coverage}% of
-            held-out months fall inside the interval. The calibration is clamped, so a model whose errors are this
-            far outside its own band can&rsquo;t be stretched into honesty — read the point forecast, not the range.
-          </div>}
-          {d.st.method==="snaive" && <div className="method" style={{marginTop:14}}>
-            <b>What the seasonal naïve is —</b> every month simply repeats the most recent observed value for
-            that calendar month. No trend, no holidays, no macro. It is here as a competitor rather than a
-            benchmark because across this catalogue it wins more often than not — and a fitted model that
-            can&rsquo;t beat it isn&rsquo;t earning its complexity.
-          </div>}
-          {d.st.method==="ets" && <div className="method" style={{marginTop:14}}>
-            <b>What ETS is —</b> exponential smoothing with an additive <em>damped</em> trend and
-            multiplicative monthly seasonality, constants grid-searched on one-step error. Damping is what it
-            brings: where an undamped trend compounds whatever slope the last months happened to show,
-            φ&nbsp;&lt;&nbsp;1 flattens it out. The {Math.round((GP_FORECAST_META?.interval ?? GP_INTERVAL)*100)}% band grows from the in-sample residuals — an
-            approximation, not a posterior.
-            {inBrowser && " No holidays, no macro regressor: it's the honest small model for data that lives only in this browser."}
-          </div>}
-          {d.st.method==="prophet" && <div className="method" style={{marginTop:14}}>
-            <b>COVID handling —</b> the 2020–21 collapse is fit as explicit monthly events, so it doesn't distort seasonality or widen the forecast band. No data is dropped — every observed month still trains the model and shows on the chart.
-          </div>}
-          {d.st.method==="prophet" && d.st.holidays.length>0 && <div className="method" style={{marginTop:14}}>
-            <b>Top holiday effects —</b> {d.st.holidays.slice(0,4).join(" · ")}.
-          </div>}
         </div>
-        <div className="panel panel-pad">
+        <div className="panel panel-pad" style={{display:"flex",flexDirection:"column"}}>
           <SectionHead kicker="Next 12 months" title="Monthly forecast detail"/>
-          <div style={{maxHeight:268,overflowY:"auto"}}>
-            <table className="tbl">
+          <div className="tbl-wrap" style={{flex:"1 1 auto",minHeight:200}}>
+            <table className="tbl tbl-fill">
               <thead><tr><th>Month</th><th>Forecast</th><th>Low</th><th>High</th><th>YoY</th></tr></thead>
               <tbody>
                 {next12.map((r,i)=>{
@@ -510,6 +468,49 @@ function ShortTerm({ airport, history, stModel, setStModel }){
             </table>
           </div>
         </div>
+      </div>
+
+      {/* Method notes sit under both panels rather than inside the model card.
+          At panel width they stacked ~400px of prose, which drove the row
+          height and left the table beside it in a half-empty box; two full-
+          width columns cost about a third of that and read wider. */}
+      <div className="grid g-2" style={{marginTop:16}}>
+        <div className="method">
+          <b>Why MASE —</b> held-out error divided by the in-sample seasonal-naïve error, so 1.00 means
+          &ldquo;no better than repeating last year&rsquo;s month&rdquo;. It never divides by the actual, so it
+          still works on a series near zero — where MAPE runs to thousands of percent. Selection uses MASE
+          alone; MAPE is shown but decides nothing.
+        </div>
+        {d.st.bandScale!=null && <div className="method">
+          <b>Band calibration —</b> the raw band covered {d.st.coverage}% of held-out months against a
+          nominal {Math.round((GP_FORECAST_META?.interval ?? GP_INTERVAL)*100)}%, so the plotted interval is
+          {d.st.bandScale < 1 ? " tightened" : " widened"} by <b>&times;{d.st.bandScale.toFixed(2)}</b>
+          {d.st.coverageCal!=null && <> to {d.st.coverageCal}% — in-sample, since the factor was fitted on
+          those same months</>}. The held-out chart shows the <em>raw</em> band.
+        </div>}
+        {(d.st.coverageCal ?? d.st.coverage) != null && (d.st.coverageCal ?? d.st.coverage) < Math.round((GP_FORECAST_META?.interval ?? GP_INTERVAL)*100) - 15 && <div className="method">
+          <b>Read the band with caution —</b> even calibrated, only {d.st.coverageCal ?? d.st.coverage}% of
+          held-out months land inside it. Read the point forecast, not the range.
+        </div>}
+        {d.st.method==="snaive" && <div className="method">
+          <b>What the seasonal naïve is —</b> every month repeats the most recent observed value for that
+          calendar month. No trend, no holidays, no macro. It competes rather than benchmarks: across this
+          catalogue it wins more often than not.
+        </div>}
+        {d.st.method==="ets" && <div className="method">
+          <b>What ETS is —</b> exponential smoothing with an additive <em>damped</em> trend and
+          multiplicative monthly seasonality. Damping (φ&nbsp;&lt;&nbsp;1) flattens the trend instead of
+          compounding the last few months&rsquo; slope. The band grows from in-sample residuals — an
+          approximation, not a posterior.
+          {inBrowser && " No holidays or macro: the small model for data that stays in your browser."}
+        </div>}
+        {d.st.method==="prophet" && <div className="method">
+          <b>COVID handling —</b> the 2020–21 collapse is fit as explicit monthly events, so it doesn&rsquo;t
+          distort seasonality or widen the band. No data is dropped — every observed month still trains the model.
+        </div>}
+        {d.st.method==="prophet" && d.st.holidays.length>0 && <div className="method">
+          <b>Top holiday effects —</b> {d.st.holidays.slice(0,4).join(" · ")}.
+        </div>}
       </div>
     </div>
   );
