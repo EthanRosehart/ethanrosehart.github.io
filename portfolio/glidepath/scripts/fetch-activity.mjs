@@ -43,7 +43,21 @@
 import { writeFile, readFile, mkdir } from "node:fs/promises";
 import { dirname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
-import { lastFullYearTotal, metricsIn, pruneDir, fetchWithRetry, chooseSeries, seriesAgeMonths } from "./_util.mjs";
+import { lastFullYearTotal, metricsIn, pruneDir, fetchWithRetry, chooseSeries, levelBreak, seriesAgeMonths } from "./_util.mjs";
+
+/* chooseSeries() guards the reply's shape, levelBreak() its scale. A unit
+   change we can prove and undo still counts as fresh data; an unexplained
+   break has its months dropped, which lands on last-good when the break is
+   everything the reply added. */
+function pickSeries(fresh, prev, label) {
+  const pick = chooseSeries(fresh, prev);
+  if (pick.kind !== "fresh") return pick;
+  const lv = levelBreak(pick.series, prev);
+  if (lv.verdict === "ok") return pick;
+  console.warn(`  ${label}: ${lv.reason}`);
+  const gained = Object.keys(lv.series).length > Object.keys(prev || {}).length;
+  return { series: lv.series, kind: lv.verdict === "rescaled" || gained ? "fresh" : "kept", reason: null };
+}
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const DATA = resolve(__dirname, "..", "data");
@@ -425,7 +439,7 @@ async function main() {
     for (const metric of ["pax", "atm", "cargo"]) {
       // a thin reply must never overwrite a long committed history — see
       // chooseSeries() in _util.mjs for the night that made this necessary
-      const pick = chooseSeries(euData[metric]?.[icao]?.monthly, await prevSeries(iata, metric));
+      const pick = pickSeries(euData[metric]?.[icao]?.monthly, await prevSeries(iata, metric), `${iata}/${metric} eurostat`);
       if (pick.kind === "fresh") { series[metric] = pick.series; live++; liveBy.eurostat++; anyFresh = true; }
       else if (pick.kind === "kept") {
         series[metric] = pick.series;
@@ -489,8 +503,9 @@ async function main() {
           lastErr = new Error(`only ${Object.keys(m).length}mo`);
         } catch (e) { lastErr = e; }
       }
-      // same guard as Eurostat: a short reply keeps the committed history
-      const pick = chooseSeries(got, await prevSeries(iata, metric));
+      // same guards as Eurostat: a short reply — or one that changes scale
+      // mid-series — keeps the committed history
+      const pick = pickSeries(got, await prevSeries(iata, metric), `${iata}/${metric} statcan`);
       if (pick.kind === "fresh") { series[metric] = pick.series; live++; liveBy.statcan++; caFresh = true; }
       else if (pick.kind === "kept") {
         series[metric] = pick.series;

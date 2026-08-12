@@ -15,10 +15,10 @@ import assert from "node:assert/strict";
 import { esDecode, normMonth } from "../scripts/fetch-activity.mjs";
 import { perCapitaRates } from "../scripts/fetch-imf.mjs";
 import { mapCols, decodeRows, orderCandidates, US } from "../scripts/fetch-bts.mjs";
-import { lastFullYearTotal, metricsIn, chooseSeries, isTransientStatus, seriesAgeMonths,
+import { lastFullYearTotal, metricsIn, chooseSeries, levelBreak, isTransientStatus, seriesAgeMonths,
   fetchWithRetry, resetCircuitBreakers } from "../scripts/_util.mjs";
 import { checkSeriesDoc, checkActivityIndex, checkForecastDoc } from "../scripts/validate-data.mjs";
-import { staleSnapshots, sourceStaleness, droppedAirports, seriesAnomalies, ageDays, massDropAlert } from "../scripts/check-snapshots.mjs";
+import { staleSnapshots, sourceStaleness, droppedAirports, seriesAnomalies, forecastAnomalies, ageDays, massDropAlert } from "../scripts/check-snapshots.mjs";
 
 /* ---- fetch-activity: Eurostat JSON-stat ----------------------- */
 
@@ -364,6 +364,97 @@ test("chooseSeries: a thin fresh reply never overwrites a long committed history
   assert.equal(chooseSeries(null, null).kind, "none");
   assert.equal(chooseSeries(months(6), null).kind, "none", "below minFresh with no history is not shippable");
   assert.equal(chooseSeries(months(24), null).kind, "fresh", "a first-ever series just needs minFresh");
+});
+
+/* Munich's real cargo shape: ~25-32k tonnes a month, seasonal, stable. The
+   2026-08 break arrived as four new months of the same numbers in kilograms. */
+function cargoSeries(years, { from = 2023, scale = 1, breakAt = null } = {}) {
+  const shape = [23557, 23295, 31302, 26315, 28236, 28031, 30035, 28230, 28645, 31162, 32199, 29708];
+  const out = {};
+  for (let y = 0; y < years; y++) {
+    for (let m = 0; m < 12; m++) {
+      const key = `${from + y}-${String(m + 1).padStart(2, "0")}`;
+      out[key] = Math.round(shape[m] * (1 + y * 0.03) * (breakAt && key >= breakAt ? scale : 1));
+    }
+  }
+  return out;
+}
+
+test("levelBreak: a kilogram feed is proved, undone and shipped; an unexplained jump is dropped", () => {
+  const prev = cargoSeries(3);                                    // 2023-2025, tonnes
+  const kg = { ...prev, ...cargoSeries(4, { scale: 1000, breakAt: "2026-01" }) };
+
+  const fixed = levelBreak(kg, prev);
+  assert.equal(fixed.verdict, "rescaled");
+  assert.equal(fixed.scale, 1000);
+  assert.ok(fixed.reason.includes("10^3"));
+  // the broken months come back in tonnes, in line with a year earlier...
+  assert.ok(fixed.series["2026-03"] > 30000 && fixed.series["2026-03"] < 36000,
+    `2026-03 should land near the prior March, got ${fixed.series["2026-03"]}`);
+  assert.ok(Number.isInteger(fixed.series["2026-03"]), "a whole-tonne feed stays whole");
+  // ...and the months before the break are untouched
+  assert.equal(fixed.series["2025-06"], prev["2025-06"]);
+
+  // same size of jump, but nothing like a unit change: dropped, not "corrected"
+  const noise = { ...prev };
+  for (const k of ["2026-01", "2026-02", "2026-03"]) noise[k] = 4_000_000 + Math.random() * 3_000_000;
+  const dropped = levelBreak(noise, prev);
+  assert.equal(dropped.verdict, "rejected");
+  assert.equal(dropped.series["2026-01"], undefined, "the broken tail is not shipped");
+  assert.equal(Object.keys(dropped.series).length, Object.keys(prev).length, "which leaves last-good");
+
+  // one month of break is a break, but one prior-year month can't prove a unit
+  // change — Keflavik hit exactly this, so it waits rather than guessing
+  const single = { ...prev, "2026-01": prev["2025-01"] * 1000 };
+  assert.equal(levelBreak(single, prev).verdict, "rejected");
+});
+
+test("levelBreak: ordinary refreshes, growth and volatile small feeds pass through", () => {
+  const prev = cargoSeries(3);
+  // a normal month, and a very good month
+  assert.equal(levelBreak({ ...prev, "2026-01": 26000 }, prev).verdict, "ok");
+  assert.equal(levelBreak({ ...prev, "2026-01": 78000 }, prev).verdict, "ok", "tripling is growth, not a unit change");
+
+  // Verona's freight ran 1 to 573 tonnes in a year: a series that swings that
+  // far on its own can't have a 50x "break" — guarding it would freeze it
+  const spiky = {};
+  const vals = [1, 3, 45, 573, 4, 2, 4, 1, 108, 284, 0, 121];
+  vals.forEach((v, i) => { spiky[`2025-${String(i + 1).padStart(2, "0")}`] = v; });
+  assert.equal(levelBreak({ ...spiky, "2026-01": 642 }, spiky).verdict, "ok");
+
+  // nothing to compare against yet
+  assert.equal(levelBreak({ "2026-01": 9e9 }, { "2025-12": 1 }).verdict, "ok");
+  assert.equal(levelBreak(null, prev).verdict, "ok");
+});
+
+test("seriesAnomalies: a scale break arriving as NEW months is reported", () => {
+  // the overlap test can't see this case — the kilogram months were all new,
+  // so no month existed in both snapshots to compare
+  const prev = { cargo: cargoSeries(3) };
+  const next = { cargo: { ...prev.cargo, ...cargoSeries(1, { from: 2026, scale: 1000, breakAt: "2026-01" }) } };
+  const warns = seriesAnomalies("MUC", prev, next);
+  assert.equal(warns.length, 1, warns.join(" | "));
+  assert.match(warns[0], /MUC\/cargo: 12 new months from 2026-01 sit \d+x above the last 12 published — scale break/);
+
+  // an ordinary year of new months says nothing
+  const normal = { cargo: { ...prev.cargo, ...cargoSeries(1, { from: 2026 }) } };
+  assert.deepEqual(seriesAnomalies("MUC", prev, normal), []);
+});
+
+test("forecastAnomalies: MASE and MAPE disagreeing is a data problem, agreeing is a hard series", () => {
+  // Munich's cargo shipped at MASE 2737 with MAPE 19% — MAPE is scale-free,
+  // so the unit change was invisible to it and only MASE noticed
+  const warns = forecastAnomalies("MUC", { pax: { mase: 0.9, mape: 3.1 }, cargo: { mase: 2737.013, mape: 19.4 } });
+  assert.equal(warns.length, 1);
+  assert.match(warns[0], /MUC\/cargo: backtest MASE 2737 \(par is ~1\) against MAPE 19.4%/);
+
+  // Lublin: 0-1 tonnes most months, so the naive denominator is ~0 and MASE
+  // stops meaning anything. MAPE agrees it's hopeless — nothing to report.
+  assert.deepEqual(forecastAnomalies("LUZ", { cargo: { mase: 1018.6, mape: 96.6 } }), []);
+
+  // a merely bad model is a modelling choice, not an alert
+  assert.deepEqual(forecastAnomalies("XXX", { pax: { mase: 3.4, mape: 8 }, cargo: { mase: 12, mape: 20 } }), []);
+  assert.deepEqual(forecastAnomalies("XXX", null), []);
 });
 
 test("fetchWithRetry: a dead host trips a breaker instead of re-sleeping on every call", async () => {

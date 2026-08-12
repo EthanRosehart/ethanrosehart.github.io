@@ -128,6 +128,98 @@ export function chooseSeries(fresh, prev, { minFresh = 12, shrinkTolerance = 0.8
   return { series: null, kind: "none", reason: freshN ? `only ${freshN}mo and nothing on disk` : "no data" };
 }
 
+/* ---- scale breaks in an otherwise well-formed reply ------------
+   chooseSeries() guards the reply's SHAPE. This guards its SCALE, which is
+   the failure it can't see: on 2026-08-04 Eurostat's avia_gooa started
+   answering for German airports in kilograms under the tonnes unit code.
+   Every reply was full-length and every value was a finite number, so it
+   sailed through the fetcher, the structural validator and the drift check
+   (which only compares months BOTH snapshots already carry — these arrived
+   as new months). Munich shipped 29,895,178 t for March, the long-term
+   chart drew a 30M spike next to a 23k forecast, and the nightly refit a
+   cargo model on the mixed series: MASE 2737, a band top of 12.8 billion
+   tonnes. MAPE stayed at 19% throughout, because it is scale-free — it
+   cannot see a unit change at all.
+
+   So: measure the months this reply ADDS against the range the series has
+   actually occupied lately. A month `breakFactor` clear of everything in the
+   last published year is not growth, so the reply doesn't ship as-is. Two
+   outcomes from there:
+
+     - the break is a clean power of ten AND rescaling by it puts the broken
+       months within `yoyBand` of the same calendar months a year earlier
+       -> a unit change, and we can undo it exactly. Rescale and ship.
+     - anything else -> we don't know what happened. Keep last-good and say
+       so; a stale cargo month is recoverable, a 1000x one is not.
+
+   Two deliberate choices. The comparison is against the last year's RANGE,
+   not its average, so a series that already swings 500x on its own (Verona
+   ran 1 to 573 tonnes last year) can't trip it — those airports move enough
+   that no factor would mean anything. And the proof is seasonal, same month
+   a year earlier, because freight has a shape: a trailing mean would both
+   miss real breaks and reject real Februaries. */
+export function levelBreak(fresh, prev, { breakFactor = 50, minProof = 3, yoyBand = [0.75, 1.35], looseBand = [0.5, 2.0] } = {}) {
+  const ok = { verdict: "ok", series: fresh, reason: null };
+  if (!fresh || !prev) return ok;
+  const prevKeys = Object.keys(prev).filter(k => Number.isFinite(prev[k])).sort();
+  if (prevKeys.length < 12) return ok;                       // no level to compare against
+  const lastPrev = prevKeys[prevKeys.length - 1];
+  const added = Object.keys(fresh).filter(k => k > lastPrev && Number.isFinite(fresh[k]) && fresh[k] > 0).sort();
+  if (!added.length) return ok;
+
+  const tail = prevKeys.slice(-12).map(k => prev[k]);
+  const hi = Math.max(...tail), lo = Math.min(...tail);
+  const breaks = (v) => (hi > 0 && v / hi >= breakFactor) || (lo > 0 && lo / v >= breakFactor);
+  // everything from the first broken month on: a feed that changes units
+  // doesn't change back, and the months before it are still good
+  const at = added.findIndex(k => breaks(fresh[k]));
+  if (at < 0) return ok;
+  const seg = added.slice(at);
+
+  const ratio = median(seg.map(k => fresh[k])) / median(tail.filter(v => v > 0));
+  const step = Math.round(Math.log10(ratio));
+  const scale = 10 ** step;
+  const proof = [];
+  for (const k of seg) {
+    const prior = `${+k.slice(0, 4) - 1}${k.slice(4)}`;
+    if (prev[prior] > 0) proof.push(fresh[k] / scale / prev[prior]);
+  }
+  // The prior-year comparison carries the decision; the power-of-ten test is
+  // only there to stop an arbitrary jump being "corrected" by 1000. Both are
+  // robust rather than strict — one freak month (a diverted freighter, a
+  // reporting gap) must not veto an otherwise unmistakable unit change, and
+  // a pair of months either side of 1.0 must not wave through a series that
+  // is bouncing around at random.
+  const clean = Math.abs(Math.log10(ratio) - step) < 0.35;
+  const mid = proof.length ? median(proof) : NaN;
+  const near = proof.filter(v => v >= looseBand[0] && v <= looseBand[1]).length;
+  const holds = proof.length >= minProof
+    && mid >= yoyBand[0] && mid <= yoyBand[1]
+    && near / proof.length >= 2 / 3;
+  const detail = `${seg.length} month${seg.length === 1 ? "" : "s"} from ${seg[0]} sit ` +
+    `${ratio >= 1 ? `${ratio.toFixed(0)}x above` : `${(1 / ratio).toFixed(0)}x below`} the last published year`;
+  if (clean && holds) {
+    // keep the series homogeneous: a feed publishing whole tonnes shouldn't
+    // start carrying three decimal places for the months we divided
+    const whole = tail.every(Number.isInteger);
+    const out = { ...fresh };
+    for (const k of seg) out[k] = whole ? Math.round(fresh[k] / scale) : fresh[k] / scale;
+    return { verdict: "rescaled", series: out, scale, reason: `${detail} — a clean 10^${step} unit change, confirmed against ${proof.length} prior-year months, rescaled` };
+  }
+  // drop the broken tail rather than the whole reply: months before the break
+  // are good data, and on a feed that has already published them they are the
+  // last-good series anyway
+  const out = {};
+  for (const [k, v] of Object.entries(fresh)) if (!(k >= seg[0])) out[k] = v;
+  return { verdict: "rejected", series: out, reason: `${detail} — not a confirmable unit change (${proof.length} prior-year month${proof.length === 1 ? "" : "s"} to check against), dropped` };
+}
+
+function median(xs) {
+  const s = [...xs].sort((a, b) => a - b);
+  const i = s.length >> 1;
+  return s.length % 2 ? s[i] : (s[i - 1] + s[i]) / 2;
+}
+
 /** How many months behind `now` the newest month in a {"YYYY-MM": n} series
  *  is. Infinity for an empty or unparsable series. Used to decide when an
  *  airport we're carrying on committed history has been frozen long enough
