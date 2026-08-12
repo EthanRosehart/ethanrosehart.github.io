@@ -39,6 +39,8 @@ const AIRPORTS = [
   ["BE_EBBR", "EBBR", "Brussels"], ["PT_LPPT", "LPPT", "Lisboa"],
 ];
 const MIN_EXPECTED = 100;   // we hold 130+ for these; anything near 0 is the bug back
+const FREIGHT_ICAO = "EDDF";   // the airport section 4 counts freight months for
+const MAX_SLICES = 24;         // bound the diagnostic sweep: it hits a third-party API
 
 let failures = 0;
 const check = (ok, msg) => { if (!ok) failures++; console.log(`  ${ok ? "ok  " : "FAIL"}  ${msg}`); };
@@ -90,7 +92,50 @@ async function main() {
     check(n >= MIN_EXPECTED, `batch of ${batch.length}: ${name.padEnd(10)} ${String(n).padStart(3)} months`);
   }
 
-  console.log(`\n### 4. esDecode refuses to guess when a dimension is left open\n`);
+  console.log(`\n### 4. which avia_gooa slice actually carries the freight\n`);
+  /* Diagnostic, not a check — it prints rather than passes/fails. On
+     2026-08-12 the pinned cargo query returned 5 months for Frankfurt and 0
+     for CDG, Zurich, Dublin, Brussels and Lisboa, while pax and atm on
+     avia_paoa returned 132-137. That is the July catalogue loss again on a
+     different dimension: the codes we pin have been superseded and the old
+     slice is being emptied, leaving a short, wrongly-scaled remnant (those 5
+     Frankfurt months were the kilogram values that reached the site).
+     Nothing here can be fixed from a dev sandbox, which can't reach
+     ec.europa.eu — so the runner enumerates what the cube offers now and
+     counts what each combination returns for one busy freight airport. Read
+     the table, then pin the winner in fetch-activity's METRICS. */
+  {
+    const res = await fetch(url("avia_gooa", { tra_meas: "FRM_LD_NLD", ...ES_PINS, lastTimePeriod: "1" }, ["DE_EDDF"]), { headers: UA });
+    const js = await res.json().catch(() => null);
+    const cats = (name) => {
+      const c = js?.dimension?.[name]?.category;
+      if (!c) return [];
+      return Object.keys(c.index || {}).map((k) => `${k}${c.label?.[k] ? ` (${c.label[k]})` : ""}`);
+    };
+    for (const dim of ["unit", "tra_meas", "schedule", "tra_cov"]) {
+      console.log(`  avia_gooa ${dim.padEnd(9)} offers: ${cats(dim).join(", ") || "(not in the reply)"}`);
+    }
+
+    // every unit x tra_meas the cube admits, scored by months returned
+    const units = Object.keys(js?.dimension?.unit?.category?.index || { T: 0 });
+    const measures = Object.keys(js?.dimension?.tra_meas?.category?.index || { FRM_LD_NLD: 0 });
+    console.log(`\n  months of Frankfurt freight per slice (pinned ${JSON.stringify(ES_PINS)}):`);
+    let tried = 0;
+    for (const unit of units) {
+      for (const tm of measures) {
+        if (++tried > MAX_SLICES) { console.log(`    ... stopping at ${MAX_SLICES} slices`); break; }
+        const { out: o, err: e } = await fetchDecode("avia_gooa",
+          { unit, tra_meas: tm, ...ES_PINS, sinceTimePeriod: "2015-01" }, ["DE_EDDF"]);
+        const months = e ? null : Object.keys(o?.[FREIGHT_ICAO]?.monthly || {});
+        const last = months?.length ? months.sort()[months.length - 1] : null;
+        const val = last ? o[FREIGHT_ICAO].monthly[last] : null;
+        console.log(`    unit=${unit.padEnd(8)} tra_meas=${tm.padEnd(12)} ` +
+          (e ? e : `${String(months.length).padStart(3)} months` + (last ? `, latest ${last} = ${val}` : "")));
+      }
+    }
+  }
+
+  console.log(`\n### 5. esDecode refuses to guess when a dimension is left open\n`);
   const res = await fetch(url("avia_paoa", { unit: "PAS", tra_meas: "PAS_CRD", sinceTimePeriod: "2015-01" }, ["DE_EDDF"]), { headers: UA });
   const js = await res.json();
   let threw = false;
