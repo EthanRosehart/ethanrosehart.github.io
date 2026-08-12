@@ -93,17 +93,24 @@ async function main() {
   }
 
   console.log(`\n### 4. which avia_gooa slice actually carries the freight\n`);
-  /* Diagnostic, not a check — it prints rather than passes/fails. On
-     2026-08-12 the pinned cargo query returned 5 months for Frankfurt and 0
-     for CDG, Zurich, Dublin, Brussels and Lisboa, while pax and atm on
-     avia_paoa returned 132-137. That is the July catalogue loss again on a
-     different dimension: the codes we pin have been superseded and the old
-     slice is being emptied, leaving a short, wrongly-scaled remnant (those 5
-     Frankfurt months were the kilogram values that reached the site).
-     Nothing here can be fixed from a dev sandbox, which can't reach
-     ec.europa.eu — so the runner enumerates what the cube offers now and
-     counts what each combination returns for one busy freight airport. Read
-     the table, then pin the winner in fetch-activity's METRICS. */
+  /* Diagnostic, not a check — it prints rather than passes/fails.
+     avia_gooa is being republished. On 2026-08-12 it answered 5 months for
+     Frankfurt at 04:41 and 17 by 22:44, against the 137 we hold, and every
+     value came back a thousand times too large: Frankfurt's newest reading
+     was 172,169,367 where our tonnes say 172,169. So this is a restatement
+     in kilograms under the "Tonne" label, not the July failure repeating —
+     the first run of this section proved there is nowhere else to look,
+     since the cube offers exactly one usable slice:
+
+       unit      T (Tonne), FLIGHT (Flight)       <- FLIGHT returns 0 months
+       tra_meas  FRM_LD_NLD                       <- the only measure
+       schedule  TOT     tra_cov  TOTAL           <- one code each
+
+     Nothing to re-pin, then; the fix is upstream and the guards below it
+     hold in the meantime (a short reply keeps last-good, and levelBreak
+     rescales a full one). Left in place because it is the cheapest way to
+     watch the restatement land: when the month counts pass ours and the
+     latest value stops being 1000x, the feed is back. */
   {
     const res = await fetch(url("avia_gooa", { tra_meas: "FRM_LD_NLD", ...ES_PINS, lastTimePeriod: "1" }, ["DE_EDDF"]), { headers: UA });
     const js = await res.json().catch(() => null);

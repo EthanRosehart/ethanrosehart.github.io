@@ -141,10 +141,12 @@ export function chooseSeries(fresh, prev, { minFresh = 12, shrinkTolerance = 0.8
    tonnes. MAPE stayed at 19% throughout, because it is scale-free — it
    cannot see a unit change at all.
 
-   So: measure the months this reply ADDS against the range the series has
-   actually occupied lately. A month `breakFactor` clear of everything in the
-   last published year is not growth, so the reply doesn't ship as-is. Two
-   outcomes from there:
+   Two shapes of the same failure. A feed can restate months it has already
+   published at a different scale, or it can add new ones at a different
+   scale; the first is checked against the published values themselves, the
+   second against the range the series has occupied lately. Either way a
+   reply `breakFactor` clear of what we hold is not growth, and doesn't ship
+   as-is. Two outcomes from there:
 
      - the break is a clean power of ten AND rescaling by it puts the broken
        months within `yoyBand` of the same calendar months a year earlier
@@ -163,6 +165,38 @@ export function levelBreak(fresh, prev, { breakFactor = 50, minProof = 3, yoyBan
   if (!fresh || !prev) return ok;
   const prevKeys = Object.keys(prev).filter(k => Number.isFinite(prev[k])).sort();
   if (prevKeys.length < 12) return ok;                       // no level to compare against
+
+  /* First the whole-series case, because it is the one that can quietly
+     rewrite history. Eurostat is republishing avia_gooa in kilograms under
+     the "Tonne" label: on 2026-08-12 it went from 5 months to 17 over the
+     course of a day, Frankfurt's newest reading 172,169,367 against the
+     172,169 tonnes we hold. While the reply is short, chooseSeries keeps
+     last-good and none of this matters. The day the backfill passes our
+     133 months, a reply arrives that is entirely in kilograms — and rescaling
+     only its NEW months would ship a x1000 history with a tidy-looking tail
+     bolted on. So months we have already published are the reference: they
+     should come back as the same numbers, and if they come back uniformly
+     scaled by a power of ten, the whole reply moves with them. */
+  const both = prevKeys.filter(k => prev[k] > 0 && Number.isFinite(fresh[k]) && fresh[k] > 0);
+  if (both.length >= 12) {
+    const r = median(both.map(k => fresh[k] / prev[k]));
+    if (r >= 10 || r <= 0.1) {
+      const step = Math.round(Math.log10(r));
+      const scale = 10 ** step;
+      // the same months, so the test is exact rather than seasonal: rescaled,
+      // they have to land back on what we published, give or take a revision
+      const agree = both.filter(k => Math.abs(fresh[k] / scale / prev[k] - 1) < 0.02).length;
+      const detail = `every month restated ${r >= 1 ? `${r.toFixed(0)}x up` : `${(1 / r).toFixed(0)}x down`} across ${both.length} already-published months`;
+      if (Math.abs(Math.log10(r) - step) < 0.05 && agree / both.length >= 0.9) {
+        const whole = prevKeys.every(k => Number.isInteger(prev[k]));
+        const out = {};
+        for (const [k, v] of Object.entries(fresh)) out[k] = whole ? Math.round(v / scale) : v / scale;
+        return { verdict: "rescaled", series: out, scale, reason: `${detail} — a clean 10^${step} unit change, ${agree}/${both.length} months land back on the published values, whole series rescaled` };
+      }
+      return { verdict: "rejected", series: prev, reason: `${detail} — not a confirmable unit change (${agree}/${both.length} months would land back on the published values), kept previous` };
+    }
+  }
+
   const lastPrev = prevKeys[prevKeys.length - 1];
   const added = Object.keys(fresh).filter(k => k > lastPrev && Number.isFinite(fresh[k]) && fresh[k] > 0).sort();
   if (!added.length) return ok;

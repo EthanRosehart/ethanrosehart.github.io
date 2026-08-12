@@ -409,6 +409,35 @@ test("levelBreak: a kilogram feed is proved, undone and shipped; an unexplained 
   assert.equal(levelBreak(single, prev).verdict, "rejected");
 });
 
+test("levelBreak: a whole series restated in a new unit moves as one", () => {
+  // Eurostat is republishing avia_gooa in kilograms under the "Tonne" label,
+  // 5 months deep, then 17. When the backfill passes the 133 months we hold,
+  // the reply is entirely in kilograms — rescaling only its new months would
+  // ship a x1000 history with a tidy tail bolted on.
+  const prev = cargoSeries(3);
+  const allKg = Object.fromEntries(Object.entries(cargoSeries(4)).map(([k, v]) => [k, v * 1000]));
+
+  const fixed = levelBreak(allKg, prev);
+  assert.equal(fixed.verdict, "rescaled");
+  assert.equal(fixed.scale, 1000);
+  assert.match(fixed.reason, /whole series rescaled/);
+  for (const k of Object.keys(prev)) {
+    assert.equal(fixed.series[k], prev[k], `${k} should land back on the published value`);
+  }
+  assert.ok(fixed.series["2026-06"] > 20000 && fixed.series["2026-06"] < 40000, "and the new months come with it");
+
+  // ordinary upstream revisions of a few percent are not a unit change and
+  // must not freeze the feed
+  const revised = Object.fromEntries(Object.entries(cargoSeries(4)).map(([k, v]) => [k, Math.round(v * 1.03)]));
+  assert.equal(levelBreak(revised, prev).verdict, "ok");
+
+  // a wholesale restatement that ISN'T a clean power of ten keeps last-good
+  const garbled = Object.fromEntries(Object.entries(cargoSeries(4)).map(([k, v]) => [k, v * 37]));
+  const kept = levelBreak(garbled, prev);
+  assert.equal(kept.verdict, "rejected");
+  assert.deepEqual(kept.series, prev);
+});
+
 test("levelBreak: ordinary refreshes, growth and volatile small feeds pass through", () => {
   const prev = cargoSeries(3);
   // a normal month, and a very good month
