@@ -88,7 +88,7 @@ function LongTerm({ airport, history, scenario, ltOpts, baseMode, setBaseMode, g
             <b>{lt.baseObservedMonths} observed + {lt.baseForecastMonths.length} modeled —</b> {lt.baseYear} isn&rsquo;t
             over, so {MONTHS[lt.baseForecastMonths[0]]}–{MONTHS[lt.baseForecastMonths[lt.baseForecastMonths.length-1]]} come
             from the short-term model{lt.baseModel && GP_MODEL_META[String(lt.baseModel).replace("+carry","")]
-              ? <> ({GP_MODEL_META[String(lt.baseModel).replace("+carry","")].label})</> : null}, so {lt.endYear}
+              ? <> ({GP_MODEL_META[String(lt.baseModel).replace("+carry","")].label})</> : null}, so {lt.endYear}{" "}
             starts from where {lt.baseYear} actually lands rather than a stale full year.
             {(lt.hasAtm || lt.hasCargo) && (()=>{
               // the feeds publish at different lags, so each metric has its own

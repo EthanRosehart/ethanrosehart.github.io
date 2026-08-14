@@ -39,6 +39,8 @@ const AIRPORTS = [
   ["BE_EBBR", "EBBR", "Brussels"], ["PT_LPPT", "LPPT", "Lisboa"],
 ];
 const MIN_EXPECTED = 100;   // we hold 130+ for these; anything near 0 is the bug back
+const FREIGHT_ICAO = "EDDF";   // the airport section 4 counts freight months for
+const MAX_SLICES = 24;         // bound the diagnostic sweep: it hits a third-party API
 
 let failures = 0;
 const check = (ok, msg) => { if (!ok) failures++; console.log(`  ${ok ? "ok  " : "FAIL"}  ${msg}`); };
@@ -90,7 +92,57 @@ async function main() {
     check(n >= MIN_EXPECTED, `batch of ${batch.length}: ${name.padEnd(10)} ${String(n).padStart(3)} months`);
   }
 
-  console.log(`\n### 4. esDecode refuses to guess when a dimension is left open\n`);
+  console.log(`\n### 4. which avia_gooa slice actually carries the freight\n`);
+  /* Diagnostic, not a check — it prints rather than passes/fails.
+     avia_gooa is being republished. On 2026-08-12 it answered 5 months for
+     Frankfurt at 04:41 and 17 by 22:44, against the 137 we hold, and every
+     value came back a thousand times too large: Frankfurt's newest reading
+     was 172,169,367 where our tonnes say 172,169. So this is a restatement
+     in kilograms under the "Tonne" label, not the July failure repeating —
+     the first run of this section proved there is nowhere else to look,
+     since the cube offers exactly one usable slice:
+
+       unit      T (Tonne), FLIGHT (Flight)       <- FLIGHT returns 0 months
+       tra_meas  FRM_LD_NLD                       <- the only measure
+       schedule  TOT     tra_cov  TOTAL           <- one code each
+
+     Nothing to re-pin, then; the fix is upstream and the guards below it
+     hold in the meantime (a short reply keeps last-good, and levelBreak
+     rescales a full one). Left in place because it is the cheapest way to
+     watch the restatement land: when the month counts pass ours and the
+     latest value stops being 1000x, the feed is back. */
+  {
+    const res = await fetch(url("avia_gooa", { tra_meas: "FRM_LD_NLD", ...ES_PINS, lastTimePeriod: "1" }, ["DE_EDDF"]), { headers: UA });
+    const js = await res.json().catch(() => null);
+    const cats = (name) => {
+      const c = js?.dimension?.[name]?.category;
+      if (!c) return [];
+      return Object.keys(c.index || {}).map((k) => `${k}${c.label?.[k] ? ` (${c.label[k]})` : ""}`);
+    };
+    for (const dim of ["unit", "tra_meas", "schedule", "tra_cov"]) {
+      console.log(`  avia_gooa ${dim.padEnd(9)} offers: ${cats(dim).join(", ") || "(not in the reply)"}`);
+    }
+
+    // every unit x tra_meas the cube admits, scored by months returned
+    const units = Object.keys(js?.dimension?.unit?.category?.index || { T: 0 });
+    const measures = Object.keys(js?.dimension?.tra_meas?.category?.index || { FRM_LD_NLD: 0 });
+    console.log(`\n  months of Frankfurt freight per slice (pinned ${JSON.stringify(ES_PINS)}):`);
+    let tried = 0;
+    for (const unit of units) {
+      for (const tm of measures) {
+        if (++tried > MAX_SLICES) { console.log(`    ... stopping at ${MAX_SLICES} slices`); break; }
+        const { out: o, err: e } = await fetchDecode("avia_gooa",
+          { unit, tra_meas: tm, ...ES_PINS, sinceTimePeriod: "2015-01" }, ["DE_EDDF"]);
+        const months = e ? null : Object.keys(o?.[FREIGHT_ICAO]?.monthly || {});
+        const last = months?.length ? months.sort()[months.length - 1] : null;
+        const val = last ? o[FREIGHT_ICAO].monthly[last] : null;
+        console.log(`    unit=${unit.padEnd(8)} tra_meas=${tm.padEnd(12)} ` +
+          (e ? e : `${String(months.length).padStart(3)} months` + (last ? `, latest ${last} = ${val}` : "")));
+      }
+    }
+  }
+
+  console.log(`\n### 5. esDecode refuses to guess when a dimension is left open\n`);
   const res = await fetch(url("avia_paoa", { unit: "PAS", tra_meas: "PAS_CRD", sinceTimePeriod: "2015-01" }, ["DE_EDDF"]), { headers: UA });
   const js = await res.json();
   let threw = false;

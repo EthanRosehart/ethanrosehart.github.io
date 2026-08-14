@@ -18,8 +18,12 @@
  *      dropped airports were only ever a warning.
  *   3. ANOMALIES (warnings, exit 0): the rest of the suspicious deltas vs
  *      a baseline copy of data/ taken before the fetchers ran — series
- *      that shrank, or a large level shift in months both snapshots cover
- *      (a unit change or upstream restatement).
+ *      that shrank, a large level shift in months both snapshots cover, or
+ *      new months arriving at a different scale entirely (2026-08: German
+ *      freight switched to kilograms and shipped, because every check here
+ *      compared only months the two snapshots had in common). Plus a
+ *      forecast whose backtest error is past anything a model choice
+ *      explains, which is what a broken series looks like downstream.
  *
  * Usage:
  *   node scripts/check-snapshots.mjs                     # staleness only
@@ -38,6 +42,8 @@ const DATA = resolve(__dirname, "..", "data");
 export const MAX_AGE_DAYS = 10;
 const SHIFT_PCT = 30;      // level shift in an overlapping month worth flagging
 const MIN_SHIFT_MONTHS = 3; // ...if at least this many months shifted together
+const BREAK_FACTOR = 50;    // new months this far off the published level are a scale break
+const MAX_MASE = 50;        // a backtest error no modelling choice explains
 /* Airports may rotate out of the volume-ranked European cap night to night,
    so a small drop is churn. Past these bounds it's a feed defect, and the
    site silently loses gateways plus their whole committed history. */
@@ -123,6 +129,54 @@ export function seriesAnomalies(iata, prevSeries, nextSeries) {
     if (overlap >= 6 && shifted >= MIN_SHIFT_MONTHS && shifted / overlap > 0.25) {
       warns.push(`${iata}/${metric}: ${shifted}/${overlap} already-published months moved >${SHIFT_PCT}% — unit change or restatement?`);
     }
+    // ...and the same shift arriving as NEW months, which the overlap test
+    // above cannot see. That is how the 2026-08 kilogram break shipped: the
+    // German cargo months were all new, so nothing overlapped to compare.
+    const pk2 = Object.keys(p).filter(k => p[k] > 0).sort();
+    if (pk2.length >= 12) {
+      const last = pk2[pk2.length - 1];
+      const added = Object.keys(n).filter(k => k > last && n[k] > 0).sort();
+      if (added.length) {
+        const r = med(added.map(k => n[k])) / med(pk2.slice(-12).map(k => p[k]));
+        if (r >= BREAK_FACTOR || r <= 1 / BREAK_FACTOR) {
+          warns.push(`${iata}/${metric}: ${added.length} new month${added.length === 1 ? "" : "s"} from ${added[0]} sit ` +
+            `${r >= 1 ? `${r.toFixed(0)}x above` : `${(1 / r).toFixed(0)}x below`} the last 12 published — scale break, not growth`);
+        }
+      }
+    }
+  }
+  return warns;
+}
+
+function med(xs) {
+  const s = [...xs].sort((a, b) => a - b);
+  const i = s.length >> 1;
+  return s.length % 2 ? s[i] : (s[i - 1] + s[i]) / 2;
+}
+
+/** Forecasts whose two error measures disagree about reality — the downstream
+ *  signature of a series that changed scale.
+ *
+ *  MASE is held-out error over the in-sample seasonal-naive error (~1 is par),
+ *  MAPE is the same error as a percentage of the actual. Munich's cargo shipped
+ *  at MASE 2737 with MAPE 19%: the model tracked the kilogram months perfectly
+ *  well in percentage terms while scoring thousands of times worse than a
+ *  naive scaled in tonnes. That gap is the tell, and it is why BOTH numbers
+ *  are needed — MAPE is scale-free and cannot see a unit change at all.
+ *
+ *  A huge MASE with an equally huge MAPE is a different animal: Lublin's
+ *  freight is 0-1 tonnes most months with a seasonal burst to 1867, so the
+ *  naive denominator is nearly zero and MASE stops meaning anything. Those
+ *  series are unforecastable, not broken, and warning about them nightly
+ *  would just train everyone to skip the report. */
+export function forecastAnomalies(iata, doc, { maxMase = MAX_MASE, sameStoryMape = 40 } = {}) {
+  const warns = [];
+  for (const metric of ["pax", "atm", "cargo"]) {
+    const b = doc?.[metric];
+    if (typeof b?.mase !== "number" || b.mase <= maxMase) continue;
+    if (typeof b.mape === "number" && b.mape >= sameStoryMape) continue;   // both bad: a hard series
+    warns.push(`${iata}/${metric}: backtest MASE ${b.mase.toFixed(0)} (par is ~1) against MAPE ${b.mape}% — ` +
+      `the model fits the shape but not the scale, so look at the series, not the model`);
   }
   return warns;
 }
@@ -160,6 +214,15 @@ async function main() {
       const next = (await loadJSON(resolve(DATA, "series", f)))?.series;
       warns.push(...seriesAnomalies(iata, prev, next));
     }
+  }
+
+  // forecast sanity runs with or without a baseline: it reads tonight's own
+  // numbers rather than a diff, and is the backstop for a series problem that
+  // slipped past every check upstream of the model
+  let fcFiles = [];
+  try { fcFiles = (await readdir(resolve(DATA, "forecasts"))).filter((f) => f.endsWith(".json")); } catch {}
+  for (const f of fcFiles) {
+    warns.push(...forecastAnomalies(f.slice(0, -5), await loadJSON(resolve(DATA, "forecasts", f))));
   }
 
   if (warns.length) {
