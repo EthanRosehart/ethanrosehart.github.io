@@ -12,7 +12,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 
-import { esDecode, normMonth } from "../scripts/fetch-activity.mjs";
+import { esDecode, normMonth, selectsNothing, ES_PINS } from "../scripts/fetch-activity.mjs";
 import { perCapitaRates } from "../scripts/fetch-imf.mjs";
 import { mapCols, decodeRows, orderCandidates, US } from "../scripts/fetch-bts.mjs";
 import { lastFullYearTotal, metricsIn, chooseSeries, levelBreak, isTransientStatus, seriesAgeMonths,
@@ -66,6 +66,58 @@ test("esDecode: an unpinned dimension throws rather than silently reading catego
 
   // and the pinned fixture still decodes, so the guard isn't just refusing
   assert.ok(Object.keys(esDecode(JSONSTAT_FIXTURE, "avia_paoa")).length > 0);
+});
+
+test("esDecode: a reply that selects nothing decodes to {} WITHOUT throwing", () => {
+  /* The September 2026 blind spot, pinned down. Eurostat retired the
+     `schedule` code we pinned (TOT), so every query matched nothing — and
+     nothing about that looks like a failure from in here: HTTP 200, a
+     well-formed JSON-stat envelope, every dimension a single category, no
+     observations. esDecode's guard refuses a dimension with too MANY
+     categories; an empty reply has too few, so it sails through.
+
+     That is WHY the emptiness check has to live above esDecode, in the
+     callers (esEnumerate + selectsNothing below). This test exists to keep
+     that reasoning honest: if someone later makes esDecode throw here, the
+     outer guards become dead code and should go with it. */
+  const empty = {
+    id: ["freq", "unit", "tra_meas", "rep_airp", "time"],
+    size: [1, 1, 1, 0, 0],
+    value: {},
+    dimension: { rep_airp: { category: { index: {} } }, time: { category: { index: {} } } },
+  };
+  const out = esDecode(empty, "avia_paoa");
+  assert.deepEqual(out, {}, "an empty reply decodes to nothing, quietly");
+});
+
+test("selectsNothing: all metrics empty is a dead query; one empty cube is not", () => {
+  const some = { LEMD: { geo: "ES", monthly: { "2024-01": 1 } } };
+
+  // the incident: enumerate found airports, every pull came back empty
+  assert.equal(selectsNothing({ pax: {}, atm: {}, cargo: {} }, 403), true);
+
+  // avia_gooa's kilogram restatement — cargo dark, pax/atm fine. Last-good
+  // is correct here and paging every night would train everyone to ignore it
+  assert.equal(selectsNothing({ pax: some, atm: some, cargo: {} }, 403), false);
+
+  // no airports to ask about yet: nothing to conclude
+  assert.equal(selectsNothing({ pax: {}, atm: {}, cargo: {} }, 0), false);
+
+  // and it never fires on a healthy night
+  assert.equal(selectsNothing({ pax: some, atm: some, cargo: some }, 403), false);
+});
+
+test("ES_PINS: pins every dimension avia_paoa leaves open, at a code that still exists", () => {
+  /* Both halves matter. July 2026 broke because `schedule` was unpinned;
+     September 2026 broke because it was pinned to TOT, which Eurostat then
+     retired. The live cube now offers TOTAL, SCHED, NSCHED, UNK — and
+     SCHED/NSCHED are scheduled-only slices, not the total this site
+     publishes. */
+  assert.deepEqual(Object.keys(ES_PINS).sort(), ["schedule", "tra_cov"]);
+  assert.equal(ES_PINS.tra_cov, "TOTAL");
+  assert.equal(ES_PINS.schedule, "TOTAL");
+  assert.ok(!["SCHED", "NSCHED"].includes(ES_PINS.schedule),
+    "a scheduled-only slice would change which measure the site publishes");
 });
 
 test("normMonth: Eurostat 2024M03 and plain 2024-03 both normalize", () => {

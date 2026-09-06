@@ -113,8 +113,24 @@ export function normMonth(s) { return String(s).replace("M", "-").slice(0, 7); }
    We had been reading the TOTAL column. Hence 3-6 month replies that
    chooseSeries rightly rejected, and airports whose empty slice made them
    invisible to the enumerate entirely — CDG among them. Identical grid
-   for passengers, movements and cargo. */
-export const ES_PINS = { schedule: "TOT", tra_cov: "TOTAL" };
+   for passengers, movements and cargo.
+
+   SEPTEMBER 2026: Eurostat finished that migration, and it landed the
+   other way up. The duplicate generation was RETIRED, not the canonical
+   one — `schedule` now offers four codes where it offered six, with TOT
+   and N_SCHED gone and their data folded back into TOTAL:
+
+     schedule=   TOTAL   SCHED  NSCHED  UNK
+     Frankfurt     137     137       ?    ?     <- TOTAL was 5 in July
+
+   So the pin that fixed July became the bug: schedule=TOT matched nothing
+   from the 2026-08-14 nightly on, every query returned HTTP 200 with zero
+   rows, and all 403 European gateways froze on committed history for ten
+   days before the staleness clock escalated it. Pinning TOTAL returns the
+   137 months we hold; probe section 6 checks those months come back at the
+   same values, so a code swap can't quietly change which measure we
+   publish. */
+export const ES_PINS = { schedule: "TOTAL", tra_cov: "TOTAL" };
 
 /* ============================================================
    EUROSTAT — JSON-stat. A single all-airports pull is rejected
@@ -184,11 +200,53 @@ async function esGet(dataset, q, reps) {
   return esDecode(await res.json(), dataset);
 }
 
+/* A Eurostat query that selects nothing does not fail. It answers HTTP 200
+   with a well-formed JSON-stat body carrying zero observations, esDecode
+   returns {} without complaint, every airport falls through to last-good,
+   and the night reads as "the feed was thin" — a note, not an alert.
+
+   That is exactly how the September 2026 outage hid: schedule=TOT was
+   retired upstream, every pinned query started matching nothing, and all
+   403 European gateways sat frozen for ten days until the staleness clock
+   escalated it — with an alert that named the stale snapshot rather than
+   the dead query. esDecode's guard doesn't see this: it refuses a
+   dimension with too MANY categories, and an empty reply has too few.
+
+   So the emptiness itself is the signal. Distinguished from a real outage
+   (HTTP error, network) because the remedy is different: an outage waits,
+   a query that no longer selects anything has to be re-pinned by hand. */
+class EsQueryEmpty extends Error {
+  constructor(msg) { super(msg); this.name = "EsQueryEmpty"; this.structural = true; }
+}
+
+/** Did the series pulls come back structurally empty — the query selecting
+ *  nothing — rather than one cube merely having no data to give?
+ *
+ *  ALL metrics must be empty, against a non-empty airport list. One cube
+ *  going quiet is an upstream data problem and last-good is the right
+ *  answer (avia_gooa's 2026-08 kilogram restatement did exactly that); all
+ *  of them at once, for airports we know report, is the query itself.
+ *  Pure and exported so the suite can exercise it without the network. */
+export function selectsNothing(decodedByMetric, repCodesN) {
+  if (!repCodesN) return false;
+  const decoded = Object.values(decodedByMetric || {});
+  return decoded.length > 0 && decoded.every((d) => !Object.keys(d || {}).length);
+}
+
 // enumerate all reporting airports + a recent-volume proxy; shrink the
 // time window until Eurostat answers synchronously
 async function esEnumerate() {
   for (const lastN of [12, 6, 3, 1]) {
-    try { return await esGet("avia_paoa", { unit: "PAS", tra_meas: "PAS_CRD", ...ES_PINS, lastTimePeriod: String(lastN) }); }
+    try {
+      const out = await esGet("avia_paoa", { unit: "PAS", tra_meas: "PAS_CRD", ...ES_PINS, lastTimePeriod: String(lastN) });
+      /* Eurostat reports hundreds of airports every month; zero is never a
+         quiet night, it means the pins no longer match a live code. */
+      if (!Object.keys(out).length) {
+        throw new EsQueryEmpty(`avia_paoa enumerate decoded 0 airports under pins ${JSON.stringify(ES_PINS)} — ` +
+          `the query selects nothing (a retired dimension code?). Re-pin against the live cube: scripts/probe-eurostat.mjs`);
+      }
+      return out;
+    }
     catch (e) { if (e.code === 413) { console.warn(`  enumerate lastTimePeriod=${lastN} -> 413, shrinking`); continue; } throw e; }
   }
   return {};
@@ -361,8 +419,15 @@ async function main() {
 
   /* ---------- Europe: enumerate + carry forward, then batch-fetch ---------- */
   let enumerated = {};
+  /* Queries that no longer select anything, as opposed to feeds that are
+     merely down. These exit 3 so the workflow can page on night one — see
+     the exit-code note at the bottom of main(). */
+  const structural = [];
   try { enumerated = await esEnumerate(); console.log(`  eurostat: enumerated ${Object.keys(enumerated).length} reporting airports`); }
-  catch (e) { console.warn(`  eurostat enumerate FAILED: ${e.message}`); }
+  catch (e) {
+    console.error(`  eurostat enumerate FAILED: ${e.message}`);
+    if (e.structural) structural.push(`eurostat enumerate: ${e.message}`);
+  }
 
   /* Every airport Eurostat reports tonight that we can map to an IATA code.
      There is deliberately no cap and no volume ranking here any more. The
@@ -418,6 +483,19 @@ async function main() {
     if (!repCodes.length) { euData[metric] = {}; continue; }
     try { euData[metric] = await esBatch(ds, { unit, tra_meas: tm, ...ES_PINS, sinceTimePeriod: "2015-01" }, repCodes); console.log(`  eurostat ${metric}: ${Object.keys(euData[metric]).length} airports`); }
     catch (e) { euData[metric] = {}; console.warn(`  eurostat ${metric} FAILED: ${e.message}`); }
+  }
+
+  /* The same emptiness test one level down, for the case where the
+     enumerate still answers but the series pulls stop selecting. ALL THREE
+     metrics, deliberately: one cube going quiet is a data problem upstream
+     (avia_gooa's 2026-08 restatement did exactly that, and last-good is
+     the right answer), whereas all of them at once against a non-empty
+     airport list is the query itself. */
+  if (selectsNothing(euData, repCodes.length)) {
+    const msg = `all three avia_* pulls decoded 0 airports for ${repCodes.length} rep_airp codes under pins ` +
+      `${JSON.stringify(ES_PINS)} — the query selects nothing. Re-pin against the live cube: scripts/probe-eurostat.mjs`;
+    console.error(`  eurostat: ${msg}`);
+    structural.push(`eurostat series: ${msg}`);
   }
 
   // passenger composition by transport coverage — NAT (domestic) / INTL
@@ -624,15 +702,24 @@ async function main() {
 
   if (seeded) console.log(`  freshness clock started for ${seeded} airport-entries with no prior refreshedAt stamp (watch begins now, not backdated)`);
   console.log(`Wrote ${OUT} — ${Object.keys(indexAirports).length} airports (${Object.keys(airports).length} eurostat/statcan + ${Object.keys(btsCarry).length} carried BTS + ${Object.keys(sourceCarry).length} outage-carried), ${live} live metric-series.`);
-  /* Exit 2, not 1. Both mean "the health step should hear about this", but
-     they are different incidents and the workflow tiers them differently:
-     2 = a feed answered with nothing usable and every airport was kept on
-     committed history (the site is correct; escalation comes from the
-     refreshedAt staleness net above), while a nonzero exit from the catch
-     below means the script genuinely crashed. Reporting both as 1 is what
-     made 2026-07-26 file an issue reading "down or crashed" for a run that
-     completed cleanly and lost nothing. */
-  if (outage) process.exitCode = 2;
+  /* Three tiers, because they need three different responses and the
+     workflow reads the exit code to decide which:
+
+       1  the script crashed (the catch below) — no coherent snapshot.
+       2  a feed answered with nothing usable and every airport was kept on
+          committed history. The site is correct; escalation comes from the
+          refreshedAt staleness net above, on its own clock. Reporting this
+          as 1 is what made 2026-07-26 file an issue reading "down or
+          crashed" for a run that completed cleanly and lost nothing.
+       3  a query stopped selecting anything. Also last-good, so the site is
+          equally correct — but waiting cannot fix it, because nothing
+          upstream is going to come back. It needs a human to re-pin, so it
+          pages on night one instead of after ten days of silence. */
+  if (structural.length) {
+    console.error(`\nSTRUCTURAL: ${structural.length} quer${structural.length === 1 ? "y" : "ies"} no longer select anything:`);
+    for (const m of structural) console.error(`  ! ${m}`);
+    process.exitCode = 3;
+  } else if (outage) process.exitCode = 2;
 }
 
 if (process.argv[1] === fileURLToPath(import.meta.url)) {
