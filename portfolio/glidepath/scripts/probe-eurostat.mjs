@@ -62,6 +62,49 @@ async function fetchDecode(dataset, q, reps) {
 async function main() {
   console.log(`\nES_PINS in force: ${JSON.stringify(ES_PINS)}\n`);
 
+  /* ---- 0. what the cubes offer RIGHT NOW (diagnostic, prints only) ----
+     2026-09: every pinned query started returning zero rows and the
+     nightly froze all 403 European gateways on their committed history.
+     Section 4 showed avia_gooa no longer carries a `schedule` dimension
+     while ES_PINS still pins schedule=TOT — a filter that matches nothing.
+     This dumps both cubes UNPINNED so the replacement pins are read off
+     the live API rather than guessed, then scores candidate pin sets by
+     months decoded. esDecode's "not pinned to a single category" error is
+     itself the useful output here: it names every loose dimension and its
+     width. */
+  console.log(`### 0. live dimensions, unpinned\n`);
+  const dumpDims = async (dataset, q, rep) => {
+    const res = await fetch(url(dataset, q, [rep]), { headers: UA });
+    console.log(`  ${dataset} HTTP ${res.status}`);
+    const js = await res.json().catch(() => null);
+    if (!js) { console.log(`    (no JSON body)`); return null; }
+    for (const [i, id] of (js.id || []).entries()) {
+      const c = js.dimension?.[id]?.category;
+      const codes = Object.keys(c?.index || {});
+      console.log(`    ${id.padEnd(10)} size=${String(js.size?.[i]).padStart(4)}  ` +
+        `${codes.slice(0, 10).join(", ")}${codes.length > 10 ? ` ... (${codes.length} total)` : ""}`);
+    }
+    const vals = js.value
+      ? (Array.isArray(js.value) ? js.value.filter((v) => v != null).length : Object.keys(js.value).length)
+      : 0;
+    console.log(`    observations: ${vals}`);
+    return js;
+  };
+  await dumpDims("avia_paoa", { unit: "PAS", tra_meas: "PAS_CRD", sinceTimePeriod: "2015-01" }, "DE_EDDF");
+  await dumpDims("avia_gooa", { unit: "T", tra_meas: "FRM_LD_NLD", sinceTimePeriod: "2015-01" }, "DE_EDDF");
+
+  console.log(`\n  candidate pin sets — months decoded for Frankfurt pax:`);
+  for (const cand of [
+    {}, { tra_cov: "TOTAL" }, { schedule: "TOT" },
+    { schedule: "TOT", tra_cov: "TOTAL" }, { schedule: "TOTAL", tra_cov: "TOTAL" },
+  ]) {
+    const { out: o, err: e } = await fetchDecode("avia_paoa",
+      { unit: "PAS", tra_meas: "PAS_CRD", ...cand, sinceTimePeriod: "2015-01" }, ["DE_EDDF"]);
+    const n = e ? null : Object.keys(o?.EDDF?.monthly || {}).length;
+    console.log(`    ${JSON.stringify(cand).padEnd(42)} ${e ? e : `${n} months`}`);
+  }
+  console.log("");
+
   console.log(`### 1. every metric returns real history for every airport\n`);
   for (const [metric, dataset, q] of METRICS) {
     for (const [rep, icao, name] of AIRPORTS) {
