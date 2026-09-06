@@ -490,6 +490,72 @@ test("levelBreak: a whole series restated in a new unit moves as one", () => {
   assert.deepEqual(kept.series, prev);
 });
 
+test("levelBreak: a restatement of only PART of the published history is undone", () => {
+  /* The gap between the function's two existing tests, and the one that
+     would have shipped the moment the September 2026 query fix landed.
+
+     avia_gooa came back with Frankfurt's full 137 months: 133 unchanged
+     and 4 restated in kilograms. The whole-series test compares the MEDIAN
+     of the overlap (1.000 — the 133 outvote the 4) and the new-months test
+     only looks past the newest month we hold (the reply added none). So
+     both stayed quiet and a x1000 tail would have gone back on the site. */
+  const prev = {};
+  for (let i = 0; i < 36; i++) {
+    const m = `${2023 + Math.floor(i / 12)}-${String((i % 12) + 1).padStart(2, "0")}`;
+    prev[m] = 150000 + (i % 12) * 1000;
+  }
+  const months = Object.keys(prev).sort();
+  const brokenFrom = months[months.length - 4];       // last 4 months only
+
+  const fresh = {};
+  for (const k of months) fresh[k] = k >= brokenFrom ? prev[k] * 1000 : prev[k];
+
+  const lv = levelBreak(fresh, prev);
+  assert.equal(lv.verdict, "rescaled");
+  assert.equal(lv.scale, 1000);
+  for (const k of months) {
+    assert.equal(lv.series[k], prev[k], `${k} should land back on the published value`);
+  }
+  assert.match(lv.reason, /already-published month/);
+
+  // the majority case still routes through the whole-series test
+  const allKg = Object.fromEntries(months.map((k) => [k, prev[k] * 1000]));
+  const whole = levelBreak(allKg, prev);
+  assert.equal(whole.verdict, "rescaled");
+  assert.equal(whole.series[months[0]], prev[months[0]]);
+});
+
+test("levelBreak: partial-restatement rescue never fires on revisions, or on a reply that disagrees with itself", () => {
+  const prev = {};
+  for (let i = 0; i < 36; i++) {
+    const m = `${2023 + Math.floor(i / 12)}-${String((i % 12) + 1).padStart(2, "0")}`;
+    prev[m] = 150000 + (i % 12) * 1000;
+  }
+  const months = Object.keys(prev).sort();
+
+  // upstream revising a few months by a few percent is normal and must pass
+  // through untouched — the site would otherwise freeze on last-good forever
+  const revised = { ...prev };
+  revised[months[35]] = Math.round(prev[months[35]] * 1.06);
+  revised[months[34]] = Math.round(prev[months[34]] * 0.94);
+  const rev = levelBreak(revised, prev);
+  assert.equal(rev.verdict, "ok");
+  assert.equal(rev.series[months[35]], revised[months[35]], "a real revision is published, not undone");
+
+  // two different powers of ten in one reply is not a unit change we can
+  // reason about — take nothing rather than guess which one is real
+  const mixed = { ...prev };
+  mixed[months[35]] = prev[months[35]] * 1000;
+  mixed[months[34]] = prev[months[34]] * 100;
+  assert.equal(levelBreak(mixed, prev).verdict, "ok", "disagreeing scales are left alone, not half-corrected");
+  assert.equal(levelBreak(mixed, prev).series[months[35]], mixed[months[35]]);
+
+  // a month that moved a lot but not by a clean power of ten isn't undoable
+  const murky = { ...prev };
+  murky[months[35]] = prev[months[35]] * 437;
+  assert.equal(levelBreak(murky, prev).verdict, "ok");
+});
+
 test("levelBreak: ordinary refreshes, growth and volatile small feeds pass through", () => {
   const prev = cargoSeries(3);
   // a normal month, and a very good month

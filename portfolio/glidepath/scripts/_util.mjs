@@ -197,26 +197,75 @@ export function levelBreak(fresh, prev, { breakFactor = 50, minProof = 3, yoyBan
     }
   }
 
+  /* PARTIAL restatement of months we ALREADY publish. The median test above
+     only fires when most of the overlap moved; the new-months test below
+     only sees months past the newest we hold. A feed that restates part of
+     its published history in a new unit falls between the two.
+
+     avia_gooa is doing exactly that. When the September 2026 query fix
+     brought European cargo back, Frankfurt returned 137 months: 133
+     unchanged and 4 at exactly x1000. The median over all 137 is 1.000 so
+     the whole-series test stayed quiet, and the reply added no months past
+     2026-05 so the new-months test never ran — the reply sailed through as
+     "ok" and would have put 172,169,000 t back on the long-term chart the
+     night the feed was repaired.
+
+     Corrected per month, and only where the month proves it: these are the
+     SAME months we published, so dividing by a clean power of ten has to
+     land back on the value we already hold, within a revision's tolerance.
+     No ordinary restatement does that. One consistent step across every
+     month that qualifies, or nothing is touched — a reply disagreeing with
+     itself about its own unit is not something to guess at. */
+  let restScale = null;
+  const restated = [];
+  if (both.length >= 12) {
+    for (const k of both) {
+      const r1 = fresh[k] / prev[k];
+      if (!(r1 > 0) || (r1 > 0.5 && r1 < 2)) continue;      // a revision, not a unit change
+      const st = Math.round(Math.log10(r1));
+      if (!st) continue;
+      if (Math.abs(fresh[k] / 10 ** st / prev[k] - 1) >= 0.02) continue;   // not exactly undoable
+      if (restScale === null) restScale = st;
+      if (st !== restScale) { restated.length = 0; restScale = null; break; }
+      restated.push(k);
+    }
+  }
+  /* `work` is what the rest of this function reasons about: the reply with
+     any provable restatement already undone, so the new-months test below
+     compares like with like instead of measuring a mixed-unit series. */
+  let work = fresh;
+  if (restated.length) {
+    const sc = 10 ** restScale;
+    const wholePrev = prevKeys.every(k => Number.isInteger(prev[k]));
+    work = { ...fresh };
+    for (const k of restated) work[k] = wholePrev ? Math.round(fresh[k] / sc) : fresh[k] / sc;
+  }
+  const okNow = restated.length
+    ? { verdict: "rescaled", series: work, scale: 10 ** restScale,
+        reason: `${restated.length} already-published month${restated.length === 1 ? "" : "s"} came back scaled by ` +
+          `10^${restScale} — undone exactly against the values we publish, ${both.length - restated.length} unchanged` }
+    : ok;
+
   const lastPrev = prevKeys[prevKeys.length - 1];
-  const added = Object.keys(fresh).filter(k => k > lastPrev && Number.isFinite(fresh[k]) && fresh[k] > 0).sort();
-  if (!added.length) return ok;
+  const added = Object.keys(work).filter(k => k > lastPrev && Number.isFinite(work[k]) && work[k] > 0).sort();
+  if (!added.length) return okNow;
 
   const tail = prevKeys.slice(-12).map(k => prev[k]);
   const hi = Math.max(...tail), lo = Math.min(...tail);
   const breaks = (v) => (hi > 0 && v / hi >= breakFactor) || (lo > 0 && lo / v >= breakFactor);
   // everything from the first broken month on: a feed that changes units
   // doesn't change back, and the months before it are still good
-  const at = added.findIndex(k => breaks(fresh[k]));
-  if (at < 0) return ok;
+  const at = added.findIndex(k => breaks(work[k]));
+  if (at < 0) return okNow;
   const seg = added.slice(at);
 
-  const ratio = median(seg.map(k => fresh[k])) / median(tail.filter(v => v > 0));
+  const ratio = median(seg.map(k => work[k])) / median(tail.filter(v => v > 0));
   const step = Math.round(Math.log10(ratio));
   const scale = 10 ** step;
   const proof = [];
   for (const k of seg) {
     const prior = `${+k.slice(0, 4) - 1}${k.slice(4)}`;
-    if (prev[prior] > 0) proof.push(fresh[k] / scale / prev[prior]);
+    if (prev[prior] > 0) proof.push(work[k] / scale / prev[prior]);
   }
   // The prior-year comparison carries the decision; the power-of-ten test is
   // only there to stop an arbitrary jump being "corrected" by 1000. Both are
@@ -236,15 +285,15 @@ export function levelBreak(fresh, prev, { breakFactor = 50, minProof = 3, yoyBan
     // keep the series homogeneous: a feed publishing whole tonnes shouldn't
     // start carrying three decimal places for the months we divided
     const whole = tail.every(Number.isInteger);
-    const out = { ...fresh };
-    for (const k of seg) out[k] = whole ? Math.round(fresh[k] / scale) : fresh[k] / scale;
+    const out = { ...work };
+    for (const k of seg) out[k] = whole ? Math.round(work[k] / scale) : work[k] / scale;
     return { verdict: "rescaled", series: out, scale, reason: `${detail} — a clean 10^${step} unit change, confirmed against ${proof.length} prior-year months, rescaled` };
   }
   // drop the broken tail rather than the whole reply: months before the break
   // are good data, and on a feed that has already published them they are the
   // last-good series anyway
   const out = {};
-  for (const [k, v] of Object.entries(fresh)) if (!(k >= seg[0])) out[k] = v;
+  for (const [k, v] of Object.entries(work)) if (!(k >= seg[0])) out[k] = v;
   return { verdict: "rejected", series: out, reason: `${detail} — not a confirmable unit change (${proof.length} prior-year month${proof.length === 1 ? "" : "s"} to check against), dropped` };
 }
 
