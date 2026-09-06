@@ -243,6 +243,78 @@ async function main() {
     }
   }
 
+  console.log(`\n### 7. which countries is avia_gooa answering in kilograms? (diagnostic)\n`);
+  /* Prints, never fails. levelBreak now undoes a kilogram reply per airport,
+     so the committed snapshot looks identical whether the feed sent tonnes
+     or sent kg and we corrected it — you cannot tell the two apart after
+     the fact. This asks the live cube directly, for every gateway we carry,
+     and reports the answer by country.
+
+     It matters for scope: if the restatement is spreading beyond Germany
+     the guard is load-bearing for the whole catalogue; if it is confined,
+     the affected countries are a short list somebody can watch. Batched
+     25 rep_airp at a time, the same chunk size the nightly uses. */
+  {
+    const idxDoc = JSON.parse(await readFile(new URL("../data/activity-index.json", import.meta.url), "utf8"));
+    const carried = Object.entries(idxDoc.airports)
+      .filter(([, a]) => a.source === "eurostat" && a.rep_airp && a.icao)
+      .map(([iata, a]) => ({ iata, icao: a.icao, rep: a.rep_airp, cc: a.country || "??" }));
+
+    const committed = {};
+    for (const a of carried) {
+      try {
+        const doc = JSON.parse(await readFile(new URL(`../data/series/${a.iata}.json`, import.meta.url), "utf8"));
+        if (doc?.series?.cargo) committed[a.icao] = doc.series.cargo;
+      } catch { /* no series file — skipped below */ }
+    }
+
+    const live = {};
+    const CHUNK = 25;
+    for (let i = 0; i < carried.length; i += CHUNK) {
+      const slice = carried.slice(i, i + CHUNK);
+      const { out, err } = await fetchDecode("avia_gooa",
+        { unit: "T", tra_meas: "FRM_LD_NLD", ...ES_PINS, sinceTimePeriod: "2015-01" }, slice.map((a) => a.rep));
+      if (err) { console.log(`  batch ${i}-${i + slice.length}: ${err}`); continue; }
+      Object.assign(live, out);
+    }
+
+    const bucket = (r) => {
+      if (!Number.isFinite(r)) return "no-overlap";
+      if (r >= 0.5 && r <= 2) return "tonnes";
+      if (r >= 500 && r <= 2000) return "kilograms (x1000)";
+      return "other";
+    };
+    const byCC = {};
+    let n = 0;
+    for (const a of carried) {
+      const prev = committed[a.icao], now = live[a.icao]?.monthly;
+      if (!prev || !now) continue;
+      const both = Object.keys(prev).filter((k) => prev[k] > 0 && Number.isFinite(now[k]) && now[k] > 0);
+      if (both.length < 12) continue;
+      const ratios = both.map((k) => now[k] / prev[k]).sort((x, y) => x - y);
+      const r = ratios[ratios.length >> 1];
+      const b = bucket(r);
+      byCC[a.cc] = byCC[a.cc] || {};
+      (byCC[a.cc][b] = byCC[a.cc][b] || []).push(`${a.iata}(${r >= 500 ? Math.round(r) : r.toFixed(2)})`);
+      n++;
+    }
+    console.log(`  compared ${n} of ${carried.length} carried gateways against their committed cargo series\n`);
+    const totals = {};
+    for (const [cc, buckets] of Object.entries(byCC).sort()) {
+      const parts = Object.entries(buckets).sort((a, b) => b[1].length - a[1].length);
+      for (const [b, list] of parts) totals[b] = (totals[b] || 0) + list.length;
+      const kg = buckets["kilograms (x1000)"];
+      const other = buckets["other"];
+      if (!kg && !other) continue;                      // only print countries with something off
+      console.log(`  ${cc}: ` + parts.map(([b, l]) => `${b} ${l.length}`).join(", "));
+      if (kg) console.log(`      kg: ${kg.join(", ")}`);
+      if (other) console.log(`      other: ${other.join(", ")}`);
+    }
+    console.log(`\n  TOTALS: ` + Object.entries(totals).sort((a, b) => b[1] - a[1]).map(([b, c]) => `${b} ${c}`).join(", "));
+    const cleanCC = Object.entries(byCC).filter(([, b]) => !b["kilograms (x1000)"] && !b["other"]).map(([cc]) => cc);
+    console.log(`  countries fully in tonnes (${cleanCC.length}): ${cleanCC.join(" ")}`);
+  }
+
   console.log(`\n${failures ? `### ${failures} CHECK(S) FAILED` : "### all checks passed"}\n`);
   if (failures) process.exit(1);
 }
