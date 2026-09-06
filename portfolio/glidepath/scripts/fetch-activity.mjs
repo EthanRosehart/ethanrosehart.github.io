@@ -117,11 +117,12 @@ export function normMonth(s) { return String(s).replace("M", "-").slice(0, 7); }
 
    SEPTEMBER 2026: Eurostat finished that migration, and it landed the
    other way up. The duplicate generation was RETIRED, not the canonical
-   one — `schedule` now offers four codes where it offered six, with TOT
-   and N_SCHED gone and their data folded back into TOTAL:
+   one — `schedule` offers four codes where it offered six, TOT and
+   N_SCHED gone, their data folded back into TOTAL. Measured from a runner:
 
-     schedule=   TOTAL   SCHED  NSCHED  UNK
-     Frankfurt     137     137       ?    ?     <- TOTAL was 5 in July
+     schedule offers   TOTAL, SCHED, NSCHED, UNK
+     schedule=TOT        0 months for Frankfurt   <- what we were sending
+     schedule=TOTAL    137 months for Frankfurt   <- was 5 in July
 
    So the pin that fixed July became the bug: schedule=TOT matched nothing
    from the 2026-08-14 nightly on, every query returned HTTP 200 with zero

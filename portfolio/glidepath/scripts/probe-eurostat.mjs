@@ -23,6 +23,7 @@
  * ============================================================ */
 import { readFile } from "node:fs/promises";
 import { esDecode, ES_PINS, normMonth } from "./fetch-activity.mjs";
+import { chooseSeries, levelBreak } from "./_util.mjs";
 
 const BASE = "https://ec.europa.eu/eurostat/api/dissemination/statistics/1.0/data";
 const UA = { "User-Agent": "glidepath-data-bot" };
@@ -204,30 +205,42 @@ async function main() {
 
   console.log(`\n### 6. the pinned slice still carries the series we publish\n`);
   /* A pin swap can fix the month count and quietly change the MEASURE —
-     schedule=SCHED would also have returned ~137 months for Frankfurt, but
-     scheduled-only traffic is not what this site has been publishing for
-     three years. So check continuity, not just volume: the months we
-     already hold have to come back as the same numbers. This is the guard
-     the kilogram restatement taught us to want, applied to the query
-     itself rather than to the reply's values. */
+     schedule=SCHED would also return a long series for Frankfurt, but
+     scheduled-only traffic is not what this site has published for three
+     years. So check continuity, not just volume, by running the reply
+     through the REAL production guard: levelBreak decides nightly whether
+     a reply ships as-is, gets rescaled, or is refused. "rejected" here
+     means the nightly would silently keep last-good forever, which is the
+     failure this whole exercise is about — so it is the one verdict that
+     fails the probe.
+
+     Cargo is expected to come back "rescaled", not "ok": avia_gooa is
+     still republishing in kilograms under the Tonne label (section 4), so
+     the whole-series overlap test should see a clean 10^3 and undo it. */
   for (const [rep, icao, name] of AIRPORTS.slice(0, 4)) {
     let committed = null;
     try {
       const raw = await readFile(new URL(`../data/series/${ICAO_TO_IATA[icao] || icao}.json`, import.meta.url), "utf8");
-      committed = JSON.parse(raw)?.series?.pax || null;
+      committed = JSON.parse(raw)?.series || null;
     } catch { /* not carried yet — nothing to compare against */ }
-    if (!committed || Object.keys(committed).length < 12) { console.log(`  --    ${name.padEnd(10)} no committed pax series to compare`); continue; }
-    const { out: o, err: e } = await fetchDecode("avia_paoa",
-      { unit: "PAS", tra_meas: "PAS_CRD", ...ES_PINS, sinceTimePeriod: "2015-01" }, [rep]);
-    if (e) { check(false, `${name.padEnd(10)} ${e}`); continue; }
-    const live = o[icao]?.monthly || {};
-    const both = Object.keys(committed).filter((k) => Number.isFinite(live[k]) && committed[k] > 0);
-    if (both.length < 12) { check(false, `${name.padEnd(10)} only ${both.length} overlapping months to check`); continue; }
-    const agree = both.filter((k) => Math.abs(live[k] / committed[k] - 1) < 0.02).length;
-    const ratios = both.map((k) => live[k] / committed[k]).sort((a, b) => a - b);
-    const med = ratios[ratios.length >> 1];
-    check(agree / both.length >= 0.9,
-      `${name.padEnd(10)} ${agree}/${both.length} published months come back unchanged (median ratio ${med.toFixed(3)})`);
+    if (!committed) { console.log(`  --    ${name.padEnd(10)} not carried yet, nothing to compare`); continue; }
+
+    for (const [metric, ds, q] of METRICS) {
+      const prev = committed[metric];
+      if (!prev || Object.keys(prev).length < 12) { console.log(`  --    ${metric.padEnd(5)} ${name.padEnd(10)} no committed series`); continue; }
+      const { out: o, err: e } = await fetchDecode(ds, { ...q, ...ES_PINS, sinceTimePeriod: "2015-01" }, [rep]);
+      if (e) { check(false, `${metric.padEnd(5)} ${name.padEnd(10)} ${e}`); continue; }
+      const live = o[icao]?.monthly || {};
+      const pick = chooseSeries(live, prev);
+      if (pick.kind !== "fresh") { check(false, `${metric.padEnd(5)} ${name.padEnd(10)} chooseSeries refused it: ${pick.reason}`); continue; }
+      const lv = levelBreak(pick.series, prev);
+      const both = Object.keys(prev).filter((k) => Number.isFinite(live[k]) && prev[k] > 0);
+      const ratios = both.map((k) => live[k] / prev[k]).sort((a, b) => a - b);
+      const med = ratios.length ? ratios[ratios.length >> 1] : NaN;
+      check(lv.verdict !== "rejected",
+        `${metric.padEnd(5)} ${name.padEnd(10)} levelBreak "${lv.verdict}" over ${both.length} published months ` +
+        `(raw median ratio ${med.toFixed(3)}${lv.scale ? `, undone by 10^${Math.round(Math.log10(lv.scale))}` : ""})`);
+    }
   }
 
   console.log(`\n${failures ? `### ${failures} CHECK(S) FAILED` : "### all checks passed"}\n`);
