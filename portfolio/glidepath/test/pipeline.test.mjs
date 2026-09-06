@@ -12,7 +12,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 
-import { esDecode, normMonth } from "../scripts/fetch-activity.mjs";
+import { esDecode, normMonth, selectsNothing, ES_PINS } from "../scripts/fetch-activity.mjs";
 import { perCapitaRates } from "../scripts/fetch-imf.mjs";
 import { mapCols, decodeRows, orderCandidates, US } from "../scripts/fetch-bts.mjs";
 import { lastFullYearTotal, metricsIn, chooseSeries, levelBreak, isTransientStatus, seriesAgeMonths,
@@ -66,6 +66,58 @@ test("esDecode: an unpinned dimension throws rather than silently reading catego
 
   // and the pinned fixture still decodes, so the guard isn't just refusing
   assert.ok(Object.keys(esDecode(JSONSTAT_FIXTURE, "avia_paoa")).length > 0);
+});
+
+test("esDecode: a reply that selects nothing decodes to {} WITHOUT throwing", () => {
+  /* The September 2026 blind spot, pinned down. Eurostat retired the
+     `schedule` code we pinned (TOT), so every query matched nothing — and
+     nothing about that looks like a failure from in here: HTTP 200, a
+     well-formed JSON-stat envelope, every dimension a single category, no
+     observations. esDecode's guard refuses a dimension with too MANY
+     categories; an empty reply has too few, so it sails through.
+
+     That is WHY the emptiness check has to live above esDecode, in the
+     callers (esEnumerate + selectsNothing below). This test exists to keep
+     that reasoning honest: if someone later makes esDecode throw here, the
+     outer guards become dead code and should go with it. */
+  const empty = {
+    id: ["freq", "unit", "tra_meas", "rep_airp", "time"],
+    size: [1, 1, 1, 0, 0],
+    value: {},
+    dimension: { rep_airp: { category: { index: {} } }, time: { category: { index: {} } } },
+  };
+  const out = esDecode(empty, "avia_paoa");
+  assert.deepEqual(out, {}, "an empty reply decodes to nothing, quietly");
+});
+
+test("selectsNothing: all metrics empty is a dead query; one empty cube is not", () => {
+  const some = { LEMD: { geo: "ES", monthly: { "2024-01": 1 } } };
+
+  // the incident: enumerate found airports, every pull came back empty
+  assert.equal(selectsNothing({ pax: {}, atm: {}, cargo: {} }, 403), true);
+
+  // avia_gooa's kilogram restatement — cargo dark, pax/atm fine. Last-good
+  // is correct here and paging every night would train everyone to ignore it
+  assert.equal(selectsNothing({ pax: some, atm: some, cargo: {} }, 403), false);
+
+  // no airports to ask about yet: nothing to conclude
+  assert.equal(selectsNothing({ pax: {}, atm: {}, cargo: {} }, 0), false);
+
+  // and it never fires on a healthy night
+  assert.equal(selectsNothing({ pax: some, atm: some, cargo: some }, 403), false);
+});
+
+test("ES_PINS: pins every dimension avia_paoa leaves open, at a code that still exists", () => {
+  /* Both halves matter. July 2026 broke because `schedule` was unpinned;
+     September 2026 broke because it was pinned to TOT, which Eurostat then
+     retired. The live cube now offers TOTAL, SCHED, NSCHED, UNK — and
+     SCHED/NSCHED are scheduled-only slices, not the total this site
+     publishes. */
+  assert.deepEqual(Object.keys(ES_PINS).sort(), ["schedule", "tra_cov"]);
+  assert.equal(ES_PINS.tra_cov, "TOTAL");
+  assert.equal(ES_PINS.schedule, "TOTAL");
+  assert.ok(!["SCHED", "NSCHED"].includes(ES_PINS.schedule),
+    "a scheduled-only slice would change which measure the site publishes");
 });
 
 test("normMonth: Eurostat 2024M03 and plain 2024-03 both normalize", () => {
@@ -436,6 +488,72 @@ test("levelBreak: a whole series restated in a new unit moves as one", () => {
   const kept = levelBreak(garbled, prev);
   assert.equal(kept.verdict, "rejected");
   assert.deepEqual(kept.series, prev);
+});
+
+test("levelBreak: a restatement of only PART of the published history is undone", () => {
+  /* The gap between the function's two existing tests, and the one that
+     would have shipped the moment the September 2026 query fix landed.
+
+     avia_gooa came back with Frankfurt's full 137 months: 133 unchanged
+     and 4 restated in kilograms. The whole-series test compares the MEDIAN
+     of the overlap (1.000 — the 133 outvote the 4) and the new-months test
+     only looks past the newest month we hold (the reply added none). So
+     both stayed quiet and a x1000 tail would have gone back on the site. */
+  const prev = {};
+  for (let i = 0; i < 36; i++) {
+    const m = `${2023 + Math.floor(i / 12)}-${String((i % 12) + 1).padStart(2, "0")}`;
+    prev[m] = 150000 + (i % 12) * 1000;
+  }
+  const months = Object.keys(prev).sort();
+  const brokenFrom = months[months.length - 4];       // last 4 months only
+
+  const fresh = {};
+  for (const k of months) fresh[k] = k >= brokenFrom ? prev[k] * 1000 : prev[k];
+
+  const lv = levelBreak(fresh, prev);
+  assert.equal(lv.verdict, "rescaled");
+  assert.equal(lv.scale, 1000);
+  for (const k of months) {
+    assert.equal(lv.series[k], prev[k], `${k} should land back on the published value`);
+  }
+  assert.match(lv.reason, /already-published month/);
+
+  // the majority case still routes through the whole-series test
+  const allKg = Object.fromEntries(months.map((k) => [k, prev[k] * 1000]));
+  const whole = levelBreak(allKg, prev);
+  assert.equal(whole.verdict, "rescaled");
+  assert.equal(whole.series[months[0]], prev[months[0]]);
+});
+
+test("levelBreak: partial-restatement rescue never fires on revisions, or on a reply that disagrees with itself", () => {
+  const prev = {};
+  for (let i = 0; i < 36; i++) {
+    const m = `${2023 + Math.floor(i / 12)}-${String((i % 12) + 1).padStart(2, "0")}`;
+    prev[m] = 150000 + (i % 12) * 1000;
+  }
+  const months = Object.keys(prev).sort();
+
+  // upstream revising a few months by a few percent is normal and must pass
+  // through untouched — the site would otherwise freeze on last-good forever
+  const revised = { ...prev };
+  revised[months[35]] = Math.round(prev[months[35]] * 1.06);
+  revised[months[34]] = Math.round(prev[months[34]] * 0.94);
+  const rev = levelBreak(revised, prev);
+  assert.equal(rev.verdict, "ok");
+  assert.equal(rev.series[months[35]], revised[months[35]], "a real revision is published, not undone");
+
+  // two different powers of ten in one reply is not a unit change we can
+  // reason about — take nothing rather than guess which one is real
+  const mixed = { ...prev };
+  mixed[months[35]] = prev[months[35]] * 1000;
+  mixed[months[34]] = prev[months[34]] * 100;
+  assert.equal(levelBreak(mixed, prev).verdict, "ok", "disagreeing scales are left alone, not half-corrected");
+  assert.equal(levelBreak(mixed, prev).series[months[35]], mixed[months[35]]);
+
+  // a month that moved a lot but not by a clean power of ten isn't undoable
+  const murky = { ...prev };
+  murky[months[35]] = prev[months[35]] * 437;
+  assert.equal(levelBreak(murky, prev).verdict, "ok");
 });
 
 test("levelBreak: ordinary refreshes, growth and volatile small feeds pass through", () => {

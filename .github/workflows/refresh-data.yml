@@ -23,11 +23,14 @@ name: Refresh data
 #              watched for staleness (check-snapshots.mjs). Logged, not paged.
 #              Includes Eurostat/StatCan answering with nothing usable, since
 #              every airport carries a per-source refreshedAt stamp.
-#   • alerts — fetch-activity CRASHING, a snapshot that failed validation
-#              (commit blocked), a feed that has now gone STALE (aged past
-#              the freshness window, per-source), or a run that DROPPED
-#              gateways off the catalogue. These fail the run and
-#              open/update the pipeline-health issue.
+#   • alerts — fetch-activity CRASHING, a query that no longer SELECTS
+#              anything (exit 3 — last-good like a note, but no amount of
+#              waiting fixes it: a dimension code was retired and a human
+#              has to re-pin, so it pages on night one), a snapshot that
+#              failed validation (commit blocked), a feed that has now gone
+#              STALE (aged past the freshness window, per-source), or a run
+#              that DROPPED gateways off the catalogue. These fail the run
+#              and open/update the pipeline-health issue.
 # Snapshots are schema-validated (scripts/validate-data.mjs) as a hard gate
 # before anything is committed.
 
@@ -77,8 +80,10 @@ jobs:
 
       # exit code is load-bearing here and `outcome` only says pass/fail, so
       # capture it: 2 = a feed answered with nothing usable but every airport
-      # was kept on committed history (a note), anything else nonzero = the
-      # script actually crashed (an alert). See the tiering below.
+      # was kept on committed history (a note), 3 = a query stopped selecting
+      # anything and needs re-pinning by hand (an alert, immediately),
+      # anything else nonzero = the script actually crashed (an alert).
+      # See the tiering below.
       - name: Fetch monthly activity — Europe + Canada (Eurostat + StatCan)
         id: activity
         continue-on-error: true   # a feed outage keeps the last good snapshot
@@ -193,10 +198,17 @@ jobs:
           # escalates on its own once the feed has been dark past the window.
           [ "${{ steps.activity.outputs.rc }}" = "2" ]       && note "fetch-activity: a feed returned no usable fresh data — all airports kept on committed history (watched for staleness)"
 
+          # exit 3 = a query no longer selects anything. Last-good keeps the
+          # site correct, exactly like a note — but the staleness clock is the
+          # wrong escalation for it, because nothing upstream is coming back:
+          # a dimension code was retired and the pins need editing. Ten days
+          # of silence (2026-08-14 -> 08-23) is what that cost last time.
+          [ "${{ steps.activity.outputs.rc }}" = "3" ]       && alert "fetch-activity: a Eurostat/StatCan query SELECTS NOTHING — a dimension code was retired upstream and ES_PINS needs re-pinning (see the run log; verify with probe-eurostat.yml)"
+
           # any OTHER nonzero exit means the script crashed before it could
           # write a coherent snapshot — no safety net, page immediately.
           # Validation failure means a malformed snapshot blocked the commit.
-          [ "${{ steps.activity.outcome }}" = "failure" ] && [ "${{ steps.activity.outputs.rc }}" != "2" ] && alert "fetch-activity (Eurostat/StatCan) crashed — primary catalogue source down or the script failed"
+          [ "${{ steps.activity.outcome }}" = "failure" ] && [ "${{ steps.activity.outputs.rc }}" != "2" ] && [ "${{ steps.activity.outputs.rc }}" != "3" ] && alert "fetch-activity (Eurostat/StatCan) crashed — primary catalogue source down or the script failed"
           [ "${{ steps.validate.outcome }}" = "failure" ]    && alert "snapshot VALIDATION failed — commit was blocked, site keeps last-good data"
 
           # staleness (a feed broken long enough to age past the window, incl.
