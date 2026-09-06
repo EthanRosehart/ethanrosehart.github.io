@@ -278,40 +278,62 @@ async function main() {
       Object.assign(live, out);
     }
 
-    const bucket = (r) => {
-      if (!Number.isFinite(r)) return "no-overlap";
-      if (r >= 0.5 && r <= 2) return "tonnes";
-      if (r >= 500 && r <= 2000) return "kilograms (x1000)";
-      return "other";
-    };
+    /* Count the RESTATED MONTHS, not the median ratio.
+
+       The first cut of this survey bucketed each airport by the median of
+       live/committed and reported "323 tonnes, 0 kilograms" — which is
+       wrong, and wrong in the exact way levelBreak was wrong this morning.
+       Frankfurt's median is 1.000 because only 4 of its 137 months are
+       restated; the other 133 outvote them. Section 4 in the same run
+       showed its newest month as 172,169,367.
+
+       So ask per month, the same test levelBreak uses: a month that divides
+       by a clean power of ten back onto the value we published, within a
+       revision's tolerance, is that month restated in a new unit. Then run
+       the production guard itself and report its verdict, so this measures
+       what the nightly will actually do rather than a statistic about it. */
     const byCC = {};
-    let n = 0;
+    let n = 0, skipped = 0;
     for (const a of carried) {
       const prev = committed[a.icao], now = live[a.icao]?.monthly;
-      if (!prev || !now) continue;
+      if (!prev || !now) { skipped++; continue; }
       const both = Object.keys(prev).filter((k) => prev[k] > 0 && Number.isFinite(now[k]) && now[k] > 0);
-      if (both.length < 12) continue;
-      const ratios = both.map((k) => now[k] / prev[k]).sort((x, y) => x - y);
-      const r = ratios[ratios.length >> 1];
-      const b = bucket(r);
-      byCC[a.cc] = byCC[a.cc] || {};
-      (byCC[a.cc][b] = byCC[a.cc][b] || []).push(`${a.iata}(${r >= 500 ? Math.round(r) : r.toFixed(2)})`);
+      if (both.length < 12) { skipped++; continue; }
       n++;
+
+      let restated = 0, step = null;
+      for (const k of both) {
+        const r = now[k] / prev[k];
+        if (r > 0.5 && r < 2) continue;
+        const st = Math.round(Math.log10(r));
+        if (!st) continue;
+        if (Math.abs(now[k] / 10 ** st / prev[k] - 1) >= 0.02) continue;
+        restated++; step = st;
+      }
+      const lv = levelBreak(chooseSeries(now, prev).series, prev);
+      const rec = { iata: a.iata, restated, months: both.length, step, verdict: lv.verdict };
+      byCC[a.cc] = byCC[a.cc] || [];
+      byCC[a.cc].push(rec);
     }
-    console.log(`  compared ${n} of ${carried.length} carried gateways against their committed cargo series\n`);
-    const totals = {};
-    for (const [cc, buckets] of Object.entries(byCC).sort()) {
-      const parts = Object.entries(buckets).sort((a, b) => b[1].length - a[1].length);
-      for (const [b, list] of parts) totals[b] = (totals[b] || 0) + list.length;
-      const kg = buckets["kilograms (x1000)"];
-      const other = buckets["other"];
-      if (!kg && !other) continue;                      // only print countries with something off
-      console.log(`  ${cc}: ` + parts.map(([b, l]) => `${b} ${l.length}`).join(", "));
-      if (kg) console.log(`      kg: ${kg.join(", ")}`);
-      if (other) console.log(`      other: ${other.join(", ")}`);
+
+    console.log(`  compared ${n} of ${carried.length} carried gateways (${skipped} skipped: no committed cargo or <12 overlapping months)\n`);
+    let affected = 0, clean = 0;
+    const dirtyCC = [];
+    for (const [cc, list] of Object.entries(byCC).sort()) {
+      const hit = list.filter((r) => r.restated > 0);
+      affected += hit.length;
+      clean += list.length - hit.length;
+      if (!hit.length) continue;
+      dirtyCC.push(cc);
+      console.log(`  ${cc}: ${hit.length} of ${list.length} gateways have restated months`);
+      for (const r of hit.sort((x, y) => y.restated - x.restated)) {
+        console.log(`      ${r.iata.padEnd(4)} ${String(r.restated).padStart(3)}/${String(r.months).padEnd(3)} months at 10^${r.step}` +
+          `   levelBreak -> ${r.verdict}`);
+      }
     }
-    console.log(`\n  TOTALS: ` + Object.entries(totals).sort((a, b) => b[1] - a[1]).map(([b, c]) => `${b} ${c}`).join(", "));
-    const cleanCC = Object.entries(byCC).filter(([, b]) => !b["kilograms (x1000)"] && !b["other"]).map(([cc]) => cc);
+    console.log(`\n  TOTALS: ${affected} gateways carry restated months, ${clean} are clean`);
+    console.log(`  countries affected (${dirtyCC.length}): ${dirtyCC.join(" ") || "(none)"}`);
+    const cleanCC = Object.keys(byCC).filter((cc) => !dirtyCC.includes(cc)).sort();
     console.log(`  countries fully in tonnes (${cleanCC.length}): ${cleanCC.join(" ")}`);
   }
 
