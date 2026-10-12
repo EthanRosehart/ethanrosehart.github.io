@@ -1,5 +1,5 @@
 {
-  "generatedAt": "2026-10-11T11:01:12.464Z",
+  "generatedAt": "2026-10-12T11:23:37.585Z",
   "note": "Provenance manifest for every snapshot under data/. Rebuilt at the end of each nightly refresh (scripts/build-manifest.mjs).",
   "upstreams": {
     "openflights": {
@@ -35,7 +35,7 @@
   },
   "snapshots": {
     "activity-index.json": {
-      "generatedAt": "2026-10-11T10:00:48.908Z",
+      "generatedAt": "2026-10-12T10:47:29.012Z",
       "airports": 448,
       "airportsBySource": {
         "bts": 35,
@@ -47,22 +47,22 @@
       "files": 448
     },
     "airports.json": {
-      "generatedAt": "2026-10-11T09:57:14.232Z",
+      "generatedAt": "2026-10-12T10:43:49.488Z",
       "airports": 448,
       "upstream": "openflights"
     },
     "macro.json": {
-      "generatedAt": "2026-10-11T10:04:21.846Z",
+      "generatedAt": "2026-10-12T10:52:29.637Z",
       "countries": 37,
       "upstream": "worldbank"
     },
     "imf-weo.json": {
-      "generatedAt": "2026-10-11T10:04:22.723Z",
+      "generatedAt": "2026-10-12T10:52:30.636Z",
       "countries": 37,
       "upstream": "imf"
     },
     "forecast-meta.json": {
-      "generatedAt": "2026-10-11T11:01:10.665102+00:00",
+      "generatedAt": "2026-10-12T11:23:34.492790+00:00",
       "model": "auto-selected per series by backtest MASE"
     },
     "forecasts/": {
