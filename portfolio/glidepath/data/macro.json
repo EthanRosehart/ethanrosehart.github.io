@@ -1,5 +1,5 @@
 {
-  "generatedAt": "2026-10-15T08:18:57.628Z",
+  "generatedAt": "2026-10-16T08:10:58.895Z",
   "source": "World Bank Open Data — Indicators API (api.worldbank.org/v2)",
   "note": "Committed snapshot. Refreshed nightly by .github/workflows/refresh-data.yml. The browser reads THIS file, never the live API.",
   "indicators": {
